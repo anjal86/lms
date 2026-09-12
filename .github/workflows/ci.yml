@@ -39,9 +39,36 @@ jobs:
         run: docker compose -f docker/docker-compose.yml config --quiet
       - name: Lint
         run: npm run lint
-      - name: Typecheck
+      - name: Typecheck application
         run: npm run typecheck
       - name: Unit tests
         run: npm test
       - name: Production build
         run: npm run build
+
+  e2e:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      LEADS_WEBHOOK_SECRET: ci-placeholder-secret-at-least-32-characters-long
+      SLA_CRON_SECRET: ci-placeholder-sla-secret-at-least-32-characters-long
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install application dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install Playwright runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Public authentication flow
+        run: npx playwright test
