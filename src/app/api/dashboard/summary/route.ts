@@ -17,14 +17,22 @@ export async function GET() {
 
   if (!profile?.is_active) return NextResponse.json({ error: 'Account disabled.' }, { status: 403 });
 
-  const { data, error } = await supabase.rpc('dashboard_operational_summary');
-  if (error) {
-    console.error('Dashboard summary failed:', error.message);
+  const [operationalResult, pipelineResult] = await Promise.all([
+    supabase.rpc('dashboard_operational_summary'),
+    supabase.rpc('lead_pipeline_summary'),
+  ]);
+
+  if (operationalResult.error || pipelineResult.error) {
+    console.error('Dashboard summary failed:', operationalResult.error?.message || pipelineResult.error?.message);
     return NextResponse.json({ error: 'Unable to load Action Center.' }, { status: 500 });
   }
 
   return NextResponse.json(
-    { summary: data || {}, isManagement: profile.role === 'admin' || profile.role === 'manager' },
+    {
+      summary: operationalResult.data || {},
+      pipelineSummary: pipelineResult.data || {},
+      isManagement: profile.role === 'admin' || profile.role === 'manager',
+    },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }
