@@ -41,7 +41,49 @@ const EMPTY_SUMMARY: DashboardSummary = {
   intervention_queue: [],
 };
 
-function MetricCard({
+function PriorityMetric({
+  title,
+  value,
+  hint,
+  href,
+  icon: Icon,
+  tone,
+}: {
+  title: string;
+  value: number;
+  hint: string;
+  href: string;
+  icon: typeof AlertTriangle;
+  tone: 'red' | 'amber' | 'blue';
+}) {
+  const toneClasses = {
+    red: 'bg-red-50 text-red-700 border-red-100',
+    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    blue: 'bg-blue-50 text-blue-700 border-blue-100',
+  }[tone];
+
+  return (
+    <Link href={href} className="group panel flex min-h-40 flex-col justify-between p-5 transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-zinc-900">{title}</p>
+          <p className="mt-1 text-sm leading-5 text-zinc-500">{hint}</p>
+        </div>
+        <span className={`flex h-9 w-9 items-center justify-center rounded-xl border ${toneClasses}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <div className="mt-6 flex items-end justify-between gap-3">
+        <span className="text-4xl font-semibold tracking-[-0.04em] text-zinc-950">{value}</span>
+        <span className="mb-1 inline-flex items-center gap-1 text-xs font-semibold text-zinc-400 transition group-hover:text-zinc-800">
+          Review <ArrowRight className="h-3.5 w-3.5" />
+        </span>
+      </div>
+    </Link>
+  );
+}
+
+function SecondaryMetric({
   title,
   value,
   hint,
@@ -55,22 +97,19 @@ function MetricCard({
   icon: typeof AlertTriangle;
 }) {
   return (
-    <Link
-      href={href}
-      className="group rounded-xl border border-zinc-200 bg-white p-4 transition hover:border-zinc-300 hover:shadow-sm"
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">{title}</p>
-          <p className="mt-2 text-3xl font-semibold tracking-tight text-zinc-950">{value}</p>
-          <p className="mt-1 text-xs text-zinc-500">{hint}</p>
-        </div>
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-2 text-zinc-600">
+    <Link href={href} className="group flex items-center justify-between gap-4 border-b border-zinc-100 px-5 py-4 last:border-b-0 hover:bg-zinc-50/70">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600">
           <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-zinc-900">{title}</p>
+          <p className="mt-0.5 truncate text-xs text-zinc-500">{hint}</p>
         </div>
       </div>
-      <div className="mt-4 flex items-center gap-1 text-[11px] font-medium text-zinc-500 group-hover:text-zinc-900">
-        Review <ArrowRight className="h-3 w-3" />
+      <div className="flex items-center gap-3">
+        <span className="text-2xl font-semibold tracking-tight text-zinc-950">{value}</span>
+        <ArrowRight className="h-3.5 w-3.5 text-zinc-300 transition group-hover:text-zinc-700" />
       </div>
     </Link>
   );
@@ -115,73 +154,101 @@ export default function DashboardPage() {
     return () => window.removeEventListener('crm:data-mutated', handleMutation);
   }, [loadSummary]);
 
+  const urgentTotal = summary.sla_breaches + summary.overdue_followups + summary.unassigned_leads;
+
   return (
-    <main className="min-h-full bg-zinc-50 p-4 md:p-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Action Center</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">What needs attention now</h1>
-            <p className="mt-1 text-xs text-zinc-500">
-              {isManagement ? 'Agency-wide operational exceptions' : 'Your assigned work and shared unassigned leads'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void loadSummary()}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 self-start rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 sm:self-auto"
-          >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
-            Refresh
+    <div className="workspace-page">
+      <div className="workspace-header">
+        <div>
+          <p className="workspace-eyebrow">Action Center</p>
+          <h1 className="workspace-title">Your operational priorities</h1>
+          <p className="workspace-description">
+            {isManagement
+              ? 'Agency-wide exceptions that need a decision, response, or follow-up.'
+              : 'The leads and follow-ups that need your attention before anything else.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/leads" className="button-secondary">Open pipeline</Link>
+          <button type="button" onClick={() => void loadSummary()} disabled={loading} className="button-secondary px-3" aria-label="Refresh Action Center">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
           </button>
         </div>
+      </div>
 
-        {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>}
+      {error && (
+        <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <MetricCard title="Overdue follow-ups" value={summary.overdue_followups} hint="Callbacks requiring action" href="/follow-ups" icon={CalendarClock} />
-          <MetricCard title="SLA breaches" value={summary.sla_breaches} hint="First responses already late" href="/leads" icon={ShieldAlert} />
-          <MetricCard title="Unassigned leads" value={summary.unassigned_leads} hint="Waiting for an owner" href="/leads" icon={Inbox} />
-          <MetricCard title="Stale leads" value={summary.stale_leads} hint="No contact for 48+ hours" href="/leads" icon={UserRoundSearch} />
-          <MetricCard title="Payments due" value={summary.payments_due} hint="Pending milestones at or past due" href="/leads" icon={CircleDollarSign} />
-          <MetricCard title="Passport risks" value={summary.passport_risks} hint="Expiry inside the next 6 months" href="/leads" icon={AlertTriangle} />
-        </section>
+      <section>
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-zinc-950">Needs attention now</h2>
+            <p className="mt-0.5 text-xs text-zinc-500">{urgentTotal} total urgent item{urgentTotal === 1 ? '' : 's'}</p>
+          </div>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-3">
+          <PriorityMetric title="SLA breaches" value={summary.sla_breaches} hint="First responses already late" href="/leads?tab=sla_pending" icon={ShieldAlert} tone="red" />
+          <PriorityMetric title="Overdue follow-ups" value={summary.overdue_followups} hint="Callbacks and follow-ups past due" href="/follow-ups" icon={CalendarClock} tone="amber" />
+          <PriorityMetric title="Unassigned leads" value={summary.unassigned_leads} hint="New opportunities waiting for an owner" href="/leads" icon={Inbox} tone="blue" />
+        </div>
+      </section>
 
-        <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-          <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
+        <section className="panel overflow-hidden">
+          <div className="flex items-start justify-between gap-4 border-b border-zinc-100 px-5 py-4">
             <div>
               <h2 className="text-sm font-semibold text-zinc-950">Intervention queue</h2>
-              <p className="text-[11px] text-zinc-500">SLA breaches first, then unassigned and stale opportunities.</p>
+              <p className="mt-1 text-xs text-zinc-500">Prioritized so the most time-sensitive opportunities stay visible.</p>
             </div>
-            <Link href="/leads" className="text-[11px] font-medium text-zinc-500 hover:text-zinc-900">
-              Open pipeline →
-            </Link>
+            <Link href="/leads" className="text-xs font-semibold text-blue-600 hover:text-blue-700">View all leads</Link>
           </div>
 
           {loading && summary.intervention_queue.length === 0 ? (
-            <div className="px-4 py-10 text-center text-sm text-zinc-500"><Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin" />Loading operational exceptions…</div>
+            <div className="px-5 py-14 text-center text-sm text-zinc-500">
+              <Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin text-zinc-400" />
+              Loading priorities…
+            </div>
           ) : summary.intervention_queue.length === 0 ? (
-            <div className="px-4 py-10 text-center text-sm text-zinc-500">No urgent intervention items right now.</div>
+            <div className="px-5 py-14 text-center">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                <CheckCirclePlaceholder />
+              </div>
+              <p className="mt-3 text-sm font-semibold text-zinc-900">Nothing urgent right now</p>
+              <p className="mt-1 text-xs text-zinc-500">Your intervention queue is clear.</p>
+            </div>
           ) : (
             <div className="divide-y divide-zinc-100">
-              {summary.intervention_queue.map((item) => (
-                <Link
-                  key={item.key}
-                  href={item.href}
-                  className="flex items-center justify-between gap-4 px-4 py-3 transition hover:bg-zinc-50"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium text-zinc-900">{item.title}</p>
-                    <p className="mt-0.5 truncate text-[11px] text-zinc-500">{item.detail}</p>
+              {summary.intervention_queue.map((item, index) => (
+                <Link key={item.key} href={item.href} className="group flex items-center gap-4 px-5 py-4 transition hover:bg-zinc-50/70">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-semibold text-zinc-500">{index + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-zinc-900">{item.title}</p>
+                    <p className="mt-0.5 truncate text-xs text-zinc-500">{item.detail}</p>
                   </div>
-                  <ArrowRight className="h-3.5 w-3.5 flex-none text-zinc-400" />
+                  <ArrowRight className="h-4 w-4 shrink-0 text-zinc-300 transition group-hover:translate-x-0.5 group-hover:text-zinc-700" />
                 </Link>
               ))}
             </div>
           )}
         </section>
+
+        <section className="panel overflow-hidden">
+          <div className="border-b border-zinc-100 px-5 py-4">
+            <h2 className="text-sm font-semibold text-zinc-950">Keep an eye on</h2>
+            <p className="mt-1 text-xs text-zinc-500">Important, but not necessarily urgent yet.</p>
+          </div>
+          <SecondaryMetric title="Stale leads" value={summary.stale_leads} hint="No contact for 48+ hours" href="/leads" icon={UserRoundSearch} />
+          <SecondaryMetric title="Payments due" value={summary.payments_due} hint="Milestones at or past due" href="/leads" icon={CircleDollarSign} />
+          <SecondaryMetric title="Passport risks" value={summary.passport_risks} hint="Expiry inside the next 6 months" href="/leads" icon={AlertTriangle} />
+        </section>
       </div>
-    </main>
+    </div>
   );
+}
+
+function CheckCirclePlaceholder() {
+  return <span className="text-base leading-none">✓</span>;
 }
