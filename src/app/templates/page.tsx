@@ -7,15 +7,13 @@ import {
   MessageSquareQuote,
   Plus,
   Trash2,
-  Edit2,
   Check,
-  Sparkles,
-  MessageSquare,
   Copy,
 } from 'lucide-react';
 
 export default function TemplatesPage() {
-  const { templates, updateTemplates } = useApp();
+  const { templates, updateTemplates, currentUser } = useApp();
+  const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   const [isAdding, setIsAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -23,221 +21,152 @@ export default function TemplatesPage() {
   const [newBody, setNewBody] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const handleAddTemplate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle || !newBody) return;
+  const handleAddTemplate = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canManage || !newTitle.trim() || !newBody.trim()) return;
 
-    const newTpl: WhatsAppTemplate = {
+    const newTemplate: WhatsAppTemplate = {
       id: `tpl-${Date.now()}`,
-      name: newTitle,
+      name: newTitle.trim(),
       category: newCategory,
-      message_body: newBody,
+      message_body: newBody.trim(),
       is_active: true,
       created_at: new Date().toISOString(),
     };
 
-    updateTemplates([...templates, newTpl]);
+    updateTemplates([...templates, newTemplate]);
     setIsAdding(false);
     setNewTitle('');
     setNewBody('');
   };
 
   const handleDelete = (id: string) => {
-    updateTemplates(templates.filter((t) => t.id !== id));
+    if (!canManage) return;
+    updateTemplates(templates.filter((template) => template.id !== id));
   };
 
-  const insertVariable = (variable: string) => {
-    setNewBody((prev) => prev + variable);
-  };
+  const insertVariable = (variable: string) => setNewBody((value) => value + variable);
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, id: string) => {
+    await navigator.clipboard.writeText(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
+    window.setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const categoryLabel = (category: string) => {
+    const labels: Record<string, string> = {
+      welcome: 'Welcome',
+      quote_followup: 'Quote follow-up',
+      discount: 'Offer',
+      reminder: 'Reminder',
+      custom: 'Message',
+    };
+    return labels[category] || 'Message';
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div className="workspace-page max-w-5xl">
+      <div className="workspace-header">
         <div>
-          <h1 className="text-base font-semibold text-zinc-900 tracking-tight flex items-center gap-2">
-            <MessageSquareQuote className="w-4 h-4 text-zinc-500" />
-            1-Click WhatsApp Quick Replies & Templates
-          </h1>
-          <p className="text-xs text-zinc-500 mt-0.5">
-            Configure dynamic messages sent to customers via 1-click <code>wa.me</code> shortcuts
+          <p className="workspace-eyebrow">Messages</p>
+          <h1 className="workspace-title">Saved messages</h1>
+          <p className="workspace-description">
+            {canManage
+              ? 'Keep useful customer messages ready for the whole team.'
+              : 'Copy a message, personalize it for the traveler, and send it.'}
           </p>
         </div>
 
-        <button
-          onClick={() => setIsAdding(!isAdding)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-50 rounded-md text-xs font-medium shadow-2xs transition self-start sm:self-auto"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>New Template</span>
-        </button>
+        {canManage && (
+          <button type="button" onClick={() => setIsAdding((value) => !value)} className="button-primary">
+            <Plus className="h-4 w-4" /> Add message
+          </button>
+        )}
       </div>
 
-      {/* Add Template Card */}
-      {isAdding && (
-        <div className="bg-white rounded-lg p-4 border border-zinc-200 shadow-2xs animate-in fade-in zoom-in-95 space-y-3">
-          <div className="flex items-center justify-between border-b border-zinc-100 pb-2.5">
-            <h2 className="text-xs font-semibold text-zinc-900 tracking-tight">Create WhatsApp Template</h2>
-            <button
-              onClick={() => setIsAdding(false)}
-              className="text-xs text-zinc-400 hover:text-zinc-600"
-            >
-              Cancel
-            </button>
+      {canManage && isAdding && (
+        <section className="panel p-5">
+          <div className="flex items-start justify-between gap-4 border-b border-zinc-100 pb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-950">Add a saved message</h2>
+              <p className="mt-1 text-xs text-zinc-500">Use the placeholders only where you want traveler details filled automatically.</p>
+            </div>
+            <button type="button" onClick={() => setIsAdding(false)} className="text-xs font-medium text-zinc-500 hover:text-zinc-900">Cancel</button>
           </div>
 
-          <form onSubmit={handleAddTemplate} className="space-y-3 text-xs">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <form onSubmit={handleAddTemplate} className="mt-4 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-[11px] font-medium text-zinc-600 mb-1">
-                  Template Title
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Flash Sale / Flight Fare Drop"
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full text-xs bg-zinc-50 border border-zinc-200 rounded-md p-2 text-zinc-900 focus:outline-none"
-                />
+                <label htmlFor="message-title" className="mb-1.5 block text-xs font-medium text-zinc-700">Name</label>
+                <input id="message-title" type="text" required value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Example: First reply" className="field" />
               </div>
-
               <div>
-                <label className="block text-[11px] font-medium text-zinc-600 mb-1">
-                  Category
-                </label>
-                <select
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value as any)}
-                  className="w-full text-xs bg-zinc-50 border border-zinc-200 rounded-md p-2 text-zinc-900 focus:outline-none"
-                >
-                  <option value="welcome">Initial Welcome</option>
-                  <option value="quote_followup">Quote & Itinerary Follow-Up</option>
-                  <option value="discount">Urgent Discount / Price Drop</option>
-                  <option value="reminder">Documentation & Visa Check</option>
+                <label htmlFor="message-category" className="mb-1.5 block text-xs font-medium text-zinc-700">Type</label>
+                <select id="message-category" value={newCategory} onChange={(event) => setNewCategory(event.target.value as typeof newCategory)} className="field">
+                  <option value="welcome">Welcome</option>
+                  <option value="quote_followup">Quote follow-up</option>
+                  <option value="discount">Offer</option>
+                  <option value="reminder">Reminder</option>
                 </select>
               </div>
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] font-medium text-zinc-600">
-                  Message Body with Dynamic Tags
-                </label>
-                <div className="flex items-center gap-1 text-[10px] font-mono">
-                  <span className="text-zinc-400">Insert:</span>
-                  <button
-                    type="button"
-                    onClick={() => insertVariable('{{customer_name}}')}
-                    className="px-1.5 py-0.2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded border border-zinc-200"
-                  >
-                    {'{{customer_name}}'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => insertVariable('{{destination}}')}
-                    className="px-1.5 py-0.2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded border border-zinc-200"
-                  >
-                    {'{{destination}}'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => insertVariable('{{agent_name}}')}
-                    className="px-1.5 py-0.2 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded border border-zinc-200"
-                  >
-                    {'{{agent_name}}'}
-                  </button>
-                </div>
+              <label htmlFor="message-body" className="mb-1.5 block text-xs font-medium text-zinc-700">Message</label>
+              <textarea id="message-body" rows={5} required value={newBody} onChange={(event) => setNewBody(event.target.value)} placeholder="Hi {{customer_name}}, I’m following up about your {{destination}} trip…" className="field resize-none leading-6" />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-zinc-500">Add:</span>
+                {[
+                  ['Traveler name', '{{customer_name}}'],
+                  ['Destination', '{{destination}}'],
+                  ['Agent name', '{{agent_name}}'],
+                ].map(([label, value]) => (
+                  <button key={value} type="button" onClick={() => insertVariable(value)} className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50">{label}</button>
+                ))}
               </div>
-              <textarea
-                rows={4}
-                required
-                value={newBody}
-                onChange={(e) => setNewBody(e.target.value)}
-                placeholder="Hi {{customer_name}}, I have an exciting update regarding your {{destination}} trip..."
-                className="w-full text-xs bg-zinc-50 border border-zinc-200 rounded-md p-2.5 text-zinc-900 focus:outline-none resize-none font-sans leading-relaxed"
-              />
             </div>
 
-            <div className="flex justify-end gap-2 pt-1 border-t border-zinc-100">
-              <button
-                type="button"
-                onClick={() => setIsAdding(false)}
-                className="px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 rounded-md font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-50 rounded-md text-xs font-medium shadow-2xs"
-              >
-                Save Template
-              </button>
+            <div className="flex justify-end gap-2 border-t border-zinc-100 pt-4">
+              <button type="button" onClick={() => setIsAdding(false)} className="button-secondary">Cancel</button>
+              <button type="submit" className="button-primary">Save message</button>
             </div>
           </form>
-        </div>
+        </section>
       )}
 
-      {/* Templates Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {templates.map((tpl) => (
-          <div
-            key={tpl.id}
-            className="bg-white rounded-lg p-3.5 border border-zinc-200 shadow-2xs flex flex-col justify-between space-y-3 hover:border-zinc-300 transition"
-          >
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase font-mono font-medium tracking-tight px-1.5 py-0.2 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
-                  {tpl.category.replace('_', ' ')}
-                </span>
-                <div className="flex items-center gap-1 text-zinc-400">
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(tpl.message_body, tpl.id)}
-                    aria-label={`Copy template text for ${tpl.name}`}
-                    title="Copy Text"
-                    className="p-1 hover:text-zinc-700 hover:bg-zinc-100 rounded transition min-h-[30px] min-w-[30px] inline-flex items-center justify-center"
-                  >
-                    {copiedId === tpl.id ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(tpl.id)}
-                    aria-label={`Delete template ${tpl.name}`}
-                    title="Delete Template"
-                    className="p-1 hover:text-red-600 hover:bg-red-50 rounded transition min-h-[30px] min-w-[30px] inline-flex items-center justify-center"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+      {templates.length === 0 ? (
+        <section className="panel px-6 py-14 text-center">
+          <MessageSquareQuote className="mx-auto h-6 w-6 text-zinc-300" />
+          <h2 className="mt-3 text-sm font-semibold text-zinc-900">No saved messages yet</h2>
+          <p className="mt-1 text-xs text-zinc-500">{canManage ? 'Add a message the team can reuse.' : 'Ask a manager to add shared messages.'}</p>
+        </section>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {templates.filter((template) => template.is_active).map((template) => (
+            <article key={template.id} className="panel flex flex-col p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <span className="rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{categoryLabel(template.category)}</span>
+                  <h2 className="mt-3 text-sm font-semibold text-zinc-950">{template.name}</h2>
                 </div>
+                {canManage && (
+                  <button type="button" onClick={() => handleDelete(template.id)} aria-label={`Delete ${template.name}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-red-50 hover:text-red-600">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
 
-              <h3 className="text-xs font-semibold text-zinc-900 mb-2">{tpl.name}</h3>
-
-              {/* Chat Bubble simulation */}
-              <div className="bg-zinc-50 border border-zinc-200 rounded-md p-2.5 text-xs text-zinc-700 leading-relaxed font-sans relative">
-                <div className="whitespace-pre-wrap">{tpl.message_body}</div>
+              <div className="mt-3 flex-1 rounded-xl bg-zinc-50 p-4 text-sm leading-6 text-zinc-700">
+                <div className="whitespace-pre-wrap">{template.message_body}</div>
               </div>
-            </div>
 
-            <div className="text-[10px] text-zinc-400 pt-2 border-t border-zinc-100 flex items-center justify-between font-mono">
-              <span>Ready for 1-click wa.me dispatch</span>
-              <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Active
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
+              <button type="button" onClick={() => void handleCopy(template.message_body, template.id)} className="button-secondary mt-3 w-full">
+                {copiedId === template.id ? <><Check className="h-4 w-4 text-emerald-600" /> Copied</> : <><Copy className="h-4 w-4" /> Copy message</>}
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
