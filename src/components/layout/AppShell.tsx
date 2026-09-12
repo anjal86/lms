@@ -35,8 +35,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!isHydrated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9]" role="status" aria-live="polite">
-        <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm font-medium text-zinc-600 shadow-sm">
+      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
+        <div className="surface-flat flex items-center gap-3 px-4 py-3 text-sm font-medium text-zinc-600">
           <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
           Loading workspace…
         </div>
@@ -46,9 +46,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9] p-5">
-        <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-panel">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-950 text-sm font-bold text-white">W</div>
+      <div className="app-shell flex min-h-screen items-center justify-center p-5">
+        <div className="panel w-full max-w-sm p-6 text-center">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-950 text-sm font-bold text-white">W</div>
           <h1 className="mt-4 text-lg font-semibold tracking-tight text-zinc-950">Your session has expired</h1>
           <p className="mt-2 text-sm leading-6 text-zinc-500">Sign in again to continue from where you left off.</p>
           <a href={`/login?returnUrl=${encodeURIComponent(pathname)}`} className="button-primary mt-5 w-full">
@@ -61,7 +61,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (agentRedirectTarget) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9]" role="status" aria-live="polite">
+      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
         <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
           <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
           Opening your workspace…
@@ -71,12 +71,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f6f7f9]">
+    <div className="app-shell flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-[#f6f7f9] px-4 py-5 pb-24 sm:px-6 sm:py-6 md:pb-6 xl:px-8">
-          {children}
+        <main id="main-content" tabIndex={-1} className="app-main">
+          <div className="app-page-frame">{children}</div>
         </main>
         <MobileBottomNav />
       </div>
