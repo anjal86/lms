@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { refreshMetaConversationProfiles, syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
+import { syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { discoverSelectedMetaPageHistory } from '@/lib/integrations/meta-page-history';
 import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
@@ -10,7 +10,7 @@ import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const LIVE_SYNC_MIN_INTERVAL_MS = 5_000;
+const LIVE_SYNC_MIN_INTERVAL_MS = 6_000;
 const liveSyncPromises = new Map<string, Promise<MetaSyncResult>>();
 const lastLiveSyncCompletedAt = new Map<string, number>();
 
@@ -181,21 +181,20 @@ export async function POST(request: Request) {
 
     if (liveMode) {
       const result = await runLiveSync(requestedScope.scope);
-
-      // Managers automatically index one previously-unscanned customer history on
-      // each live-sync cycle. This steadily covers the entire Page without opening
-      // individual chats or making one enormous provider request.
       const phoneScan = canRunHistoryMaintenance
         ? await scanPhoneLeadHistoryBatch({
             scope: phoneScanScope(requestedScope.scope),
             batchSize: 1,
-            maxHistoryPages: 20,
+            maxHistoryPages: 1,
+            timeBudgetMs: 3_500,
+            requestTimeoutMs: 3_000,
           })
         : { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] };
 
       return NextResponse.json({
         ...result,
         phoneScan,
+        maintenanceContinues: phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
@@ -205,21 +204,24 @@ export async function POST(request: Request) {
       });
     }
 
+    // The visible Sync button is intentionally a quick foreground refresh. Deep
+    // maintenance continues in small resumable chunks through the existing live
+    // sync loop instead of holding one HTTP request open for minutes.
     const result = await syncMetaConversations({
-      liveMode: false,
+      liveMode: true,
       connectionId: requestedScope.scope?.connectionId,
       pageId: requestedScope.scope?.pageId,
     });
 
-    // When a Page is selected, walk that Page deeply enough to discover its full
-    // conversation list, but store only one preview message per customer.
+    // Discover a bounded slice of older conversations per click. This keeps the
+    // request responsive while still expanding the local Page inbox over time.
     const selectedHistory = requestedScope.scope
       ? await discoverSelectedMetaPageHistory({
           provider: requestedScope.scope.provider,
           accountId: requestedScope.scope.accountId,
           connectionId: requestedScope.scope.connectionId,
           pageId: requestedScope.scope.pageId,
-          maxPages: 30,
+          maxPages: 2,
         })
       : null;
 
@@ -229,19 +231,15 @@ export async function POST(request: Request) {
           messagesInserted: selectedHistory?.previewMessagesInserted || 0,
           errors: selectedHistory?.errors || [],
         }
-      : await discoverMetaConversationHistory({ maxPages: 12 });
+      : await discoverMetaConversationHistory({ maxPages: 2 });
 
-    // Manual Sync accelerates the automatic phone pass by scanning a larger batch.
-    // Future live-sync cycles continue from the next unscanned conversation.
     const phoneScan = await scanPhoneLeadHistoryBatch({
       scope: phoneScanScope(requestedScope.scope),
-      batchSize: 8,
-      maxHistoryPages: 20,
+      batchSize: 2,
+      maxHistoryPages: 1,
+      timeBudgetMs: 5_000,
+      requestTimeoutMs: 3_000,
     });
-
-    const avatarRefresh = internalSync || requestedScope.scope
-      ? null
-      : await refreshMetaConversationProfiles({ limit: 50 });
 
     return NextResponse.json(
       {
@@ -253,10 +251,7 @@ export async function POST(request: Request) {
         historyConversationsScanned: selectedHistory?.conversationsScanned || 0,
         historyErrors: history.errors,
         phoneScan,
-        avatarsRefreshed: avatarRefresh?.updated || 0,
-        avatarProfilesAttempted: avatarRefresh?.attempted || 0,
-        avatarProfilesUnavailable: avatarRefresh?.unavailable || 0,
-        avatarErrors: avatarRefresh?.errors || [],
+        maintenanceContinues: phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
