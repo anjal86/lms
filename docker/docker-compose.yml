@@ -58,27 +58,47 @@ services:
 
   supabase-realtime:
     image: supabase/realtime:v2.34.47
-    container_name: travel-lms-realtime
+    container_name: realtime-dev.supabase-realtime
     restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-sSfL",
+          "--head",
+          "-o",
+          "/dev/null",
+          "-H",
+          "Authorization: Bearer ${ANON_KEY}",
+          "http://localhost:4000/api/tenants/realtime-dev/health"
+        ]
+      timeout: 5s
+      interval: 5s
+      retries: 5
+      start_period: 10s
     environment:
       PORT: 4000
       DB_HOST: supabase-db
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-postgres}
-      DB_USER: postgres
+      DB_USER: supabase_admin
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_SSL: "false"
-      JWT_SECRET: ${JWT_SECRET}
-      REPLICATION_MODE: RLS
-      REPLICATION_POLL_INTERVAL: 100
-      SECURE_CHANNELS: "true"
+      DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"
+      DB_ENC_KEY: ${REALTIME_DB_ENC_KEY:?REALTIME_DB_ENC_KEY is required}
       API_JWT_SECRET: ${JWT_SECRET}
-      RLIMIT_NOFILE: "65536"
-      SECRET_KEY_BASE: ${JWT_SECRET}
+      METRICS_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}
+      ERL_AFLAGS: -proto_dist inet_tcp
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
       APP_NAME: realtime
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
 
   supabase-kong:
     image: kong:2.8.1
@@ -96,9 +116,12 @@ services:
     volumes:
       - ./kong.yml:/var/lib/kong/kong.yml:ro
     depends_on:
-      - supabase-auth
-      - supabase-rest
-      - supabase-realtime
+      supabase-auth:
+        condition: service_started
+      supabase-rest:
+        condition: service_started
+      supabase-realtime:
+        condition: service_healthy
 
   supabase-meta:
     image: supabase/postgres-meta:v0.84.2
