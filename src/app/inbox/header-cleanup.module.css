@@ -1,0 +1,95 @@
+.headerScope :global(section[aria-label='Conversation thread'] > header) {
+  min-height: 56px !important;
+  padding: 8px 12px !important;
+  gap: 12px !important;
+  background: rgba(255, 255, 255, 0.99) !important;
+  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.04) !important;
+}
+
+/* The synthetic/provider contact ID belongs in Details, not the working header. */
+.headerScope :global(section[aria-label='Conversation thread'] > header span[class~='font-mono'][class~='truncate']) {
+  display: none !important;
+}
+
+/* Make the channel a quiet label instead of another badge competing with the name. */
+.headerScope :global(section[aria-label='Conversation thread'] > header h2 + span) {
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #71717a !important;
+  font-size: 9.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em !important;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header h2) {
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+}
+
+/* Keep only useful context on row two: location, traveler time and reply window. */
+.headerScope :global(section[aria-label='Conversation thread'] > header h2 + span),
+.headerScope :global(section[aria-label='Conversation thread'] > header h2) {
+  white-space: nowrap;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header div[class*='mt-0.5']) {
+  margin-top: 3px !important;
+  gap: 9px !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden;
+  color: #71717a !important;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header div[class*='mt-0.5'] > span) {
+  min-width: 0;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  color: #71717a !important;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header div[class*='mt-0.5'] > span:last-child) {
+  flex-shrink: 0;
+  color: #15803d !important;
+  font-weight: 650 !important;
+}
+
+/* Meta is secondary navigation; Convert/Lead remains the single primary action. */
+.headerScope :global(section[aria-label='Conversation thread'] > header a[href][target='_blank']) {
+  height: 31px !important;
+  padding: 0 8px !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  color: #52525b !important;
+  box-shadow: none !important;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header a[href][target='_blank']:hover) {
+  background: #f4f4f5 !important;
+  color: #18181b !important;
+}
+
+.headerScope :global(section[aria-label='Conversation thread'] > header .button-primary),
+.headerScope :global(section[aria-label='Conversation thread'] > header .button-secondary) {
+  min-height: 31px !important;
+}
+
+@media (max-width: 767px) {
+  .headerScope :global(section[aria-label='Conversation thread'] > header) {
+    min-height: 52px !important;
+    padding: 7px 8px !important;
+  }
+
+  .headerScope :global(section[aria-label='Conversation thread'] > header div[class*='mt-0.5']) {
+    gap: 7px !important;
+  }
+
+  /* On small screens location is the most useful context; keep time and window compact. */
+  .headerScope :global(section[aria-label='Conversation thread'] > header div[class*='mt-0.5'] > span) {
+    max-width: 150px;
+  }
+
+  .headerScope :global(section[aria-label='Conversation thread'] > header a[href][target='_blank']) {
+    display: none !important;
+  }
+}
