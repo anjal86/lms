@@ -2,6 +2,7 @@ import 'server-only';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { fetchMetaCustomerProfile, type MetaCustomerProfile } from '@/lib/integrations/meta-profile';
 
 export type MetaSyncProvider = 'facebook' | 'instagram';
 
@@ -16,6 +17,7 @@ type SyncThread = {
   customerName: string;
   customerEmail: string | null;
   customerAvatarUrl: string | null;
+  avatarResolved: boolean;
   updatedAt: string;
   snippet: string | null;
   unreadCount: number;
@@ -38,16 +40,21 @@ export type MetaSyncResult = {
   errors: string[];
 };
 
+export type MetaAvatarRefreshResult = {
+  attempted: number;
+  updated: number;
+  unavailable: number;
+  errors: string[];
+};
+
 function record(value: unknown): MetaRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as MetaRecord : {};
 }
 
 function asArray(value: unknown): MetaRecord[] {
-  return Array.isArray(value) ? value.filter((item): item is MetaRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
-}
-
-function nested(value: unknown, key: string): unknown {
-  return record(value)[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is MetaRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
 }
 
 function attachmentDetails(message: MetaRecord) {
@@ -116,9 +123,7 @@ async function pagedGraph(url: URL, maxPages = 8) {
   const items: MetaRecord[] = [];
   let next: string | null = url.toString();
   for (let page = 0; page < maxPages && next; page += 1) {
-    const graphResult: { response: Response; data: MetaRecord } = await metaFetchJson<MetaRecord>(next);
-    const response = graphResult.response;
-    const payload = graphResult.data;
+    const { response, data: payload } = await metaFetchJson<MetaRecord>(next);
     if (!response.ok) {
       const providerError = record(payload.error);
       throw new Error(typeof providerError.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
@@ -128,6 +133,48 @@ async function pagedGraph(url: URL, maxPages = 8) {
     next = typeof paging.next === 'string' ? paging.next : null;
   }
   return items;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  async function run() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => run()));
+  return results;
+}
+
+async function resolveProfiles(input: {
+  provider: MetaSyncProvider;
+  accountId: string;
+  token: string;
+  version: string;
+  customerIds: string[];
+}) {
+  const uniqueIds = Array.from(new Set(input.customerIds.filter((id) => id && id !== input.accountId)));
+  const rows = await mapWithConcurrency(uniqueIds, 6, async (customerId) => {
+    try {
+      const profile = await fetchMetaCustomerProfile({
+        provider: input.provider,
+        customerId,
+        accountId: input.accountId,
+        token: input.token,
+        version: input.version,
+      });
+      return [customerId, profile] as const;
+    } catch {
+      return [customerId, null] as const;
+    }
+  });
+  return new Map<string, MetaCustomerProfile | null>(rows);
 }
 
 async function facebookThreads(input: {
@@ -145,11 +192,26 @@ async function facebookThreads(input: {
   url.searchParams.set('access_token', input.token);
   const conversations = await pagedGraph(url);
 
-  return conversations.flatMap((conversation) => {
+  const customerIds = conversations.map((conversation) => {
+    const participants = asArray(record(conversation.participants).data);
+    const customer = participants.find((participant) => String(participant.id || '') !== input.pageId) || participants[0];
+    return customer?.id ? String(customer.id) : '';
+  }).filter(Boolean);
+  const profiles = await resolveProfiles({
+    provider: 'facebook',
+    accountId: input.pageId,
+    token: input.token,
+    version: input.version,
+    customerIds,
+  });
+
+  const threads: SyncThread[] = [];
+  for (const conversation of conversations) {
     const participants = asArray(record(conversation.participants).data);
     const customer = participants.find((participant) => String(participant.id || '') !== input.pageId) || participants[0];
     const customerId = customer?.id ? String(customer.id) : '';
-    if (!customerId) return [];
+    if (!customerId || customerId === input.pageId) continue;
+    const profile = profiles.get(customerId) || null;
     const messages = asArray(record(conversation.messages).data);
     const mapped = messages.filter((message) => message.id).map((message) => {
       const details = attachmentDetails(message);
@@ -166,17 +228,20 @@ async function facebookThreads(input: {
         },
       };
     });
-    const updatedAt = typeof conversation.updated_time === 'string' ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
-    return [{
-      provider: 'facebook' as const,
+    const updatedAt = typeof conversation.updated_time === 'string'
+      ? new Date(conversation.updated_time).toISOString()
+      : new Date().toISOString();
+    threads.push({
+      provider: 'facebook',
       connectionId: input.connectionId,
       accountId: input.pageId,
       accountName: input.pageName,
       externalThreadId: `${input.pageId}:${customerId}`,
       externalContactId: customerId,
-      customerName: String(customer?.name || 'Messenger Traveler'),
+      customerName: profile?.name || String(customer?.name || 'Messenger Traveler'),
       customerEmail: typeof customer?.email === 'string' ? customer.email : null,
-      customerAvatarUrl: null,
+      customerAvatarUrl: profile?.avatarUrl || null,
+      avatarResolved: Boolean(profile),
       updatedAt,
       snippet: typeof conversation.snippet === 'string' ? conversation.snippet : mapped[0]?.body || null,
       unreadCount: Number(conversation.unread_count) || 0,
@@ -189,11 +254,15 @@ async function facebookThreads(input: {
         message_count: conversation.message_count ?? mapped.length,
         scoped_thread_key: conversation.scoped_thread_key || conversation.id,
         customer_id: customerId,
+        avatar_profile_id: profile?.id || null,
+        avatar_source: profile ? 'meta_profile' : null,
+        avatar_synced_at: profile ? new Date().toISOString() : null,
         synced_at: new Date().toISOString(),
       },
       messages: mapped,
-    }];
-  });
+    });
+  }
+  return threads;
 }
 
 async function instagramThreads(input: {
@@ -212,11 +281,26 @@ async function instagramThreads(input: {
   url.searchParams.set('access_token', input.token);
   const conversations = await pagedGraph(url);
 
-  return conversations.flatMap((conversation) => {
+  const customerIds = conversations.map((conversation) => {
+    const participants = asArray(record(conversation.participants).data);
+    const customer = participants.find((participant) => String(participant.id || '') !== input.instagramId) || participants[0];
+    return customer?.id ? String(customer.id) : '';
+  }).filter(Boolean);
+  const profiles = await resolveProfiles({
+    provider: 'instagram',
+    accountId: input.instagramId,
+    token: input.token,
+    version: input.version,
+    customerIds,
+  });
+
+  const threads: SyncThread[] = [];
+  for (const conversation of conversations) {
     const participants = asArray(record(conversation.participants).data);
     const customer = participants.find((participant) => String(participant.id || '') !== input.instagramId) || participants[0];
     const customerId = customer?.id ? String(customer.id) : '';
-    if (!customerId) return [];
+    if (!customerId || customerId === input.instagramId) continue;
+    const profile = profiles.get(customerId) || null;
     const messages = asArray(record(conversation.messages).data);
     const mapped = messages.filter((message) => message.id).map((message) => {
       const details = attachmentDetails(message);
@@ -230,17 +314,20 @@ async function instagramThreads(input: {
         metadata: { ...details.metadata, sent_via: outbound ? 'meta_business_suite' : 'customer' },
       };
     });
-    const updatedAt = typeof conversation.updated_time === 'string' ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
-    return [{
-      provider: 'instagram' as const,
+    const updatedAt = typeof conversation.updated_time === 'string'
+      ? new Date(conversation.updated_time).toISOString()
+      : new Date().toISOString();
+    threads.push({
+      provider: 'instagram',
       connectionId: input.connectionId,
       accountId: input.instagramId,
       accountName: input.accountName,
       externalThreadId: `${input.instagramId}:${customerId}`,
       externalContactId: customerId,
-      customerName: String(customer?.username || customer?.name || 'Instagram Traveler'),
+      customerName: profile?.username || profile?.name || String(customer?.username || customer?.name || 'Instagram Traveler'),
       customerEmail: null,
-      customerAvatarUrl: null,
+      customerAvatarUrl: profile?.avatarUrl || null,
+      avatarResolved: Boolean(profile),
       updatedAt,
       snippet: mapped[0]?.body || null,
       unreadCount: 0,
@@ -248,29 +335,36 @@ async function instagramThreads(input: {
         instagram_business_account_id: input.instagramId,
         account_name: input.accountName,
         customer_id: customerId,
+        avatar_profile_id: profile?.id || null,
+        avatar_source: profile ? 'meta_profile' : null,
+        avatar_synced_at: profile ? new Date().toISOString() : null,
         synced_at: new Date().toISOString(),
       },
       messages: mapped,
-    }];
-  });
+    });
+  }
+  return threads;
 }
 
 async function persistThread(thread: SyncThread) {
   const admin = createSupabaseAdminClient();
+  const conversationPatch: Record<string, unknown> = {
+    provider: thread.provider,
+    connection_id: thread.connectionId,
+    external_thread_id: thread.externalThreadId,
+    external_contact_id: thread.externalContactId,
+    customer_name: thread.customerName,
+    customer_email: thread.customerEmail,
+    last_message_preview: thread.snippet,
+    status: 'open',
+    last_message_at: thread.updatedAt,
+    metadata: thread.metadata,
+  };
+  if (thread.avatarResolved) conversationPatch.customer_avatar_url = thread.customerAvatarUrl;
+
   const { data: conversation, error: conversationError } = await admin
     .from('lead_conversations')
-    .upsert({
-      provider: thread.provider,
-      connection_id: thread.connectionId,
-      external_thread_id: thread.externalThreadId,
-      external_contact_id: thread.externalContactId,
-      customer_name: thread.customerName,
-      customer_email: thread.customerEmail,
-      last_message_preview: thread.snippet,
-      status: 'open',
-      last_message_at: thread.updatedAt,
-      metadata: thread.metadata,
-    }, { onConflict: 'provider,external_thread_id' })
+    .upsert(conversationPatch, { onConflict: 'provider,external_thread_id' })
     .select('id,lead_id')
     .single();
   if (conversationError || !conversation) throw conversationError || new Error('Conversation upsert failed.');
@@ -286,7 +380,7 @@ async function persistThread(thread: SyncThread) {
       p_customer_name: thread.customerName,
       p_customer_phone: `${thread.provider}:${thread.externalContactId}`,
       p_customer_email: thread.customerEmail,
-      p_customer_avatar_url: thread.customerAvatarUrl,
+      p_customer_avatar_url: thread.avatarResolved ? thread.customerAvatarUrl : null,
       p_external_message_id: message.id,
       p_direction: message.direction,
       p_message_type: message.messageType,
@@ -303,6 +397,122 @@ async function persistThread(thread: SyncThread) {
 
   await admin.from('lead_conversations').update({ unread_count: thread.unreadCount }).eq('id', conversation.id);
   return { inserted };
+}
+
+function pageTokenForAccount(input: {
+  config: Record<string, unknown>;
+  pageTokens: Array<Record<string, unknown>>;
+  fallbackToken: string | null;
+  accountId: string;
+}) {
+  const pages = asArray(input.config.pages);
+  const owningPage = pages.find((page) => {
+    if (String(page.id || '') === input.accountId) return true;
+    const instagram = record(page.instagram_business_account);
+    return String(instagram.id || '') === input.accountId;
+  });
+  const pageId = String(owningPage?.id || input.accountId);
+  const row = input.pageTokens.find((item) => String(item.id || '') === pageId);
+  return typeof row?.access_token === 'string' ? row.access_token : input.fallbackToken;
+}
+
+export async function refreshMetaConversationProfiles(options?: { limit?: number }): Promise<MetaAvatarRefreshResult> {
+  const admin = createSupabaseAdminClient();
+  const limit = Math.max(1, Math.min(options?.limit || 500, 1000));
+  const errors: string[] = [];
+  let attempted = 0;
+  let updated = 0;
+  let unavailable = 0;
+
+  const { data: conversations, error } = await admin
+    .from('lead_conversations')
+    .select('id,provider,connection_id,external_thread_id,external_contact_id,customer_name,customer_avatar_url,metadata,last_message_at')
+    .in('provider', ['facebook', 'instagram'])
+    .not('connection_id', 'is', null)
+    .not('external_contact_id', 'is', null)
+    .order('last_message_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  if (!conversations?.length) return { attempted, updated, unavailable, errors };
+
+  const connectionIds = Array.from(new Set(conversations.map((conversation) => String(conversation.connection_id || '')).filter(Boolean)));
+  const connectionState = new Map<string, {
+    config: Record<string, unknown>;
+    pageTokens: Array<Record<string, unknown>>;
+    fallbackToken: string | null;
+  }>();
+
+  for (const connectionId of connectionIds) {
+    const [{ data: connection }, { data: secrets }] = await Promise.all([
+      admin.from('integration_connections').select('config').eq('id', connectionId).maybeSingle(),
+      admin.from('integration_secrets').select('access_token,secret_payload').eq('connection_id', connectionId).maybeSingle(),
+    ]);
+    if (!connection || !secrets) continue;
+    const payload = decryptSecretPayload(secrets.secret_payload || {}) as Record<string, unknown>;
+    connectionState.set(connectionId, {
+      config: (connection.config || {}) as Record<string, unknown>,
+      pageTokens: Array.isArray(payload.page_access_tokens) ? payload.page_access_tokens as Array<Record<string, unknown>> : [],
+      fallbackToken: decryptIntegrationSecret(secrets.access_token),
+    });
+  }
+
+  const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+  await mapWithConcurrency(conversations, 6, async (conversation) => {
+    const provider = conversation.provider as MetaSyncProvider;
+    const connectionId = String(conversation.connection_id || '');
+    const customerId = String(conversation.external_contact_id || '');
+    const state = connectionState.get(connectionId);
+    if (!state || !customerId) {
+      unavailable += 1;
+      return;
+    }
+
+    const metadata = (conversation.metadata || {}) as Record<string, unknown>;
+    const threadAccountId = String(conversation.external_thread_id || '').split(':', 1)[0];
+    const accountId = provider === 'instagram'
+      ? String(metadata.instagram_business_account_id || metadata.account_id || threadAccountId || '')
+      : String(metadata.meta_page_id || metadata.account_id || threadAccountId || '');
+    if (!accountId || accountId === customerId) {
+      unavailable += 1;
+      return;
+    }
+
+    const token = pageTokenForAccount({ ...state, accountId });
+    if (!token) {
+      unavailable += 1;
+      return;
+    }
+
+    attempted += 1;
+    try {
+      const profile = await fetchMetaCustomerProfile({ provider, customerId, accountId, token, version });
+      if (!profile) {
+        unavailable += 1;
+        return;
+      }
+
+      const genericName = !conversation.customer_name || /^(Messenger|Instagram) (User|Traveler)$/i.test(conversation.customer_name);
+      const patch: Record<string, unknown> = {
+        customer_avatar_url: profile.avatarUrl,
+        metadata: {
+          ...metadata,
+          avatar_profile_id: profile.id,
+          avatar_source: 'meta_profile',
+          avatar_synced_at: new Date().toISOString(),
+        },
+      };
+      if (genericName && (profile.username || profile.name)) patch.customer_name = profile.username || profile.name;
+
+      const { error: updateError } = await admin.from('lead_conversations').update(patch).eq('id', conversation.id);
+      if (updateError) throw updateError;
+      updated += 1;
+    } catch (profileError) {
+      unavailable += 1;
+      errors.push(`${provider}:${customerId}: ${profileError instanceof Error ? profileError.message : String(profileError)}`);
+    }
+  });
+
+  return { attempted, updated, unavailable, errors: errors.slice(0, 50) };
 }
 
 export async function syncMetaConversations(options?: { connectionId?: string; pageId?: string }): Promise<MetaSyncResult> {
