@@ -1,56 +1,89 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Profile,
-  Lead,
-  FollowUp,
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { getSupabaseBrowserClient } from './supabase/client';
+import type {
   ActivityLog,
-  WhatsAppTemplate,
-  SlaSettings,
-  AgencySettings,
-  AppNotification,
-  AgentStatus,
-  LeadStage,
-  FollowUpChannel,
   ActivityType,
-  IncentiveTier,
+  AgencySettings,
+  AgentStatus,
+  AppNotification,
   CommissionStatus,
-  UserPreferences,
-  SoundPreset,
   CurrencyCode,
-  DateFormat,
-  RoutingStrategy,
-  RoutingOverflowPolicy,
-  LeadQuotation,
-  MealPlanCode,
+  EmployeeHealthScore,
+  FollowUp,
+  FollowUpChannel,
+  FollowUpDisposition,
+  IncentiveTier,
   ItineraryDay,
+  Lead,
+  LeadQuotation,
+  LeadStage,
+  LeadSupplierPayable,
   PaymentMethod,
   PaymentMilestone,
   PaymentRecord,
-  VisaStatus,
-  TravelerPassenger,
-  TravelerDocument,
-  DmcPaymentStatus,
-  DmcSupplier,
-  LeadSupplierPayable,
-  TripLifecycleStatus,
-  PreDepartureChecklist,
   PostTripReview,
-  FollowUpDisposition,
-  FollowUpDispositionType,
-  EmployeeHealthScore,
+  PreDepartureChecklist,
+  Profile,
+  SoundPreset,
+  TravelerDocument,
+  TravelerPassenger,
+  TripLifecycleStatus,
+  UserPreferences,
 } from './types';
-import {
-  INITIAL_PROFILES,
-  INITIAL_LEADS,
-  INITIAL_FOLLOW_UPS,
-  INITIAL_ACTIVITIES,
-  INITIAL_TEMPLATES,
-  INITIAL_SLA,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_INCENTIVE_TIERS,
-} from './supabase/mock-data';
+
+const DEFAULT_SETTINGS: AgencySettings = {
+  id: 'default',
+  frt_minutes: 30,
+  overdue_grace_minutes: 60,
+  escalate_to_manager: true,
+  auto_reassign_breached_leads: false,
+  auto_reassign_hours: 4,
+  business_hours_start: '09:00',
+  business_hours_end: '18:00',
+  freeze_sla_weekends: true,
+  timezone: 'Asia/Kathmandu',
+  pre_breach_warning_minutes: 10,
+  routing_strategy: 'workload_balanced',
+  routing_overflow_policy: 'unassigned_pool',
+  vip_high_budget_threshold: 8000,
+  vip_route_seniors_only: true,
+  lead_cooldown_minutes: 3,
+  currency: 'USD',
+  currency_symbol: '$',
+  date_format: 'DD/MM/YYYY',
+  commission_tds_pct: 10,
+  min_gross_margin_threshold: 12,
+  payout_frequency: 'monthly',
+  notification_sound_enabled: true,
+  notification_sound_preset: 'chime',
+  notification_volume: 75,
+  mute_sound_in_call: true,
+  browser_push_enabled: false,
+  toast_duration_seconds: 3,
+  custom_lost_reasons: ['budget_too_high', 'competitor', 'dates_changed', 'no_response', 'other'],
+  custom_lead_sources: ['website', 'meta_ads', 'google_ads', 'whatsapp', 'referral', 'walk_in', 'phone_call', 'other'],
+  auto_archive_days: 30,
+};
+
+const EMPTY_PROFILE: Profile = {
+  id: '',
+  email: '',
+  full_name: 'Loading…',
+  role: 'agent',
+  destination_tags: [],
+  max_capacity: 25,
+  current_load: 0,
+  status: 'offline',
+  is_active: false,
+  accepting_leads: false,
+  languages: [],
+  certifications: [],
+  created_at: new Date(0).toISOString(),
+};
+
+type Toast = { message: string; type?: 'success' | 'info' | 'warning' | 'error'; id: number } | null;
 
 interface AppContextType {
   currentUser: Profile;
@@ -59,43 +92,21 @@ interface AppContextType {
   allLeads: Lead[];
   followUps: FollowUp[];
   activities: ActivityLog[];
-  templates: WhatsAppTemplate[];
+  templates: any[];
   slaSettings: AgencySettings;
   agencySettings: AgencySettings;
   notifications: AppNotification[];
   unreadCount: number;
   incentiveTiers: IncentiveTier[];
   isAuthenticated: boolean;
-  login: (email: string, password?: string) => { success: boolean; error?: string };
+  login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   switchUser: (profileId: string) => void;
   updateAgentStatus: (status: AgentStatus) => void;
   addLead: (lead: Partial<Lead>) => Lead;
-  updateLeadStage: (
-    leadId: string,
-    stage: LeadStage,
-    lostReason?: string,
-    lostNotes?: string,
-    financials?: {
-      packageSalePrice: number;
-      vendorNetCost: number;
-    }
-  ) => void;
+  updateLeadStage: (leadId: string, stage: LeadStage, lostReason?: string, lostNotes?: string, financials?: { packageSalePrice: number; vendorNetCost: number }) => void;
   assignLead: (leadId: string, agentId: string) => void;
-  logActivity: (data: {
-    leadId: string;
-    type: ActivityType;
-    title: string;
-    outcome?: string;
-    notes?: string;
-    duration?: number;
-    nextFollowUp?: {
-      scheduled_at: string;
-      channel: FollowUpChannel;
-      title?: string;
-      notes?: string;
-    };
-  }) => void;
+  logActivity: (data: { leadId: string; type: ActivityType; title: string; outcome?: string; notes?: string; duration?: number; nextFollowUp?: { scheduled_at: string; channel: FollowUpChannel; title?: string; notes?: string } }) => void;
   completeFollowUp: (followUpId: string, completionNotes?: string) => void;
   createFollowUp: (data: Partial<FollowUp>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -103,39 +114,15 @@ interface AppContextType {
   updateSlaSettings: (settings: Partial<AgencySettings>) => void;
   updateAgencySettings: (settings: Partial<AgencySettings>) => void;
   updateUserPreferences: (profileId: string, prefs: Partial<UserPreferences>) => void;
-  updateTemplates: (templates: WhatsAppTemplate[]) => void;
+  updateTemplates: (templates: any[]) => void;
   updateIncentiveTiers: (tiers: IncentiveTier[]) => void;
   approveCommissionPayout: (leadId: string, newStatus?: CommissionStatus) => void;
-  getAgentIncentiveProfile: (agentId: string) => {
-    currentTier: IncentiveTier;
-    nextTier: IncentiveTier | null;
-    totalSales: number;
-    totalGrossProfit: number;
-    avgProfitMargin: number;
-    accruedCommission: number;
-    approvedCommission: number;
-    paidCommission: number;
-    salesToNextTier: number;
-    progressPct: number;
-    wonDealsCount: number;
-  };
+  getAgentIncentiveProfile: (agentId: string) => { currentTier: IncentiveTier; nextTier: IncentiveTier | null; totalSales: number; totalGrossProfit: number; avgProfitMargin: number; accruedCommission: number; approvedCommission: number; paidCommission: number; salesToNextTier: number; progressPct: number; wonDealsCount: number };
   updateProfile: (profileId: string, updates: Partial<Profile>) => void;
-  createProfile: (data: Omit<Profile, 'id' | 'created_at' | 'current_load'>) => Profile;
+  createProfile: (data: Omit<Profile, 'id' | 'created_at' | 'current_load'>) => Promise<Profile | null>;
   toggleAgentAcceptingLeads: (profileId: string) => void;
   bulkReassignAgentLeads: (fromAgentId: string, toAgentId: string) => number;
-  getAgentMetrics: (agentId: string) => {
-    totalAssigned: number;
-    activeLeads: number;
-    wonCount: number;
-    lostCount: number;
-    winRate: number;
-    revenue: number;
-    grossProfit: number;
-    avgFrtMinutes: number;
-    breaches: number;
-    activityCount: number;
-    capacityPct: number;
-  };
+  getAgentMetrics: (agentId: string) => { totalAssigned: number; activeLeads: number; wonCount: number; lostCount: number; winRate: number; revenue: number; grossProfit: number; avgFrtMinutes: number; breaches: number; activityCount: number; capacityPct: number };
   playNotificationSound: (preset?: SoundPreset, customVolume?: number) => void;
   formatCurrency: (amount: number) => string;
   formatAppDate: (date: string | Date) => string;
@@ -146,31 +133,13 @@ interface AppContextType {
   createLeadQuotation: (leadId: string, quoteData: Partial<LeadQuotation>) => LeadQuotation;
   bulkAssignLeads: (leadIds: string[], agentId: string) => void;
   bulkUpdateLeadStage: (leadIds: string[], stage: LeadStage) => void;
-  addPaymentRecord: (
-    leadId: string,
-    payment: {
-      amount: number;
-      method: PaymentMethod;
-      reference_no?: string;
-      notes?: string;
-    }
-  ) => PaymentRecord;
+  addPaymentRecord: (leadId: string, payment: { amount: number; method: PaymentMethod; reference_no?: string; notes?: string }) => PaymentRecord;
   updatePaymentMilestones: (leadId: string, milestones: PaymentMilestone[]) => void;
   updateItineraryDays: (leadId: string, days: ItineraryDay[]) => void;
-  addPassenger: (
-    leadId: string,
-    passenger: Omit<TravelerPassenger, 'id' | 'lead_id'>
-  ) => TravelerPassenger;
-  updatePassenger: (
-    leadId: string,
-    passengerId: string,
-    updates: Partial<TravelerPassenger>
-  ) => void;
+  addPassenger: (leadId: string, passenger: Omit<TravelerPassenger, 'id' | 'lead_id'>) => TravelerPassenger;
+  updatePassenger: (leadId: string, passengerId: string, updates: Partial<TravelerPassenger>) => void;
   deletePassenger: (leadId: string, passengerId: string) => void;
-  addDocument: (
-    leadId: string,
-    document: Omit<TravelerDocument, 'id' | 'lead_id' | 'uploaded_at'>
-  ) => TravelerDocument;
+  addDocument: (leadId: string, document: Omit<TravelerDocument, 'id' | 'lead_id' | 'uploaded_at'>) => TravelerDocument;
   deleteDocument: (leadId: string, documentId: string) => void;
   updatePreDepartureChecklist: (leadId: string, checklist: Partial<PreDepartureChecklist>) => void;
   updateSupplierPayables: (leadId: string, payables: LeadSupplierPayable[]) => void;
@@ -180,449 +149,233 @@ interface AppContextType {
   getAgentHealthScore: (agentId: string) => EmployeeHealthScore;
   rebalanceOverdueFollowUps: (fromAgentId: string, toAgentId?: string) => number;
   exportFollowUpsIcal: (tasks?: FollowUp[]) => void;
-  toast: {
-    message: string;
-    type?: 'success' | 'info' | 'warning' | 'error';
-    id: number;
-  } | null;
+  toast: Toast;
   showToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
   hideToast: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [profiles, setProfiles] = useState<Profile[]>(INITIAL_PROFILES);
-  const [currentUserId, setCurrentUserId] = useState<string>(INITIAL_PROFILES[0].id);
-  const [leadsList, setLeadsList] = useState<Lead[]>(INITIAL_LEADS);
-  const [followUpsList, setFollowUpsList] = useState<FollowUp[]>(INITIAL_FOLLOW_UPS);
-  const [activitiesList, setActivitiesList] = useState<ActivityLog[]>(INITIAL_ACTIVITIES);
-  const [templatesList, setTemplatesList] = useState<WhatsAppTemplate[]>(INITIAL_TEMPLATES);
-  const [sla, setSla] = useState<AgencySettings>(INITIAL_SLA);
-  const [notificationsList, setNotificationsList] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
-  const [tiers, setTiers] = useState<IncentiveTier[]>(INITIAL_INCENTIVE_TIERS);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
-  const [isHydrated, setIsHydrated] = useState(false);
-  const [toast, setToast] = useState<{
-    message: string;
-    type?: 'success' | 'info' | 'warning' | 'error';
-    id: number;
-  } | null>(null);
+const uuid = () => crypto.randomUUID();
+const isManagement = (profile: Profile) => profile.role === 'admin' || profile.role === 'manager';
+const toNumber = (value: unknown) => typeof value === 'number' ? value : Number(value || 0);
+const normalizeLead = (row: any): Lead => {
+  const quotes = Array.isArray(row.quotes) ? row.quotes : [];
+  return { ...row, quotes, latest_quote: quotes[0] } as Lead;
+};
 
-  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [currentUserId, setCurrentUserId] = useState('');
+  const [leadsList, setLeadsList] = useState<Lead[]>([]);
+  const [followUpsList, setFollowUpsList] = useState<FollowUp[]>([]);
+  const [activitiesList, setActivitiesList] = useState<ActivityLog[]>([]);
+  const [templatesList, setTemplatesList] = useState<any[]>([]);
+  const [sla, setSla] = useState<AgencySettings>(DEFAULT_SETTINGS);
+  const [notificationsList, setNotificationsList] = useState<AppNotification[]>([]);
+  const [tiers, setTiers] = useState<IncentiveTier[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [toast, setToast] = useState<Toast>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hideToast = useCallback(() => {
     setToast(null);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
 
-  const showToast = useCallback(
-    (message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      const id = Date.now();
-      setToast({ message, type, id });
-      const duration = (sla?.toast_duration_seconds || 3) * 1000;
-      toastTimerRef.current = setTimeout(() => {
-        setToast(null);
-      }, duration);
-    },
-    [sla?.toast_duration_seconds]
-  );
+  const showToast = useCallback((message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type, id: Date.now() });
+    toastTimerRef.current = setTimeout(() => setToast(null), (sla.toast_duration_seconds || 3) * 1000);
+  }, [sla.toast_duration_seconds]);
 
-  // Hydrate from localStorage on client mount
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('wanderlust_crm_v1');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.profiles && Array.isArray(parsed.profiles)) setProfiles(parsed.profiles);
-          if (parsed.currentUserId && typeof parsed.currentUserId === 'string') setCurrentUserId(parsed.currentUserId);
-          if (typeof parsed.isAuthenticated === 'boolean') setIsAuthenticated(parsed.isAuthenticated);
-          if (parsed.leadsList && Array.isArray(parsed.leadsList)) setLeadsList(parsed.leadsList);
-          if (parsed.followUpsList && Array.isArray(parsed.followUpsList)) setFollowUpsList(parsed.followUpsList);
-          if (parsed.activitiesList && Array.isArray(parsed.activitiesList)) setActivitiesList(parsed.activitiesList);
-          if (parsed.templatesList && Array.isArray(parsed.templatesList)) setTemplatesList(parsed.templatesList);
-          if (parsed.sla && typeof parsed.sla === 'object') setSla(parsed.sla);
-          if (parsed.notificationsList && Array.isArray(parsed.notificationsList)) setNotificationsList(parsed.notificationsList);
-          if (parsed.tiers && Array.isArray(parsed.tiers)) setTiers(parsed.tiers);
-        }
-      }
-    } catch (e) {
-      console.warn('Could not hydrate CRM from localStorage:', e);
-    } finally {
+  const handleMutationError = useCallback((label: string, error: unknown) => {
+    console.error(label, error);
+    showToast(`${label} failed. Your view will be refreshed.`, 'error');
+  }, [showToast]);
+
+  const refreshData = useCallback(async () => {
+    const supabase = getSupabaseBrowserClient();
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      setIsAuthenticated(false);
+      setCurrentUserId('');
+      setProfiles([]);
+      setLeadsList([]);
+      setFollowUpsList([]);
+      setActivitiesList([]);
+      setNotificationsList([]);
       setIsHydrated(true);
+      return;
     }
+
+    setIsAuthenticated(true);
+    setCurrentUserId(user.id);
+    const [profileRes, leadRes, followUpRes, activityRes, templateRes, settingsRes, notificationRes, tierRes] = await Promise.all([
+      supabase.from('profiles').select('*').order('full_name'),
+      supabase.from('leads').select('*').order('created_at', { ascending: false }),
+      supabase.from('follow_ups').select('*').order('scheduled_at', { ascending: true }),
+      supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(2000),
+      supabase.from('whatsapp_templates').select('*').order('created_at', { ascending: true }),
+      supabase.from('agency_settings').select('settings').eq('id', 'default').maybeSingle(),
+      supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(250),
+      supabase.from('incentive_tiers').select('*').order('min_sales', { ascending: true }),
+    ]);
+
+    const failed = [profileRes, leadRes, followUpRes, activityRes, templateRes, settingsRes, notificationRes, tierRes].find((result: any) => result.error);
+    if (failed?.error) throw failed.error;
+
+    setProfiles((profileRes.data || []) as Profile[]);
+    setLeadsList((leadRes.data || []).map(normalizeLead));
+    setFollowUpsList((followUpRes.data || []) as FollowUp[]);
+    setActivitiesList((activityRes.data || []) as ActivityLog[]);
+    setTemplatesList(templateRes.data || []);
+    setNotificationsList((notificationRes.data || []) as AppNotification[]);
+    setTiers((tierRes.data || []).map((tier: any) => ({
+      ...tier,
+      min_sales: toNumber(tier.min_sales),
+      max_sales: tier.max_sales == null ? null : toNumber(tier.max_sales),
+      commission_pct_profit: toNumber(tier.commission_pct_profit),
+      milestone_bonus: toNumber(tier.milestone_bonus),
+      min_margin_threshold: toNumber(tier.min_margin_threshold),
+    })) as IncentiveTier[]);
+    setSla({ ...DEFAULT_SETTINGS, ...((settingsRes.data?.settings || {}) as Partial<AgencySettings>), id: 'default' });
+    setIsHydrated(true);
   }, []);
 
-  // Save to localStorage whenever state changes after initial hydration
   useEffect(() => {
-    if (!isHydrated) return;
-    try {
-      if (typeof window !== 'undefined') {
-        const payload = {
-          profiles,
-          currentUserId,
-          isAuthenticated,
-          leadsList,
-          followUpsList,
-          activitiesList,
-          templatesList,
-          sla,
-          notificationsList,
-          tiers,
-        };
-        localStorage.setItem('wanderlust_crm_v1', JSON.stringify(payload));
+    let mounted = true;
+    refreshData().catch((error) => {
+      if (mounted) {
+        console.error('CRM hydration failed:', error);
+        setIsHydrated(true);
       }
-    } catch (e) {
-      console.warn('Could not save CRM to localStorage:', e);
-    }
-  }, [
-    isHydrated,
-    profiles,
-    currentUserId,
-    isAuthenticated,
-    leadsList,
-    followUpsList,
-    activitiesList,
-    templatesList,
-    sla,
-    notificationsList,
-    tiers,
-  ]);
+    });
 
-  const currentUser = profiles.find((p) => p.id === currentUserId) || profiles[0];
-
-  const playNotificationSound = (presetOverride?: SoundPreset, customVolume?: number) => {
-    try {
-      if (typeof window === 'undefined') return;
-      const validPresets: SoundPreset[] = ['chime', 'modern_bell', 'radar', 'subtle', 'off'];
-      const hasValidPreset = typeof presetOverride === 'string' && validPresets.includes(presetOverride);
-      const isManualTest = hasValidPreset;
-
-      if (!sla.notification_sound_enabled && !isManualTest) return;
-      if (sla.mute_sound_in_call && currentUser.status === 'in_call' && !isManualTest) return;
-
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-
-      const preset = hasValidPreset ? presetOverride : (sla.notification_sound_preset || 'chime');
-      if (preset === 'off') return;
-
-      const volMultiplier = Math.max(0.01, (customVolume ?? sla.notification_volume ?? 75) / 100);
-      const baseGain = 0.25 * volMultiplier;
-
-      if (preset === 'chime') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.14);
-        gain.gain.setValueAtTime(baseGain, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.36);
-      } else if (preset === 'modern_bell') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.08);
-        gain.gain.setValueAtTime(baseGain * 1.2, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.3);
-      } else if (preset === 'radar') {
-        const osc1 = ctx.createOscillator();
-        const gain1 = ctx.createGain();
-        osc1.type = 'sine';
-        osc1.frequency.setValueAtTime(1046.5, ctx.currentTime);
-        gain1.gain.setValueAtTime(baseGain, ctx.currentTime);
-        gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
-        osc1.connect(gain1);
-        gain1.connect(ctx.destination);
-        osc1.start();
-        osc1.stop(ctx.currentTime + 0.13);
-
-        const osc2 = ctx.createOscillator();
-        const gain2 = ctx.createGain();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(1318.5, ctx.currentTime + 0.15);
-        gain2.gain.setValueAtTime(baseGain, ctx.currentTime + 0.15);
-        gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.32);
-        osc2.connect(gain2);
-        gain2.connect(ctx.destination);
-        osc2.start(ctx.currentTime + 0.15);
-        osc2.stop(ctx.currentTime + 0.33);
-      } else if (preset === 'subtle') {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(440, ctx.currentTime);
-        gain.gain.setValueAtTime(baseGain * 0.7, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.22);
+    const supabase = getSupabaseBrowserClient();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        refreshData().catch((error) => console.error('CRM refresh failed:', error));
       }
-    } catch (e) {
-      console.warn('Audio notification note:', e);
-    }
-  };
+      if (event === 'SIGNED_OUT') {
+        setIsAuthenticated(false);
+        setCurrentUserId('');
+        setProfiles([]);
+        setLeadsList([]);
+        setFollowUpsList([]);
+        setActivitiesList([]);
+        setNotificationsList([]);
+      }
+    });
 
-  const formatCurrency = (amount: number) => {
-    const sym = sla.currency_symbol || '$';
-    return `${sym}${Math.round(amount).toLocaleString('en-US')}`;
-  };
-
-  const formatAppDate = (date: string | Date) => {
-    if (!date) return '';
-    if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      const [year, month, day] = date.split('-');
-      const fmt = sla?.date_format || 'DD/MM/YYYY';
-      if (fmt === 'YYYY-MM-DD') return `${year}-${month}-${day}`;
-      if (fmt === 'MM/DD/YYYY') return `${month}/${day}/${year}`;
-      return `${day}/${month}/${year}`;
-    }
-    const d = new Date(date);
-    if (isNaN(d.getTime())) return String(date);
-    const day = String(d.getUTCDate()).padStart(2, '0');
-    const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const year = d.getUTCFullYear();
-    const fmt = sla?.date_format || 'DD/MM/YYYY';
-    if (fmt === 'YYYY-MM-DD') return `${year}-${month}-${day}`;
-    if (fmt === 'MM/DD/YYYY') return `${month}/${day}/${year}`;
-    return `${day}/${month}/${year}`;
-  };
-
-  const login = (email: string, _password?: string) => {
-    const normalized = email.trim().toLowerCase();
-    const found = profiles.find((p) => p.email.toLowerCase() === normalized);
-    if (!found) {
-      return {
-        success: false,
-        error: 'No registered consultant or administrator found with that work email.',
-      };
-    }
-    if (!found.is_active) {
-      return {
-        success: false,
-        error: 'This account has been deactivated. Please contact your agency administrator.',
-      };
-    }
-
-    setCurrentUserId(found.id);
-    setIsAuthenticated(true);
-    showToast(`Welcome back, ${found.full_name}! (${found.role.toUpperCase()})`, 'success');
-
-    // Record login audit event
-    const authLog: ActivityLog = {
-      id: `act-auth-${Date.now()}`,
-      lead_id: leadsList[0]?.id || 'system',
-      agent_id: found.id,
-      activity_type: 'system',
-      title: 'Consultant Signed In',
-      notes: `${found.full_name} authenticated via Workstation Auth Engine (${found.role})`,
-      created_at: new Date().toISOString(),
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
-    setActivitiesList((prev) => [authLog, ...prev]);
+  }, [refreshData]);
 
-    return { success: true };
+  const profilesWithDynamicLoad = useMemo(() => profiles.map((profile) => ({
+    ...profile,
+    current_load: leadsList.filter((lead) => lead.assigned_to === profile.id && lead.stage !== 'won' && lead.stage !== 'lost').length,
+  })), [profiles, leadsList]);
+
+  const currentUser = profilesWithDynamicLoad.find((profile) => profile.id === currentUserId) || EMPTY_PROFILE;
+  const visibleLeads = useMemo(() => isManagement(currentUser)
+    ? leadsList
+    : leadsList.filter((lead) => lead.assigned_to === currentUser.id || lead.assigned_to === null), [currentUser, leadsList]);
+  const notifications = notificationsList.filter((item) => item.user_id === currentUser.id);
+  const unreadCount = notifications.filter((item) => !item.is_read).length;
+
+  const run = useCallback((label: string, operation: PromiseLike<unknown>) => {
+    void Promise.resolve(operation).then((result: any) => {
+      if (result?.error) throw result.error;
+    }).catch((error) => {
+      handleMutationError(label, error);
+      void refreshData().catch(() => undefined);
+    });
+  }, [handleMutationError, refreshData]);
+
+  const login = async (email: string, password = '') => {
+    try {
+      const { error } = await getSupabaseBrowserClient().auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+      if (error) return { success: false, error: 'Invalid email or password.' };
+      await refreshData();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Authentication service unavailable.' };
+    }
   };
 
   const logout = () => {
+    run('Sign out', getSupabaseBrowserClient().auth.signOut());
     setIsAuthenticated(false);
-    showToast('Signed out of Wanderlust CRM', 'info');
   };
 
-  const switchUser = (profileId: string) => {
-    const found = profiles.find((p) => p.id === profileId);
-    if (found) {
-      setCurrentUserId(found.id);
-      setIsAuthenticated(true);
-    }
-  };
+  const switchUser = () => showToast('Role switching is disabled outside isolated demo environments.', 'warning');
 
   const updateAgentStatus = (status: AgentStatus) => {
-    setProfiles((prev) =>
-      prev.map((p) => (p.id === currentUser.id ? { ...p, status } : p))
-    );
+    if (!currentUser.id) return;
+    setProfiles((prev) => prev.map((profile) => profile.id === currentUser.id ? { ...profile, status } : profile));
+    run('Status update', getSupabaseBrowserClient().from('profiles').update({ status }).eq('id', currentUser.id));
   };
 
-  const visibleLeads = leadsList.filter((lead) => {
-    if (currentUser.role === 'admin' || currentUser.role === 'manager') return true;
-    return lead.assigned_to === currentUser.id || lead.assigned_to === null;
-  });
-
-  const userNotifications = notificationsList.filter((n) => n.user_id === currentUser.id);
-  const unreadCount = userNotifications.filter((n) => !n.is_read).length;
-
-  // Calculate incentive profile for any agent
-  const getAgentIncentiveProfile = (agentId: string) => {
-    const agentWonLeads = leadsList.filter(
-      (l) => l.assigned_to === agentId && l.stage === 'won'
-    );
-
-    const totalSales = agentWonLeads.reduce(
-      (sum, l) => sum + (l.package_sale_price || l.won_deal_value || 0),
-      0
-    );
-
-    const totalGrossProfit = agentWonLeads.reduce(
-      (sum, l) => sum + (l.gross_profit || 0),
-      0
-    );
-
-    const avgProfitMargin =
-      totalSales > 0 ? Math.round((totalGrossProfit / totalSales) * 1000) / 10 : 0;
-
-    // Find active tier based on total monthly sales
-    let currentTier = tiers[0];
-    let nextTier: IncentiveTier | null = tiers[1] || null;
-
-    for (let i = 0; i < tiers.length; i++) {
-      const t = tiers[i];
-      if (totalSales >= t.min_sales && (t.max_sales === null || totalSales < t.max_sales)) {
-        currentTier = t;
-        nextTier = tiers[i + 1] || null;
-        break;
-      }
-    }
-
-    const accruedCommission = agentWonLeads
-      .filter((l) => l.commission_status === 'accrued')
-      .reduce((sum, l) => sum + (l.agent_commission_earned || 0), 0);
-
-    const approvedCommission = agentWonLeads
-      .filter((l) => l.commission_status === 'approved')
-      .reduce((sum, l) => sum + (l.agent_commission_earned || 0), 0);
-
-    const paidCommission = agentWonLeads
-      .filter((l) => l.commission_status === 'paid')
-      .reduce((sum, l) => sum + (l.agent_commission_earned || 0), 0);
-
-    const salesToNextTier = nextTier ? Math.max(0, nextTier.min_sales - totalSales) : 0;
-
-    const progressPct = nextTier
-      ? Math.min(
-          100,
-          Math.max(
-            0,
-            Math.round(
-              ((totalSales - currentTier.min_sales) /
-                (nextTier.min_sales - currentTier.min_sales)) *
-                100
-            )
-          )
-        )
-      : 100;
-
+  const getAgentMetrics = useCallback((agentId: string) => {
+    const agent = profilesWithDynamicLoad.find((profile) => profile.id === agentId);
+    const agentLeads = leadsList.filter((lead) => lead.assigned_to === agentId);
+    const active = agentLeads.filter((lead) => lead.stage !== 'won' && lead.stage !== 'lost');
+    const won = agentLeads.filter((lead) => lead.stage === 'won');
+    const lost = agentLeads.filter((lead) => lead.stage === 'lost');
+    const closed = won.length + lost.length;
+    const frt = agentLeads.filter((lead) => lead.first_response_time_seconds != null);
+    const avgSeconds = frt.length ? frt.reduce((sum, lead) => sum + (lead.first_response_time_seconds || 0), 0) / frt.length : 0;
     return {
-      currentTier,
-      nextTier,
-      totalSales,
-      totalGrossProfit,
-      avgProfitMargin,
-      accruedCommission,
-      approvedCommission,
-      paidCommission,
-      salesToNextTier,
-      progressPct,
-      wonDealsCount: agentWonLeads.length,
+      totalAssigned: agentLeads.length,
+      activeLeads: active.length,
+      wonCount: won.length,
+      lostCount: lost.length,
+      winRate: closed ? Math.round((won.length / closed) * 100) : 0,
+      revenue: won.reduce((sum, lead) => sum + (lead.package_sale_price || lead.won_deal_value || 0), 0),
+      grossProfit: won.reduce((sum, lead) => sum + (lead.gross_profit || 0), 0),
+      avgFrtMinutes: Math.round(avgSeconds / 60),
+      breaches: agentLeads.filter((lead) => lead.is_first_response_breached).length,
+      activityCount: activitiesList.filter((activity) => activity.agent_id === agentId).length,
+      capacityPct: Math.min(100, Math.round((active.length / (agent?.max_capacity || 25)) * 100)),
     };
+  }, [activitiesList, leadsList, profilesWithDynamicLoad]);
+
+  const chooseAssignee = (leadData: Partial<Lead>) => {
+    if (currentUser.role === 'agent') return currentUser.id || null;
+    if (leadData.assigned_to) return leadData.assigned_to;
+    const available = profilesWithDynamicLoad.filter((profile) => profile.is_active && profile.status === 'available' && profile.accepting_leads !== false && profile.current_load < profile.max_capacity && profile.role === 'agent');
+    const destination = (leadData.destination || '').toLowerCase();
+    const specialists = available.filter((profile) => profile.destination_tags.some((tag) => destination.includes(tag.toLowerCase()) || tag.toLowerCase().includes(destination)));
+    const pool = specialists.length ? specialists : available;
+    pool.sort((a, b) => (a.current_load / a.max_capacity) - (b.current_load / b.max_capacity));
+    return pool[0]?.id || null;
   };
 
-  // Add new lead with Smart Hybrid Distribution
   const addLead = (leadData: Partial<Lead>): Lead => {
-    const nextCodeNumber = leadsList.length + 1;
-    const leadCode = `TRV-2026-${String(nextCodeNumber).padStart(4, '0')}`;
-
-    let assignedAgentId = leadData.assigned_to || null;
-
-    if (!assignedAgentId) {
-      const targetDest = (leadData.destination || '').toLowerCase();
-      // Check VIP threshold
-      const estimatedBudgetStr = leadData.budget_range || '';
-      const estimatedValue = parseInt(estimatedBudgetStr.replace(/[^0-9]/g, ''), 10) || 0;
-      const isVip = leadData.priority === 'urgent' || (estimatedValue >= (sla.vip_high_budget_threshold || 8000));
-
-      // Eligible candidate agents
-      let candidateAgents = profiles.filter(
-        (p) =>
-          p.is_active &&
-          p.status === 'available' &&
-          p.accepting_leads !== false &&
-          p.current_load < p.max_capacity
-      );
-
-      // VIP filter if enabled
-      if (isVip && sla.vip_route_seniors_only) {
-        const seniors = candidateAgents.filter(
-          (p) => p.role === 'manager' || p.role === 'admin' || p.max_capacity >= 25
-        );
-        if (seniors.length > 0) {
-          candidateAgents = seniors;
-        }
-      }
-
-      // Filter by destination specialty
-      const specialists = candidateAgents.filter((p) =>
-        p.destination_tags.some((tag) =>
-          targetDest.includes(tag.toLowerCase()) || tag.toLowerCase().includes(targetDest)
-        )
-      );
-
-      const pool = specialists.length > 0 ? specialists : candidateAgents;
-
-      if (pool.length > 0) {
-        if (sla.routing_strategy === 'workload_balanced') {
-          pool.sort((a, b) => a.current_load / a.max_capacity - b.current_load / b.max_capacity);
-          assignedAgentId = pool[0].id;
-        } else if (sla.routing_strategy === 'conversion_weighted') {
-          pool.sort((a, b) => {
-            const mA = getAgentMetrics(a.id);
-            const mB = getAgentMetrics(b.id);
-            return mB.winRate - mA.winRate;
-          });
-          assignedAgentId = pool[0].id;
-        } else {
-          // round_robin
-          pool.sort((a, b) => a.current_load - b.current_load);
-          assignedAgentId = pool[0].id;
-        }
-      } else if (sla.routing_overflow_policy === 'overflow_available') {
-        const anyAvailable = profiles.find(
-          (p) => p.is_active && p.status === 'available' && p.accepting_leads !== false
-        );
-        if (anyAvailable) assignedAgentId = anyAvailable.id;
-      }
-    }
-
-    const nowIso = new Date().toISOString();
-    const frtDueIso = new Date(Date.now() + sla.frt_minutes * 60 * 1000).toISOString();
-
+    const now = new Date().toISOString();
+    const assignedTo = chooseAssignee(leadData);
+    const id = uuid();
     const newLead: Lead = {
-      id: `lead-${Date.now()}`,
-      lead_code: leadCode,
-      customer_name: leadData.customer_name || 'New Customer',
-      customer_email: leadData.customer_email || '',
-      customer_phone: leadData.customer_phone || '',
+      id,
+      lead_code: `TRV-${new Date().getFullYear()}-${id.slice(0, 8).toUpperCase()}`,
+      customer_name: leadData.customer_name?.trim() || 'New Customer',
+      customer_email: leadData.customer_email?.trim() || '',
+      customer_phone: leadData.customer_phone?.trim() || '',
       customer_city: leadData.customer_city || '',
-      customer_country: leadData.customer_country || 'India',
-      destination: leadData.destination || 'Bali',
-      travel_dates: leadData.travel_dates || 'Dates Flexible',
+      customer_country: leadData.customer_country || '',
+      destination: leadData.destination?.trim() || 'Unspecified',
+      travel_dates: leadData.travel_dates || 'Flexible dates',
       duration_days: leadData.duration_days || 5,
       pax_adults: leadData.pax_adults ?? 2,
       pax_children: leadData.pax_children ?? 0,
       pax_infants: leadData.pax_infants ?? 0,
       travel_type: leadData.travel_type || 'family',
-      budget_range: leadData.budget_range || '$1,500 - $2,500',
+      budget_range: leadData.budget_range || '',
       hotel_category: leadData.hotel_category || '4-star',
       flight_required: leadData.flight_required ?? true,
       visa_required: leadData.visa_required ?? false,
@@ -630,1430 +383,344 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       source: leadData.source || 'website',
       stage: 'new',
       priority: leadData.priority || 'normal',
-      assigned_to: assignedAgentId,
-      assigned_at: assignedAgentId ? nowIso : undefined,
-      first_response_due_at: assignedAgentId ? frtDueIso : undefined,
+      assigned_to: assignedTo,
+      assigned_at: assignedTo ? now : undefined,
+      first_response_due_at: assignedTo ? new Date(Date.now() + sla.frt_minutes * 60000).toISOString() : undefined,
       is_first_response_breached: false,
-      next_follow_up_at: assignedAgentId ? frtDueIso : undefined,
-      created_at: nowIso,
-      updated_at: nowIso,
+      next_follow_up_at: assignedTo ? new Date(Date.now() + sla.frt_minutes * 60000).toISOString() : null,
+      created_at: now,
+      updated_at: now,
     };
-
     setLeadsList((prev) => [newLead, ...prev]);
-
-    if (assignedAgentId) {
-      setProfiles((prev) =>
-        prev.map((p) =>
-          p.id === assignedAgentId ? { ...p, current_load: p.current_load + 1 } : p
-        )
-      );
-
-      const newNotif: AppNotification = {
-        id: `notif-${Date.now()}`,
-        user_id: assignedAgentId,
-        title: 'New Lead Assigned',
-        message: `${newLead.customer_name} (${newLead.destination}) has been routed to you.`,
-        type: 'lead_assigned',
-        link: `/leads/${newLead.id}`,
-        is_read: false,
-        created_at: nowIso,
-      };
-      setNotificationsList((prev) => [newNotif, ...prev]);
-    }
-
-    playNotificationSound();
+    run('Create lead', getSupabaseBrowserClient().from('leads').insert(newLead));
     return newLead;
   };
 
-  // Enhanced updateLeadStage with Profit & Incentive calculation
-  const updateLeadStage = (
-    leadId: string,
-    stage: LeadStage,
-    lostReason?: string,
-    lostNotes?: string,
-    financials?: {
-      packageSalePrice: number;
-      vendorNetCost: number;
-    }
-  ) => {
-    const nowIso = new Date().toISOString();
-    const targetLead = leadsList.find((l) => l.id === leadId);
+  const insertActivity = (activity: ActivityLog) => {
+    setActivitiesList((prev) => [activity, ...prev]);
+    run('Activity log', getSupabaseBrowserClient().from('activity_logs').insert(activity));
+  };
 
-    let salePrice = targetLead?.package_sale_price || targetLead?.won_deal_value || 2500;
-    let vendorCost = targetLead?.vendor_net_cost || 1900;
-    let profit = targetLead?.gross_profit || 600;
-    let marginPct = targetLead?.profit_margin_pct || 24;
-    let commission = targetLead?.agent_commission_earned || 54;
-    let commissionStatus: CommissionStatus = targetLead?.commission_status || 'accrued';
-
-    if (stage === 'won' && financials) {
-      salePrice = financials.packageSalePrice;
-      vendorCost = financials.vendorNetCost;
-      profit = Math.max(0, salePrice - vendorCost);
-      marginPct = salePrice > 0 ? Math.round((profit / salePrice) * 1000) / 10 : 0;
-
-      // Determine active incentive tier for the assigned agent
-      const agentId = targetLead?.assigned_to || currentUser.id;
-      const agentProfile = getAgentIncentiveProfile(agentId);
-      const activeTier = agentProfile.currentTier;
-
-      // Minimum margin threshold check
-      const meetsMarginGate = marginPct >= activeTier.min_margin_threshold;
-      const effectiveRate = meetsMarginGate
-        ? activeTier.commission_pct_profit
-        : activeTier.commission_pct_profit * 0.5; // 50% penalty if heavy discounting eroded margin
-
-      commission = Math.round(profit * (effectiveRate / 100) * 100) / 100;
-      commissionStatus = 'accrued';
-    }
-
-    setLeadsList((prev) =>
-      prev.map((lead) => {
-        if (lead.id === leadId) {
-          return {
-            ...lead,
-            stage,
-            package_sale_price: stage === 'won' ? salePrice : lead.package_sale_price,
-            vendor_net_cost: stage === 'won' ? vendorCost : lead.vendor_net_cost,
-            gross_profit: stage === 'won' ? profit : lead.gross_profit,
-            profit_margin_pct: stage === 'won' ? marginPct : lead.profit_margin_pct,
-            agent_commission_earned: stage === 'won' ? commission : lead.agent_commission_earned,
-            commission_status: stage === 'won' ? commissionStatus : lead.commission_status,
-            won_deal_value: stage === 'won' ? salePrice : lead.won_deal_value,
-            lost_reason: stage === 'lost' ? lostReason || 'other' : lead.lost_reason,
-            lost_notes: stage === 'lost' ? lostNotes : lead.lost_notes,
-            closed_at: stage === 'won' || stage === 'lost' ? nowIso : lead.closed_at,
-            updated_at: nowIso,
-          };
-        }
-        return lead;
-      })
-    );
-
-    // Dynamic capacity adjustment: free up load when deals close (won/lost), re-claim load if reopened
-    if (targetLead?.assigned_to) {
-      const wasClosed = targetLead.stage === 'won' || targetLead.stage === 'lost';
-      const isNowClosed = stage === 'won' || stage === 'lost';
-      if (!wasClosed && isNowClosed) {
-        setProfiles((prev) =>
-          prev.map((p) =>
-            p.id === targetLead.assigned_to
-              ? { ...p, current_load: Math.max(0, p.current_load - 1) }
-              : p
-          )
-        );
-      } else if (wasClosed && !isNowClosed) {
-        setProfiles((prev) =>
-          prev.map((p) =>
-            p.id === targetLead.assigned_to
-              ? { ...p, current_load: Math.min(p.max_capacity, p.current_load + 1) }
-              : p
-          )
-        );
-      }
-    }
-
-    // Record activity log
-    const newAct: ActivityLog = {
-      id: `act-${Date.now()}`,
-      lead_id: leadId,
-      agent_id: currentUser.id,
-      activity_type: 'stage_change',
-      title: `Stage: ${stage.toUpperCase().replace('_', ' ')}`,
-      outcome: stage === 'won' ? 'Won' : stage === 'lost' ? 'Lost' : 'Progressed',
-      notes:
-        stage === 'won'
-          ? `Deal Won! Sale: $${salePrice.toLocaleString()} | Net Cost: $${vendorCost.toLocaleString()} | Gross Profit: $${profit.toLocaleString()} (${marginPct}% margin). Commission accrued: $${commission.toFixed(2)}.`
-          : stage === 'lost'
-          ? `Reason: ${lostReason}. ${lostNotes || ''}`
-          : `Updated by ${currentUser.full_name}`,
-      created_at: nowIso,
+  const getAgentIncentiveProfile = (agentId: string) => {
+    const fallback: IncentiveTier = { id: 'default', name: 'Standard', min_sales: 0, max_sales: null, commission_pct_profit: 0, milestone_bonus: 0, min_margin_threshold: 0 };
+    const sorted = tiers.length ? [...tiers].sort((a, b) => a.min_sales - b.min_sales) : [fallback];
+    const won = leadsList.filter((lead) => lead.assigned_to === agentId && lead.stage === 'won');
+    const totalSales = won.reduce((sum, lead) => sum + (lead.package_sale_price || lead.won_deal_value || 0), 0);
+    const totalGrossProfit = won.reduce((sum, lead) => sum + (lead.gross_profit || 0), 0);
+    let index = sorted.findIndex((tier) => totalSales >= tier.min_sales && (tier.max_sales == null || totalSales < tier.max_sales));
+    if (index < 0) index = sorted.length - 1;
+    const currentTier = sorted[index];
+    const nextTier = sorted[index + 1] || null;
+    return {
+      currentTier,
+      nextTier,
+      totalSales,
+      totalGrossProfit,
+      avgProfitMargin: totalSales ? Math.round((totalGrossProfit / totalSales) * 1000) / 10 : 0,
+      accruedCommission: won.filter((lead) => lead.commission_status === 'accrued').reduce((sum, lead) => sum + (lead.agent_commission_earned || 0), 0),
+      approvedCommission: won.filter((lead) => lead.commission_status === 'approved').reduce((sum, lead) => sum + (lead.agent_commission_earned || 0), 0),
+      paidCommission: won.filter((lead) => lead.commission_status === 'paid').reduce((sum, lead) => sum + (lead.agent_commission_earned || 0), 0),
+      salesToNextTier: nextTier ? Math.max(0, nextTier.min_sales - totalSales) : 0,
+      progressPct: nextTier ? Math.min(100, Math.max(0, Math.round(((totalSales - currentTier.min_sales) / Math.max(1, nextTier.min_sales - currentTier.min_sales)) * 100))) : 100,
+      wonDealsCount: won.length,
     };
-    setActivitiesList((prev) => [newAct, ...prev]);
   };
 
-  // Manager commission approval action
-  const approveCommissionPayout = (leadId: string, newStatus: CommissionStatus = 'approved') => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, commission_status: newStatus, updated_at: nowIso } : l))
-    );
-
-    const lead = leadsList.find((l) => l.id === leadId);
-    if (lead?.assigned_to) {
-      const notif: AppNotification = {
-        id: `notif-${Date.now()}`,
-        user_id: lead.assigned_to,
-        title: `Commission ${newStatus === 'paid' ? 'Paid! 💰' : 'Approved! ✅'}`,
-        message: `Your $${lead.agent_commission_earned?.toFixed(2)} commission on ${lead.lead_code} has been marked as ${newStatus}.`,
-        type: 'system',
-        link: `/incentives`,
-        is_read: false,
-        created_at: nowIso,
-      };
-      setNotificationsList((prev) => [notif, ...prev]);
+  const updateLeadStage = (leadId: string, stage: LeadStage, lostReason?: string, lostNotes?: string, financials?: { packageSalePrice: number; vendorNetCost: number }) => {
+    const target = leadsList.find((lead) => lead.id === leadId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    let salePrice = target.package_sale_price || target.won_deal_value || 0;
+    let vendorCost = target.vendor_net_cost || 0;
+    let profit = target.gross_profit || 0;
+    let margin = target.profit_margin_pct || 0;
+    let commission = target.agent_commission_earned || 0;
+    if (stage === 'won' && financials) {
+      salePrice = Math.max(0, financials.packageSalePrice);
+      vendorCost = Math.max(0, financials.vendorNetCost);
+      profit = Math.max(0, salePrice - vendorCost);
+      margin = salePrice ? Math.round((profit / salePrice) * 1000) / 10 : 0;
+      const tier = getAgentIncentiveProfile(target.assigned_to || currentUser.id).currentTier;
+      const rate = margin >= tier.min_margin_threshold ? tier.commission_pct_profit : tier.commission_pct_profit * 0.5;
+      commission = Math.round(profit * rate) / 100;
     }
+    const patch: Partial<Lead> = {
+      stage,
+      updated_at: now,
+      closed_at: stage === 'won' || stage === 'lost' ? now : target.closed_at,
+      lost_reason: stage === 'lost' ? (lostReason || 'other') : target.lost_reason,
+      lost_notes: stage === 'lost' ? lostNotes : target.lost_notes,
+    };
+    if (stage === 'won') Object.assign(patch, { package_sale_price: salePrice, vendor_net_cost: vendorCost, gross_profit: profit, profit_margin_pct: margin, agent_commission_earned: commission, commission_status: 'accrued', won_deal_value: salePrice });
+    setLeadsList((prev) => prev.map((lead) => lead.id === leadId ? { ...lead, ...patch } : lead));
+    run('Update lead stage', getSupabaseBrowserClient().from('leads').update(patch).eq('id', leadId));
+    insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'stage_change', title: `Stage: ${stage.toUpperCase().replaceAll('_', ' ')}`, outcome: stage === 'won' ? 'Won' : stage === 'lost' ? 'Lost' : 'Progressed', notes: stage === 'lost' ? `Reason: ${lostReason || 'other'}. ${lostNotes || ''}` : `Updated by ${currentUser.full_name}`, created_at: now });
   };
 
-  const updateIncentiveTiers = (newTiers: IncentiveTier[]) => {
-    setTiers(newTiers);
+  const approveCommissionPayout = (leadId: string, newStatus: CommissionStatus = 'approved') => {
+    if (!isManagement(currentUser)) return showToast('Manager or administrator access required.', 'error');
+    setLeadsList((prev) => prev.map((lead) => lead.id === leadId ? { ...lead, commission_status: newStatus, updated_at: new Date().toISOString() } : lead));
+    run('Commission update', getSupabaseBrowserClient().from('leads').update({ commission_status: newStatus }).eq('id', leadId));
   };
 
   const assignLead = (leadId: string, agentId: string) => {
-    const nowIso = new Date().toISOString();
-    const frtDueIso = new Date(Date.now() + sla.frt_minutes * 60 * 1000).toISOString();
-    const agent = profiles.find((p) => p.id === agentId);
-    const targetLead = leadsList.find((l) => l.id === leadId);
-    const oldAgentId = targetLead?.assigned_to;
-
-    setLeadsList((prev) =>
-      prev.map((lead) => {
-        if (lead.id === leadId) {
-          return {
-            ...lead,
-            assigned_to: agentId,
-            assigned_at: nowIso,
-            first_response_due_at: lead.first_contacted_at ? lead.first_response_due_at : frtDueIso,
-            is_first_response_breached: false,
-            updated_at: nowIso,
-          };
-        }
-        return lead;
-      })
-    );
-
-    // Adjust load counters for reassignment
-    if (oldAgentId !== agentId) {
-      setProfiles((prev) =>
-        prev.map((p) => {
-          if (p.id === agentId) return { ...p, current_load: p.current_load + 1 };
-          if (p.id === oldAgentId) return { ...p, current_load: Math.max(0, p.current_load - 1) };
-          return p;
-        })
-      );
-    }
-
-    const act: ActivityLog = {
-      id: `act-${Date.now()}`,
-      lead_id: leadId,
-      agent_id: currentUser.id,
-      activity_type: 'reassignment',
-      title: `Reassigned to ${agent?.full_name || 'Agent'}`,
-      notes: `Reassigned by ${currentUser.full_name}`,
-      created_at: nowIso,
-    };
-    setActivitiesList((prev) => [act, ...prev]);
+    if (!isManagement(currentUser)) return showToast('Manager or administrator access required.', 'error');
+    const now = new Date().toISOString();
+    setLeadsList((prev) => prev.map((lead) => lead.id === leadId ? { ...lead, assigned_to: agentId, assigned_at: now, updated_at: now } : lead));
+    run('Lead assignment', getSupabaseBrowserClient().from('leads').update({ assigned_to: agentId, assigned_at: now, assigned_by: currentUser.id }).eq('id', leadId));
+    insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'reassignment', title: `Reassigned to ${profiles.find((profile) => profile.id === agentId)?.full_name || 'agent'}`, notes: `Reassigned by ${currentUser.full_name}`, created_at: now });
   };
 
-  const logActivity = (data: {
-    leadId: string;
-    type: ActivityType;
-    title: string;
-    outcome?: string;
-    notes?: string;
-    duration?: number;
-    nextFollowUp?: {
-      scheduled_at: string;
-      channel: FollowUpChannel;
-      title?: string;
-      notes?: string;
-    };
-  }) => {
-    const nowIso = new Date().toISOString();
-    const lead = leadsList.find((l) => l.id === data.leadId);
-
-    let firstContactIso = lead?.first_contacted_at;
-    let frtSeconds = lead?.first_response_time_seconds;
-    let isBreached = lead?.is_first_response_breached;
-
-    if (!firstContactIso && lead?.assigned_at) {
-      firstContactIso = nowIso;
-      const assignedTime = new Date(lead.assigned_at).getTime();
-      const diffSeconds = Math.max(0, Math.floor((Date.now() - assignedTime) / 1000));
-      frtSeconds = diffSeconds;
-      isBreached = diffSeconds > sla.frt_minutes * 60;
-    }
-
-    const newStage = lead?.stage === 'new' ? 'contacted' : lead?.stage || 'contacted';
-
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (l.id === data.leadId) {
-          return {
-            ...l,
-            stage: newStage,
-            first_contacted_at: firstContactIso || l.first_contacted_at,
-            first_response_time_seconds: frtSeconds ?? l.first_response_time_seconds,
-            is_first_response_breached: isBreached ?? l.is_first_response_breached,
-            last_contacted_at: nowIso,
-            last_activity_type: data.type,
-            next_follow_up_at: data.nextFollowUp ? data.nextFollowUp.scheduled_at : l.next_follow_up_at,
-            updated_at: nowIso,
-          };
-        }
-        return l;
-      })
-    );
-
-    const newAct: ActivityLog = {
-      id: `act-${Date.now()}`,
-      lead_id: data.leadId,
-      agent_id: currentUser.id,
-      activity_type: data.type,
-      title: data.title,
-      outcome: data.outcome,
-      notes: data.notes,
-      call_duration_seconds: data.duration,
-      created_at: nowIso,
-    };
-    setActivitiesList((prev) => [newAct, ...prev]);
-
-    if (data.nextFollowUp) {
-      const newFu: FollowUp = {
-        id: `fu-${Date.now()}`,
-        lead_id: data.leadId,
-        assigned_to: currentUser.id,
-        title: data.nextFollowUp.title || `Follow-up on ${lead?.destination || 'Inquiry'}`,
-        scheduled_at: data.nextFollowUp.scheduled_at,
-        channel: data.nextFollowUp.channel,
-        priority: 'high',
-        status: 'pending',
-        notes: data.nextFollowUp.notes || data.notes,
-        created_at: nowIso,
-      };
-      setFollowUpsList((prev) => [newFu, ...prev]);
-    }
-  };
-
-  const completeFollowUp = (followUpId: string, completionNotes?: string) => {
-    const nowIso = new Date().toISOString();
-    setFollowUpsList((prev) =>
-      prev.map((fu) => {
-        if (fu.id === followUpId) {
-          return {
-            ...fu,
-            status: 'completed',
-            completion_notes: completionNotes || 'Completed',
-            completed_at: nowIso,
-            updated_at: nowIso,
-          };
-        }
-        return fu;
-      })
-    );
+  const logActivity = (data: { leadId: string; type: ActivityType; title: string; outcome?: string; notes?: string; duration?: number; nextFollowUp?: { scheduled_at: string; channel: FollowUpChannel; title?: string; notes?: string } }) => {
+    const now = new Date().toISOString();
+    const lead = leadsList.find((item) => item.id === data.leadId);
+    if (!lead) return;
+    const firstContact = lead.first_contacted_at || now;
+    const frtSeconds = lead.first_response_time_seconds ?? (lead.assigned_at ? Math.max(0, Math.floor((Date.now() - new Date(lead.assigned_at).getTime()) / 1000)) : null);
+    const patch: Partial<Lead> = { stage: lead.stage === 'new' ? 'contacted' : lead.stage, first_contacted_at: firstContact, first_response_time_seconds: frtSeconds, is_first_response_breached: frtSeconds != null ? frtSeconds > sla.frt_minutes * 60 : lead.is_first_response_breached, last_contacted_at: now, last_activity_type: data.type, next_follow_up_at: data.nextFollowUp?.scheduled_at || lead.next_follow_up_at, updated_at: now };
+    setLeadsList((prev) => prev.map((item) => item.id === data.leadId ? { ...item, ...patch } : item));
+    run('Lead contact update', getSupabaseBrowserClient().from('leads').update(patch).eq('id', data.leadId));
+    insertActivity({ id: uuid(), lead_id: data.leadId, agent_id: currentUser.id, activity_type: data.type, title: data.title, outcome: data.outcome, notes: data.notes, call_duration_seconds: data.duration, created_at: now });
+    if (data.nextFollowUp) createFollowUp({ lead_id: data.leadId, assigned_to: currentUser.id, title: data.nextFollowUp.title || `Follow-up on ${lead.destination}`, scheduled_at: data.nextFollowUp.scheduled_at, channel: data.nextFollowUp.channel, notes: data.nextFollowUp.notes || data.notes, priority: 'high' });
   };
 
   const createFollowUp = (data: Partial<FollowUp>) => {
-    const nowIso = new Date().toISOString();
-    const newFu: FollowUp = {
-      id: `fu-${Date.now()}`,
-      lead_id: data.lead_id || '',
-      assigned_to: data.assigned_to || currentUser.id,
-      title: data.title || 'Scheduled Follow-up',
-      scheduled_at: data.scheduled_at || new Date(Date.now() + 86400000).toISOString(),
-      channel: data.channel || 'call',
-      priority: data.priority || 'normal',
-      status: 'pending',
-      notes: data.notes || '',
-      created_at: nowIso,
-    };
-    setFollowUpsList((prev) => [newFu, ...prev]);
+    if (!data.lead_id) return;
+    const now = new Date().toISOString();
+    const assignedTo = currentUser.role === 'agent' ? currentUser.id : (data.assigned_to || currentUser.id);
+    const followUp: FollowUp = { id: uuid(), lead_id: data.lead_id, assigned_to: assignedTo, title: data.title || 'Scheduled Follow-up', scheduled_at: data.scheduled_at || new Date(Date.now() + 86400000).toISOString(), channel: data.channel || 'call', priority: data.priority || 'normal', status: 'pending', notes: data.notes || '', created_at: now };
+    setFollowUpsList((prev) => [followUp, ...prev]);
+    run('Create follow-up', getSupabaseBrowserClient().from('follow_ups').insert(followUp));
+  };
+
+  const completeFollowUp = (followUpId: string, completionNotes?: string) => {
+    const now = new Date().toISOString();
+    const patch = { status: 'completed', completion_notes: completionNotes || 'Completed', completed_at: now, updated_at: now };
+    setFollowUpsList((prev) => prev.map((item) => item.id === followUpId ? { ...item, ...patch } as FollowUp : item));
+    run('Complete follow-up', getSupabaseBrowserClient().from('follow_ups').update(patch).eq('id', followUpId));
   };
 
   const markNotificationAsRead = (id: string) => {
-    setNotificationsList((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
-    );
+    setNotificationsList((prev) => prev.map((item) => item.id === id ? { ...item, is_read: true } : item));
+    run('Notification update', getSupabaseBrowserClient().from('notifications').update({ is_read: true }).eq('id', id));
   };
 
   const markAllNotificationsAsRead = () => {
-    setNotificationsList((prev) =>
-      prev.map((n) => (n.user_id === currentUser.id ? { ...n, is_read: true } : n))
-    );
+    setNotificationsList((prev) => prev.map((item) => item.user_id === currentUser.id ? { ...item, is_read: true } : item));
+    run('Notifications update', getSupabaseBrowserClient().from('notifications').update({ is_read: true }).eq('user_id', currentUser.id));
   };
 
-  const updateAgencySettings = (newSettings: Partial<AgencySettings>) => {
-    setSla((prev) => {
-      const updated = { ...prev, ...newSettings };
-      if (newSettings.currency) {
-        const symbols: Record<CurrencyCode, string> = {
-          USD: '$',
-          EUR: '€',
-          GBP: '£',
-          INR: '₹',
-          AUD: 'A$',
-          AED: 'AED ',
-        };
-        updated.currency_symbol = symbols[newSettings.currency] || '$';
-      }
-      return updated;
-    });
+  const updateAgencySettings = (settings: Partial<AgencySettings>) => {
+    const previous = sla;
+    const symbols: Record<CurrencyCode, string> = { USD: '$', EUR: '€', GBP: '£', INR: '₹', AUD: 'A$', AED: 'AED ' };
+    const next = { ...sla, ...settings, ...(settings.currency ? { currency_symbol: symbols[settings.currency] } : {}) };
+    setSla(next);
+    void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.json()).error || 'Settings update failed');
+    }).catch((error) => { setSla(previous); handleMutationError('Settings update', error); });
   };
-
-  const updateSlaSettings = (newSettings: Partial<AgencySettings>) => {
-    updateAgencySettings(newSettings);
-  };
+  const updateSlaSettings = updateAgencySettings;
 
   const updateUserPreferences = (profileId: string, prefs: Partial<UserPreferences>) => {
-    setProfiles((prev) =>
-      prev.map((p) => {
-        if (p.id === profileId) {
-          const defaultPrefs: UserPreferences = {
-            idle_auto_away_minutes: 15,
-            default_landing_page: '/leads',
-            kanban_density: 'expanded',
-            instant_whatsapp_direct: false,
-            default_country_code: '+1',
-          };
-          return {
-            ...p,
-            user_preferences: {
-              ...(p.user_preferences || defaultPrefs),
-              ...prefs,
-            },
-          };
-        }
-        return p;
-      })
-    );
+    if (profileId !== currentUser.id) return;
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    const user_preferences = { ...(profile.user_preferences || {}), ...prefs };
+    setProfiles((prev) => prev.map((item) => item.id === profileId ? { ...item, user_preferences } : item));
+    run('Preferences update', getSupabaseBrowserClient().from('profiles').update({ user_preferences }).eq('id', profileId));
   };
 
-  const updateTemplates = (newTemplates: WhatsAppTemplate[]) => {
-    setTemplatesList(newTemplates);
+  const updateTemplates = (nextTemplates: any[]) => {
+    if (!isManagement(currentUser)) return showToast('Manager or administrator access required.', 'error');
+    setTemplatesList(nextTemplates);
+    const supabase = getSupabaseBrowserClient();
+    void (async () => {
+      const { error: deleteError } = await supabase.from('whatsapp_templates').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (deleteError) throw deleteError;
+      if (nextTemplates.length) {
+        const { error } = await supabase.from('whatsapp_templates').insert(nextTemplates.map((template) => ({ ...template, id: /^[0-9a-f-]{36}$/i.test(template.id || '') ? template.id : uuid() })));
+        if (error) throw error;
+      }
+    })().catch((error) => handleMutationError('Template update', error));
+  };
+
+  const updateIncentiveTiers = (nextTiers: IncentiveTier[]) => {
+    if (currentUser.role !== 'admin') return showToast('Administrator access required.', 'error');
+    setTiers(nextTiers);
+    showToast('Incentive tier edits require the protected server administration endpoint.', 'warning');
   };
 
   const updateProfile = (profileId: string, updates: Partial<Profile>) => {
-    setProfiles((prev) =>
-      prev.map((p) => (p.id === profileId ? { ...p, ...updates } : p))
-    );
+    setProfiles((prev) => prev.map((profile) => profile.id === profileId ? { ...profile, ...updates } : profile));
+    run('Profile update', getSupabaseBrowserClient().from('profiles').update(updates).eq('id', profileId));
   };
 
-  const createProfile = (data: Omit<Profile, 'id' | 'created_at' | 'current_load'>): Profile => {
-    const newProfile: Profile = {
-      ...data,
-      id: `agent-${Date.now()}`,
-      employee_code: data.employee_code || `TRV-EMP-${String(profiles.length + 1).padStart(3, '0')}`,
-      current_load: 0,
-      created_at: new Date().toISOString(),
-    };
-    setProfiles((prev) => [...prev, newProfile]);
-    return newProfile;
+  const createProfile = async (data: Omit<Profile, 'id' | 'created_at' | 'current_load'>): Promise<Profile | null> => {
+    try {
+      const response = await fetch('/api/team/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Invite failed');
+      const profile = payload.profile as Profile;
+      setProfiles((prev) => [...prev, profile]);
+      return profile;
+    } catch (error) {
+      handleMutationError('Team invitation', error);
+      return null;
+    }
   };
 
   const toggleAgentAcceptingLeads = (profileId: string) => {
-    setProfiles((prev) =>
-      prev.map((p) => (p.id === profileId ? { ...p, accepting_leads: !p.accepting_leads } : p))
-    );
+    if (!isManagement(currentUser)) return;
+    const profile = profiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    updateProfile(profileId, { accepting_leads: !profile.accepting_leads });
   };
 
-  const bulkReassignAgentLeads = (fromAgentId: string, toAgentId: string): number => {
-    const targetAgent = profiles.find((p) => p.id === toAgentId);
-    const sourceAgent = profiles.find((p) => p.id === fromAgentId);
-    if (!targetAgent) return 0;
-
-    let count = 0;
+  const bulkReassignAgentLeads = (fromAgentId: string, toAgentId: string) => {
+    if (!isManagement(currentUser)) return 0;
+    const ids = leadsList.filter((lead) => lead.assigned_to === fromAgentId && lead.stage !== 'won' && lead.stage !== 'lost').map((lead) => lead.id);
+    if (!ids.length) return 0;
     const now = new Date().toISOString();
-
-    setLeadsList((prevLeads) => {
-      return prevLeads.map((lead) => {
-        if (lead.assigned_to === fromAgentId && lead.stage !== 'won' && lead.stage !== 'lost') {
-          count++;
-          return {
-            ...lead,
-            assigned_to: toAgentId,
-            assigned_at: now,
-          };
-        }
-        return lead;
-      });
-    });
-
-    setFollowUpsList((prevFu) =>
-      prevFu.map((fu) => {
-        if (fu.assigned_to === fromAgentId && fu.status === 'pending') {
-          return { ...fu, assigned_to: toAgentId };
-        }
-        return fu;
-      })
-    );
-
-    if (count > 0) {
-      const newAct: ActivityLog = {
-        id: `act-bulk-${Date.now()}`,
-        lead_id: 'all',
-        agent_id: currentUser.id,
-        activity_type: 'reassignment',
-        title: `Bulk Leads Offloaded (${count} leads)`,
-        notes: `Reassigned ${count} active leads from ${sourceAgent?.full_name || 'Agent'} to ${targetAgent.full_name}.`,
-        created_at: now,
-      };
-      setActivitiesList((prev) => [newAct, ...prev]);
-
-      const newNotif: AppNotification = {
-        id: `notif-bulk-${Date.now()}`,
-        user_id: toAgentId,
-        title: `Bulk Lead Ingestion: ${count} Leads Assigned`,
-        message: `${count} active inquiries were transferred to your pipeline from ${sourceAgent?.full_name || 'teammate'}.`,
-        type: 'lead_assigned',
-        link: '/leads',
-        is_read: false,
-        created_at: now,
-      };
-      setNotificationsList((prev) => [newNotif, ...prev]);
-    }
-
-    return count;
+    setLeadsList((prev) => prev.map((lead) => ids.includes(lead.id) ? { ...lead, assigned_to: toAgentId, assigned_at: now, updated_at: now } : lead));
+    run('Bulk reassignment', getSupabaseBrowserClient().from('leads').update({ assigned_to: toAgentId, assigned_at: now, assigned_by: currentUser.id }).in('id', ids));
+    ids.forEach((leadId) => insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'reassignment', title: 'Bulk lead reassignment', notes: `Reassigned to ${profiles.find((profile) => profile.id === toAgentId)?.full_name || 'agent'}`, created_at: now }));
+    return ids.length;
   };
 
-  const getAgentMetrics = (agentId: string) => {
-    const agent = profiles.find((p) => p.id === agentId);
-    const agentLeads = leadsList.filter((l) => l.assigned_to === agentId);
-    const activeLeads = agentLeads.filter((l) => l.stage !== 'won' && l.stage !== 'lost');
-    const wonLeads = agentLeads.filter((l) => l.stage === 'won');
-    const lostLeads = agentLeads.filter((l) => l.stage === 'lost');
-    const closedCount = wonLeads.length + lostLeads.length;
-    const winRate = closedCount > 0 ? Math.round((wonLeads.length / closedCount) * 100) : 0;
-    const revenue = wonLeads.reduce((sum, l) => sum + (l.package_sale_price || l.won_deal_value || 0), 0);
-    const grossProfit = wonLeads.reduce((sum, l) => sum + (l.gross_profit || 0), 0);
-
-    const leadsWithFrt = agentLeads.filter((l) => l.first_response_time_seconds != null);
-    const avgFrtSeconds =
-      leadsWithFrt.length > 0
-        ? Math.round(
-            leadsWithFrt.reduce((s, l) => s + (l.first_response_time_seconds || 0), 0) /
-              leadsWithFrt.length
-          )
-        : 720;
-    const avgFrtMinutes = Math.round(avgFrtSeconds / 60);
-    const breaches = agentLeads.filter((l) => l.is_first_response_breached).length;
-    const activityCount = activitiesList.filter((a) => a.agent_id === agentId).length;
-    const maxCap = agent?.max_capacity || 25;
-    const capacityPct = Math.min(100, Math.round((activeLeads.length / maxCap) * 100));
-
-    return {
-      totalAssigned: agentLeads.length,
-      activeLeads: activeLeads.length,
-      wonCount: wonLeads.length,
-      lostCount: lostLeads.length,
-      winRate,
-      revenue,
-      grossProfit,
-      avgFrtMinutes,
-      breaches,
-      activityCount,
-      capacityPct,
-    };
+  const formatCurrency = (amount: number) => `${sla.currency_symbol || '$'}${new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount || 0)}`;
+  const formatAppDate = (date: string | Date) => {
+    const value = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : new Date(date);
+    if (Number.isNaN(value.getTime())) return String(date || '');
+    const year = value.getUTCFullYear(); const month = String(value.getUTCMonth() + 1).padStart(2, '0'); const day = String(value.getUTCDate()).padStart(2, '0');
+    return sla.date_format === 'YYYY-MM-DD' ? `${year}-${month}-${day}` : sla.date_format === 'MM/DD/YYYY' ? `${month}/${day}/${year}` : `${day}/${month}/${year}`;
   };
 
-  const resetToFactoryDefaults = () => {
-    try {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('wanderlust_crm_v1');
-      }
-    } catch {}
-    setProfiles(INITIAL_PROFILES);
-    setCurrentUserId(INITIAL_PROFILES[0].id);
-    setLeadsList(INITIAL_LEADS);
-    setFollowUpsList(INITIAL_FOLLOW_UPS);
-    setActivitiesList(INITIAL_ACTIVITIES);
-    setTemplatesList(INITIAL_TEMPLATES);
-    setSla(INITIAL_SLA);
-    setNotificationsList(INITIAL_NOTIFICATIONS);
-    setTiers(INITIAL_INCENTIVE_TIERS);
-  };
-
-  const exportCrmBackup = () => {
+  const playNotificationSound = (presetOverride?: SoundPreset, customVolume?: number) => {
     if (typeof window === 'undefined') return;
-    const backup = {
-      app: 'Wanderlust Travel CRM',
-      version: 1,
-      exported_at: new Date().toISOString(),
-      data: {
-        profiles,
-        currentUserId,
-        leadsList,
-        followUpsList,
-        activitiesList,
-        templatesList,
-        sla,
-        notificationsList,
-        tiers,
-      },
-    };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `wanderlust_crm_backup_${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const preset = presetOverride || sla.notification_sound_preset;
+    if ((!sla.notification_sound_enabled && !presetOverride) || preset === 'off') return;
+    if (sla.mute_sound_in_call && currentUser.status === 'in_call' && !presetOverride) return;
+    try {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      const ctx = new AudioContextCtor();
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const frequencies: Record<string, number> = { chime: 587.33, modern_bell: 880, radar: 1046.5, subtle: 440 };
+      oscillator.type = preset === 'modern_bell' ? 'triangle' : 'sine';
+      oscillator.frequency.value = frequencies[preset || 'chime'] || 587.33;
+      gain.gain.value = 0.25 * Math.max(0, Math.min(1, (customVolume ?? sla.notification_volume ?? 75) / 100));
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
+      oscillator.connect(gain); gain.connect(ctx.destination); oscillator.start(); oscillator.stop(ctx.currentTime + 0.3);
+      setTimeout(() => void ctx.close(), 400);
+    } catch (error) { console.warn('Notification audio unavailable:', error); }
   };
 
-  const importCrmBackup = (jsonString: string): boolean => {
-    try {
-      const parsed = JSON.parse(jsonString);
-      const data = parsed.data || parsed;
-      if (data.profiles && Array.isArray(data.profiles)) setProfiles(data.profiles);
-      if (data.currentUserId && typeof data.currentUserId === 'string') setCurrentUserId(data.currentUserId);
-      if (data.leadsList && Array.isArray(data.leadsList)) setLeadsList(data.leadsList);
-      if (data.followUpsList && Array.isArray(data.followUpsList)) setFollowUpsList(data.followUpsList);
-      if (data.activitiesList && Array.isArray(data.activitiesList)) setActivitiesList(data.activitiesList);
-      if (data.templatesList && Array.isArray(data.templatesList)) setTemplatesList(data.templatesList);
-      if (data.sla && typeof data.sla === 'object') setSla(data.sla);
-      if (data.notificationsList && Array.isArray(data.notificationsList)) setNotificationsList(data.notificationsList);
-      if (data.tiers && Array.isArray(data.tiers)) setTiers(data.tiers);
-      return true;
-    } catch (e) {
-      console.error('Failed to import CRM backup:', e);
-      return false;
-    }
+  const resetToFactoryDefaults = () => showToast('Factory reset is disabled in production. Use a controlled database restore instead.', 'warning');
+  const exportCrmBackup = () => {
+    if (typeof window === 'undefined' || currentUser.role !== 'admin') return;
+    const backup = { app: 'Wanderlust Travel CRM', version: 2, exported_at: new Date().toISOString(), data: { profiles: profilesWithDynamicLoad, leadsList, followUpsList, activitiesList, templatesList, sla, notificationsList, tiers } };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `wanderlust_crm_backup_${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url);
+  };
+  const importCrmBackup = () => { showToast('Browser-side database restore is disabled for safety.', 'warning'); return false; };
+
+  const persistLeadJson = (leadId: string, patch: Partial<Lead>, label: string) => {
+    setLeadsList((prev) => prev.map((lead) => lead.id === leadId ? { ...lead, ...patch, updated_at: new Date().toISOString() } : lead));
+    run(label, getSupabaseBrowserClient().from('leads').update(patch).eq('id', leadId));
   };
 
   const createLeadQuotation = (leadId: string, quoteData: Partial<LeadQuotation>): LeadQuotation => {
-    const quoteNum = `QT-${Date.now().toString().slice(-6)}`;
-    const nowIso = new Date().toISOString();
-    const newQuote: LeadQuotation = {
-      id: `quote-${Date.now()}`,
-      lead_id: leadId,
-      quote_number: quoteNum,
-      package_title: quoteData.package_title || 'Custom Travel Package',
-      destination: quoteData.destination || 'Bali',
-      duration_days: quoteData.duration_days || 5,
-      travel_dates: quoteData.travel_dates || '',
-      pax_summary: quoteData.pax_summary || '2 Adults',
-      hotel_category: quoteData.hotel_category || '4-star',
-      line_items: quoteData.line_items || [],
-      total_selling_price: quoteData.total_selling_price || 0,
-      total_supplier_cost: quoteData.total_supplier_cost || 0,
-      gross_profit: quoteData.gross_profit || 0,
-      profit_margin_pct: quoteData.profit_margin_pct || 0,
-      commission_earned: quoteData.commission_earned || 0,
-      inclusions: quoteData.inclusions || [],
-      exclusions: quoteData.exclusions || [],
-      validity_days: quoteData.validity_days || 7,
-      status: quoteData.status || 'sent',
-      created_at: nowIso,
-    };
-
-    setLeadsList((prev) =>
-      prev.map((lead) => {
-        if (lead.id !== leadId) return lead;
-        const quotes = lead.quotes ? [newQuote, ...lead.quotes] : [newQuote];
-        return {
-          ...lead,
-          package_sale_price: newQuote.total_selling_price,
-          vendor_net_cost: newQuote.total_supplier_cost,
-          gross_profit: newQuote.gross_profit,
-          profit_margin_pct: newQuote.profit_margin_pct,
-          agent_commission_earned: newQuote.commission_earned,
-          stage: 'quote_sent',
-          last_activity_type: 'quote',
-          last_contacted_at: nowIso,
-          quotes,
-          latest_quote: newQuote,
-          updated_at: nowIso,
-        };
-      })
-    );
-
-    logActivity({
-      leadId,
-      type: 'quote',
-      title: `Quotation Generated (${quoteNum})`,
-      notes: `Sent quote for ${newQuote.package_title}: ${formatCurrency(newQuote.total_selling_price)} (${newQuote.profit_margin_pct}% margin, ${formatCurrency(newQuote.gross_profit)} gross profit).`,
-    });
-
-    return newQuote;
+    const lead = leadsList.find((item) => item.id === leadId);
+    const quote: LeadQuotation = { id: uuid(), lead_id: leadId, quote_number: `QT-${Date.now().toString().slice(-8)}`, package_title: quoteData.package_title || 'Custom Travel Package', destination: quoteData.destination || lead?.destination || '', duration_days: quoteData.duration_days || lead?.duration_days || 5, travel_dates: quoteData.travel_dates || lead?.travel_dates || '', pax_summary: quoteData.pax_summary || `${lead?.pax_adults || 2} Adults`, hotel_category: quoteData.hotel_category || lead?.hotel_category || '', line_items: quoteData.line_items || [], total_selling_price: quoteData.total_selling_price || 0, total_supplier_cost: quoteData.total_supplier_cost || 0, gross_profit: quoteData.gross_profit || 0, profit_margin_pct: quoteData.profit_margin_pct || 0, commission_earned: quoteData.commission_earned || 0, inclusions: quoteData.inclusions || [], exclusions: quoteData.exclusions || [], validity_days: quoteData.validity_days || 7, status: quoteData.status || 'sent', created_at: new Date().toISOString() };
+    const quotes = [quote, ...(lead?.quotes || [])];
+    persistLeadJson(leadId, { quotes, latest_quote: quote, package_sale_price: quote.total_selling_price, vendor_net_cost: quote.total_supplier_cost, gross_profit: quote.gross_profit, profit_margin_pct: quote.profit_margin_pct, agent_commission_earned: quote.commission_earned, stage: 'quote_sent' }, 'Save quotation');
+    insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'quote', title: `Quotation Generated (${quote.quote_number})`, notes: `${formatCurrency(quote.total_selling_price)} package quotation`, created_at: quote.created_at });
+    return quote;
   };
 
   const bulkAssignLeads = (leadIds: string[], agentId: string) => {
-    const targetAgent = profiles.find((p) => p.id === agentId);
-    if (!targetAgent || leadIds.length === 0) return;
-    const nowIso = new Date().toISOString();
-
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (!leadIds.includes(l.id)) return l;
-        return {
-          ...l,
-          assigned_to: agentId,
-          assigned_at: nowIso,
-          updated_at: nowIso,
-        };
-      })
-    );
-
-    leadIds.forEach((leadId) => {
-      logActivity({
-        leadId,
-        type: 'reassignment',
-        title: `Bulk Reassigned to ${targetAgent.full_name}`,
-        notes: `Lead was transferred in a batch reassignment operation.`,
-      });
-    });
-
-    const newNotif: AppNotification = {
-      id: `notif-bulk-${Date.now()}`,
-      user_id: agentId,
-      title: `${leadIds.length} Leads Assigned`,
-      message: `${leadIds.length} leads were transferred to you in a batch operation.`,
-      type: 'lead_assigned',
-      link: '/leads',
-      is_read: false,
-      created_at: nowIso,
-    };
-    setNotificationsList((prev) => [newNotif, ...prev]);
+    if (!isManagement(currentUser) || !leadIds.length) return;
+    const now = new Date().toISOString();
+    setLeadsList((prev) => prev.map((lead) => leadIds.includes(lead.id) ? { ...lead, assigned_to: agentId, assigned_at: now, updated_at: now } : lead));
+    run('Bulk assign leads', getSupabaseBrowserClient().from('leads').update({ assigned_to: agentId, assigned_at: now, assigned_by: currentUser.id }).in('id', leadIds));
   };
-
   const bulkUpdateLeadStage = (leadIds: string[], stage: LeadStage) => {
-    if (leadIds.length === 0) return;
-    const nowIso = new Date().toISOString();
-
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (!leadIds.includes(l.id)) return l;
-        return {
-          ...l,
-          stage,
-          updated_at: nowIso,
-        };
-      })
-    );
-
-    leadIds.forEach((leadId) => {
-      logActivity({
-        leadId,
-        type: 'stage_change',
-        title: `Stage Changed to ${stage.toUpperCase().replace('_', ' ')}`,
-        notes: `Bulk status update applied across selection.`,
-      });
-    });
+    if (!leadIds.length) return;
+    setLeadsList((prev) => prev.map((lead) => leadIds.includes(lead.id) ? { ...lead, stage, updated_at: new Date().toISOString() } : lead));
+    run('Bulk stage update', getSupabaseBrowserClient().from('leads').update({ stage }).in('id', leadIds));
   };
 
-  // Operational & Lifecycle Implementations
-  const addPaymentRecord = (
-    leadId: string,
-    payment: {
-      amount: number;
-      method: PaymentMethod;
-      reference_no?: string;
-      notes?: string;
-    }
-  ): PaymentRecord => {
-    const nowIso = new Date().toISOString();
-    const receiptNum = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newRecord: PaymentRecord = {
-      id: `pay-${Date.now()}`,
-      lead_id: leadId,
-      receipt_number: receiptNum,
-      amount: payment.amount,
-      method: payment.method,
-      reference_no: payment.reference_no,
-      notes: payment.notes,
-      received_at: nowIso,
-      created_at: nowIso,
-    };
-
-    setLeadsList((prev) =>
-      prev.map((lead) => {
-        if (lead.id !== leadId) return lead;
-        const currentRecords = lead.payment_records || [];
-        const updatedRecords = [newRecord, ...currentRecords];
-
-        let remainingPaid = updatedRecords.reduce((sum, r) => sum + r.amount, 0);
-        const updatedMilestones = (lead.payment_milestones || []).map((m) => {
-          if (remainingPaid >= m.amount) {
-            remainingPaid -= m.amount;
-            return { ...m, status: 'paid' as const, paid_amount: m.amount, paid_at: m.paid_at || nowIso };
-          } else if (remainingPaid > 0) {
-            const partial = remainingPaid;
-            remainingPaid = 0;
-            return { ...m, paid_amount: partial, status: 'pending' as const };
-          }
-          return { ...m, paid_amount: 0, status: 'pending' as const };
-        });
-
-        return {
-          ...lead,
-          payment_records: updatedRecords,
-          payment_milestones: updatedMilestones,
-          updated_at: nowIso,
-        };
-      })
-    );
-
-    logActivity({
-      leadId,
-      type: 'payment',
-      title: `Payment Received (${formatCurrency(payment.amount)})`,
-      notes: `Receipt #${receiptNum} recorded via ${payment.method.replace('_', ' ').toUpperCase()}${
-        payment.reference_no ? ` (Ref: ${payment.reference_no})` : ''
-      }.`,
-    });
-
-    return newRecord;
+  const addPaymentRecord = (leadId: string, payment: { amount: number; method: PaymentMethod; reference_no?: string; notes?: string }): PaymentRecord => {
+    const lead = leadsList.find((item) => item.id === leadId); const now = new Date().toISOString();
+    const record: PaymentRecord = { id: uuid(), lead_id: leadId, receipt_number: `REC-${new Date().getFullYear()}-${Date.now().toString().slice(-8)}`, amount: payment.amount, method: payment.method, reference_no: payment.reference_no, notes: payment.notes, received_at: now, created_at: now };
+    persistLeadJson(leadId, { payment_records: [record, ...(lead?.payment_records || [])] }, 'Record payment');
+    insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'payment', title: `Payment Received (${formatCurrency(payment.amount)})`, notes: `Receipt ${record.receipt_number}`, created_at: now });
+    return record;
   };
+  const updatePaymentMilestones = (leadId: string, payment_milestones: PaymentMilestone[]) => persistLeadJson(leadId, { payment_milestones }, 'Update payment milestones');
+  const updateItineraryDays = (leadId: string, itinerary_days: ItineraryDay[]) => persistLeadJson(leadId, { itinerary_days }, 'Update itinerary');
 
-  const updatePaymentMilestones = (leadId: string, milestones: PaymentMilestone[]) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, payment_milestones: milestones, updated_at: nowIso } : l))
-    );
+  const checkPassportValidity = (expiry?: string) => {
+    if (!expiry) return false;
+    const date = new Date(expiry); if (Number.isNaN(date.getTime())) return false;
+    const threshold = new Date(); threshold.setMonth(threshold.getMonth() + 6); return date >= threshold;
   };
-
-  const updateItineraryDays = (leadId: string, days: ItineraryDay[]) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, itinerary_days: days, updated_at: nowIso } : l))
-    );
-    logActivity({
-      leadId,
-      type: 'system',
-      title: 'Itinerary Schedule Updated',
-      notes: `${days.length}-day travel schedule was revised.`,
-    });
+  const addPassenger = (leadId: string, passenger: Omit<TravelerPassenger, 'id' | 'lead_id'>): TravelerPassenger => {
+    const lead = leadsList.find((item) => item.id === leadId); const created: TravelerPassenger = { ...passenger, id: uuid(), lead_id: leadId, is_passport_valid_6months: passenger.passport_expiry_date ? checkPassportValidity(passenger.passport_expiry_date) : passenger.is_passport_valid_6months };
+    persistLeadJson(leadId, { passengers: [...(lead?.passengers || []), created] }, 'Add passenger');
+    insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'document', title: `Passenger Added: ${created.full_name}`, notes: `${created.type.toUpperCase()} passenger record added`, created_at: new Date().toISOString() });
+    return created;
   };
-
-  const checkPassportValidity = (expiryDate?: string): boolean => {
-    if (!expiryDate) return true;
-    const expiry = new Date(expiryDate);
-    if (isNaN(expiry.getTime())) return true;
-    const baseDate = new Date();
-    const minValidDate = new Date(baseDate.getTime() + 180 * 24 * 60 * 60 * 1000);
-    return expiry > minValidDate;
+  const updatePassenger = (leadId: string, passengerId: string, updates: Partial<TravelerPassenger>) => {
+    const lead = leadsList.find((item) => item.id === leadId); if (!lead) return;
+    const passengers = (lead.passengers || []).map((passenger) => passenger.id === passengerId ? { ...passenger, ...updates, ...(updates.passport_expiry_date ? { is_passport_valid_6months: checkPassportValidity(updates.passport_expiry_date) } : {}) } : passenger);
+    persistLeadJson(leadId, { passengers }, 'Update passenger');
   };
+  const deletePassenger = (leadId: string, passengerId: string) => { const lead = leadsList.find((item) => item.id === leadId); if (lead) persistLeadJson(leadId, { passengers: (lead.passengers || []).filter((passenger) => passenger.id !== passengerId) }, 'Delete passenger'); };
+  const addDocument = (leadId: string, document: Omit<TravelerDocument, 'id' | 'lead_id' | 'uploaded_at'>): TravelerDocument => { const lead = leadsList.find((item) => item.id === leadId); const created: TravelerDocument = { ...document, id: uuid(), lead_id: leadId, uploaded_at: new Date().toISOString() }; persistLeadJson(leadId, { documents: [created, ...(lead?.documents || [])] }, 'Add document'); insertActivity({ id: uuid(), lead_id: leadId, agent_id: currentUser.id, activity_type: 'document', title: `Document Added: ${created.title}`, notes: `Category: ${created.category}`, created_at: created.uploaded_at }); return created; };
+  const deleteDocument = (leadId: string, documentId: string) => { const lead = leadsList.find((item) => item.id === leadId); if (lead) persistLeadJson(leadId, { documents: (lead.documents || []).filter((document) => document.id !== documentId) }, 'Delete document'); };
+  const updateSupplierPayables = (leadId: string, supplier_payables: LeadSupplierPayable[]) => persistLeadJson(leadId, { supplier_payables }, 'Update supplier payables');
+  const updatePreDepartureChecklist = (leadId: string, checklistPatch: Partial<PreDepartureChecklist>) => { const lead = leadsList.find((item) => item.id === leadId); if (!lead) return; const checklist = { flights_ticketed: false, hotel_vouchers_issued: false, passports_verified_6months: false, visas_confirmed: false, travel_insurance_issued: false, web_checkin_completed: false, emergency_contacts_dispatched: false, ...(lead.checklist || {}), ...checklistPatch }; persistLeadJson(leadId, { checklist, trip_status: Object.values(checklist).every(Boolean) ? 'pre_departure' : lead.trip_status }, 'Update departure checklist'); };
+  const recordPostTripReview = (leadId: string, review: PostTripReview) => persistLeadJson(leadId, { post_trip_review: { ...review, reviewed_at: new Date().toISOString() }, trip_status: 'completed' }, 'Record post-trip review');
+  const updateTripStatus = (leadId: string, trip_status: TripLifecycleStatus) => persistLeadJson(leadId, { trip_status }, 'Update trip status');
 
-  const addPassenger = (
-    leadId: string,
-    passenger: Omit<TravelerPassenger, 'id' | 'lead_id'>
-  ): TravelerPassenger => {
-    const valid6m = checkPassportValidity(passenger.passport_expiry_date);
-    const newPax: TravelerPassenger = {
-      ...passenger,
-      id: `pax-${Date.now()}`,
-      lead_id: leadId,
-      is_passport_valid_6months: valid6m,
-    };
-
-    setLeadsList((prev) =>
-      prev.map((l) =>
-        l.id === leadId
-          ? {
-              ...l,
-              passengers: [...(l.passengers || []), newPax],
-              updated_at: new Date().toISOString(),
-            }
-          : l
-      )
-    );
-
-    logActivity({
-      leadId,
-      type: 'document',
-      title: `Passenger Added: ${newPax.full_name}`,
-      notes: `${newPax.type.toUpperCase()} • Passport: ${newPax.passport_number || 'Pending'} (${
-        valid6m ? 'Valid >6M' : 'ALERT: Expires <6M'
-      })`,
-    });
-
-    return newPax;
-  };
-
-  const updatePassenger = (
-    leadId: string,
-    passengerId: string,
-    updates: Partial<TravelerPassenger>
-  ) => {
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (l.id !== leadId) return l;
-        const updatedPax = (l.passengers || []).map((p) => {
-          if (p.id !== passengerId) return p;
-          const merged = { ...p, ...updates };
-          if (updates.passport_expiry_date) {
-            merged.is_passport_valid_6months = checkPassportValidity(updates.passport_expiry_date);
-          }
-          return merged;
-        });
-        return { ...l, passengers: updatedPax, updated_at: new Date().toISOString() };
-      })
-    );
-  };
-
-  const deletePassenger = (leadId: string, passengerId: string) => {
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (l.id !== leadId) return l;
-        return {
-          ...l,
-          passengers: (l.passengers || []).filter((p) => p.id !== passengerId),
-          updated_at: new Date().toISOString(),
-        };
-      })
-    );
-  };
-
-  const addDocument = (
-    leadId: string,
-    document: Omit<TravelerDocument, 'id' | 'lead_id' | 'uploaded_at'>
-  ): TravelerDocument => {
-    const nowIso = new Date().toISOString();
-    const newDoc: TravelerDocument = {
-      ...document,
-      id: `doc-${Date.now()}`,
-      lead_id: leadId,
-      uploaded_at: nowIso,
-    };
-
-    setLeadsList((prev) =>
-      prev.map((l) =>
-        l.id === leadId
-          ? {
-              ...l,
-              documents: [newDoc, ...(l.documents || [])],
-              updated_at: nowIso,
-            }
-          : l
-      )
-    );
-
-    logActivity({
-      leadId,
-      type: 'document',
-      title: `Document Uploaded: ${newDoc.title}`,
-      notes: `Category: ${newDoc.category.toUpperCase().replace('_', ' ')} (${newDoc.file_name})`,
-    });
-
-    return newDoc;
-  };
-
-  const deleteDocument = (leadId: string, documentId: string) => {
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (l.id !== leadId) return l;
-        return {
-          ...l,
-          documents: (l.documents || []).filter((d) => d.id !== documentId),
-          updated_at: new Date().toISOString(),
-        };
-      })
-    );
-  };
-
-  const updateSupplierPayables = (leadId: string, payables: LeadSupplierPayable[]) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, supplier_payables: payables, updated_at: nowIso } : l))
-    );
-  };
-
-  const updatePreDepartureChecklist = (leadId: string, checklist: Partial<PreDepartureChecklist>) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => {
-        if (l.id !== leadId) return l;
-        const current = l.checklist || {
-          flights_ticketed: false,
-          hotel_vouchers_issued: false,
-          passports_verified_6months: false,
-          visas_confirmed: false,
-          travel_insurance_issued: false,
-          web_checkin_completed: false,
-          emergency_contacts_dispatched: false,
-        };
-        const updated = { ...current, ...checklist };
-        const allDone = Object.values(updated).every(Boolean);
-        const newTripStatus = allDone && l.trip_status === 'planning' ? 'pre_departure' : l.trip_status;
-
-        return {
-          ...l,
-          checklist: updated,
-          trip_status: newTripStatus,
-          updated_at: nowIso,
-        };
-      })
-    );
-  };
-
-  const recordPostTripReview = (leadId: string, review: PostTripReview) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) =>
-        l.id === leadId
-          ? {
-              ...l,
-              post_trip_review: { ...review, reviewed_at: nowIso },
-              trip_status: 'completed',
-              updated_at: nowIso,
-            }
-          : l
-      )
-    );
-
-    logActivity({
-      leadId,
-      type: 'system',
-      title: `Trip Review Logged: ${review.rating}★ (NPS: ${review.nps_score}/10)`,
-      notes: review.feedback_notes || 'Customer post-travel review recorded.',
-    });
-  };
-
-  const updateTripStatus = (leadId: string, status: TripLifecycleStatus) => {
-    const nowIso = new Date().toISOString();
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, trip_status: status, updated_at: nowIso } : l))
-    );
-    logActivity({
-      leadId,
-      type: 'stage_change',
-      title: `Trip Status: ${status.toUpperCase().replace('_', ' ')}`,
-      notes: `Trip lifecycle progressed to ${status.replace('_', ' ')}.`,
-    });
-  };
-
-  const executeFollowUpDisposition = (
-    leadId: string,
-    followUpId: string,
-    disposition: FollowUpDisposition
-  ) => {
-    const lead = leadsList.find((l) => l.id === leadId);
-    const existingFu = followUpsList.find((f) => f.id === followUpId);
-    const nowIso = new Date().toISOString();
-
-    let completionNotes = disposition.notes || '';
-    let nextFollowUpScheduledAt: string | undefined = disposition.callback_at;
-    let nextChannel: FollowUpChannel = 'call';
-    let nextTitle = 'Follow-up Call';
-
-    if (disposition.outcome === 'no_answer') {
-      completionNotes = completionNotes
-        ? `No Answer: ${completionNotes}`
-        : 'Customer did not answer call / line busy';
-      if (!nextFollowUpScheduledAt) {
-        nextFollowUpScheduledAt = new Date(Date.now() + 3 * 3600000).toISOString();
-      }
-      nextTitle = 'Retry Callback (No Answer earlier)';
-      nextChannel = 'call';
-    } else if (disposition.outcome === 'engaged_interested') {
-      completionNotes = completionNotes
-        ? `Engaged & Interested: ${completionNotes}`
-        : 'Spoke with traveler. Very interested in package proposal.';
-      if (!nextFollowUpScheduledAt) {
-        nextFollowUpScheduledAt = new Date(Date.now() + 2 * 86400000).toISOString();
-      }
-      nextTitle = 'Review Quotation & Room Availability';
-      nextChannel = 'call';
-    } else if (disposition.outcome === 'quote_revision') {
-      completionNotes = completionNotes
-        ? `Quote Revision Requested: ${completionNotes}`
-        : 'Traveler requested changes to hotel/flights/dates';
-      if (!nextFollowUpScheduledAt) {
-        nextFollowUpScheduledAt = new Date(Date.now() + 24 * 3600000).toISOString();
-      }
-      nextTitle = 'Send Revised Itinerary & Costing';
-      nextChannel = 'whatsapp';
-      if (lead && (lead.stage === 'quote_sent' || lead.stage === 'contacted')) {
-        updateLeadStage(leadId, 'in_negotiation');
-      }
-    } else if (disposition.outcome === 'snooze') {
-      completionNotes = completionNotes
-        ? `Snoozed: ${completionNotes}`
-        : 'Follow-up snoozed per customer request';
-      nextTitle = 'Scheduled Check-in';
-      nextChannel = existingFu?.channel || 'call';
-    } else if (disposition.outcome === 'lost') {
-      completionNotes = completionNotes
-        ? `Inquiry Dropped / Lost: ${completionNotes}`
-        : 'Customer decided not to proceed';
-      if (lead) {
-        updateLeadStage(leadId, 'lost');
-      }
-    } else {
-      completionNotes = completionNotes || 'Follow-up task completed successfully';
-    }
-
-    // 1. Mark existing follow up completed
-    setFollowUpsList((prev) =>
-      prev.map((f) =>
-        f.id === followUpId
-          ? {
-              ...f,
-              status: 'completed',
-              disposition: disposition.outcome,
-              completion_notes: completionNotes,
-              completed_at: nowIso,
-            }
-          : f
-      )
-    );
-
-    // 2. Schedule next follow-up if applicable
-    if (nextFollowUpScheduledAt && disposition.outcome !== 'lost' && disposition.outcome !== 'completed') {
-      const newFuId = `fu-${Date.now()}`;
-      const newFollowUp: FollowUp = {
-        id: newFuId,
-        lead_id: leadId,
-        assigned_to: existingFu?.assigned_to || lead?.assigned_to || currentUser.id,
-        title: nextTitle,
-        scheduled_at: nextFollowUpScheduledAt,
-        channel: nextChannel,
-        status: 'pending',
-        notes: completionNotes,
-        created_at: nowIso,
-        retry_count: (existingFu?.retry_count || 0) + (disposition.outcome === 'no_answer' ? 1 : 0),
-        rescheduled_from_id: followUpId,
-      };
-
-      setFollowUpsList((prev) => [newFollowUp, ...prev]);
-
-      setLeadsList((prev) =>
-        prev.map((l) =>
-          l.id === leadId
-            ? {
-                ...l,
-                next_follow_up_at: nextFollowUpScheduledAt,
-                last_contacted_at: nowIso,
-                last_activity_type: 'call',
-              }
-            : l
-        )
-      );
-    } else {
-      setLeadsList((prev) =>
-        prev.map((l) =>
-          l.id === leadId
-            ? {
-                ...l,
-                last_contacted_at: nowIso,
-                last_activity_type: 'call',
-              }
-            : l
-        )
-      );
-    }
-
-    // 3. Log Activity Timeline
-    const actId = `act-${Date.now()}`;
-    const newActivity: ActivityLog = {
-      id: actId,
-      lead_id: leadId,
-      agent_id: currentUser.id,
-      activity_type: 'call',
-      title: `Follow-up: ${disposition.outcome.replace('_', ' ').toUpperCase()}`,
-      outcome: disposition.outcome,
-      notes: completionNotes,
-      created_at: nowIso,
-    };
-    setActivitiesList((prev) => [newActivity, ...prev]);
+  const executeFollowUpDisposition = (leadId: string, followUpId: string, disposition: FollowUpDisposition) => {
+    const existing = followUpsList.find((item) => item.id === followUpId); if (!existing) return;
+    const now = new Date().toISOString();
+    const patch = { status: 'completed', disposition: disposition.outcome, completion_notes: disposition.notes || disposition.outcome.replaceAll('_', ' '), completed_at: now };
+    setFollowUpsList((prev) => prev.map((item) => item.id === followUpId ? { ...item, ...patch } as FollowUp : item));
+    run('Complete follow-up', getSupabaseBrowserClient().from('follow_ups').update(patch).eq('id', followUpId));
+    if (disposition.outcome === 'lost') updateLeadStage(leadId, 'lost', disposition.lost_reason || 'other', disposition.notes);
+    const callback = disposition.callback_at || (disposition.outcome === 'no_answer' ? new Date(Date.now() + 3 * 3600000).toISOString() : disposition.outcome === 'engaged_interested' ? new Date(Date.now() + 2 * 86400000).toISOString() : disposition.outcome === 'quote_revision' ? new Date(Date.now() + 86400000).toISOString() : undefined);
+    if (callback && !['lost', 'completed'].includes(disposition.outcome)) createFollowUp({ lead_id: leadId, assigned_to: existing.assigned_to || currentUser.id, title: disposition.outcome === 'quote_revision' ? 'Send Revised Itinerary & Costing' : 'Scheduled Follow-up', scheduled_at: callback, channel: disposition.outcome === 'quote_revision' ? 'whatsapp' : existing.channel, notes: disposition.notes, retry_count: (existing.retry_count || 0) + (disposition.outcome === 'no_answer' ? 1 : 0), rescheduled_from_id: followUpId });
   };
 
   const getAgentHealthScore = (agentId: string): EmployeeHealthScore => {
-    const profile = profiles.find((p) => p.id === agentId);
-    const agentLeads = leadsList.filter((l) => l.assigned_to === agentId);
-    const agentFollowUps = followUpsList.filter((f) => f.assigned_to === agentId);
-    const agentActivities = activitiesList.filter((a) => a.agent_id === agentId);
-
-    const now = Date.now();
-    const activeLeads = agentLeads.filter((l) => l.stage !== 'won' && l.stage !== 'lost');
-    const wonLeads = agentLeads.filter((l) => l.stage === 'won');
-    const lostLeads = agentLeads.filter((l) => l.stage === 'lost');
-
-    // 1. SLA Compliance Score (0-100)
-    const breachedCount = agentLeads.filter((l) => l.is_first_response_breached).length;
-    const leadsWithFrt = agentLeads.filter((l) => l.first_response_time_seconds != null);
-    const avgFrtMins = leadsWithFrt.length > 0
-      ? Math.round(leadsWithFrt.reduce((s, l) => s + (l.first_response_time_seconds || 0), 0) / leadsWithFrt.length / 60)
-      : 12;
-    
-    let slaScore = 100 - (breachedCount * 25);
-    if (avgFrtMins > 30) slaScore -= 20;
-    else if (avgFrtMins > 15) slaScore -= 10;
-    slaScore = Math.min(100, Math.max(0, slaScore));
-
-    // 2. Follow-Up Discipline Score (0-100)
-    const overdueTasks = agentFollowUps.filter(
-      (f) => f.status !== 'completed' && new Date(f.scheduled_at).getTime() < now
-    );
-    const completedTasks = agentFollowUps.filter((f) => f.status === 'completed');
-    const totalScheduled = completedTasks.length + overdueTasks.length;
-    const onTimeFollowupPct = totalScheduled > 0
-      ? Math.round((completedTasks.length / totalScheduled) * 100)
-      : 100;
-    
-    let followupScore = onTimeFollowupPct - (overdueTasks.length * 12);
-    followupScore = Math.min(100, Math.max(0, followupScore));
-
-    // 3. Conversion Velocity Score (0-100)
-    const closedCount = wonLeads.length + lostLeads.length;
-    const winRate = closedCount > 0 ? wonLeads.length / closedCount : 0.4;
-    const activeQuotingCount = agentLeads.filter((l) => l.stage === 'quote_sent' || l.stage === 'in_negotiation').length;
-    let conversionScore = Math.round((winRate * 60) + Math.min(40, activeQuotingCount * 8));
-    conversionScore = Math.min(100, Math.max(20, conversionScore));
-
-    // 4. Workload Balance & Capacity Stress Score (0-100)
-    const maxCap = profile?.max_capacity || 25;
-    const capacityPct = Math.round((activeLeads.length / maxCap) * 100);
-    let workloadScore = 100;
-    if (capacityPct > 100) workloadScore = 35;
-    else if (capacityPct > 85) workloadScore = 60;
-    else if (capacityPct < 20) workloadScore = 75;
-    else workloadScore = 95;
-
-    // 5. Overall Weighted Index
-    const overallScore = Math.round(
-      0.30 * slaScore +
-      0.30 * followupScore +
-      0.25 * conversionScore +
-      0.15 * workloadScore
-    );
-
-    let grade: 'elite' | 'healthy' | 'attention_needed' | 'burnout_risk' = 'healthy';
-    if (overallScore >= 85) grade = 'elite';
-    else if (overallScore >= 70) grade = 'healthy';
-    else if (overallScore >= 50) grade = 'attention_needed';
-    else grade = 'burnout_risk';
-
-    // 6. Automated Smart Recommendations
-    const recommendations: string[] = [];
-    if (overdueTasks.length > 0) {
-      recommendations.push(`Clear ${overdueTasks.length} overdue follow-up callback${overdueTasks.length > 1 ? 's' : ''} to prevent traveler drop-off.`);
-    }
-    if (capacityPct > 85) {
-      recommendations.push(`Workload is at ${capacityPct}% capacity. Reassign 3-5 aging inquiries to relieve stress.`);
-    }
-    if (breachedCount > 0) {
-      recommendations.push(`${breachedCount} inbound lead${breachedCount > 1 ? 's' : ''} breached First Response SLA. Prioritize newly assigned inquiries.`);
-    }
-    if (avgFrtMins > 25) {
-      recommendations.push(`Average response time is ${avgFrtMins}m (target: <15m). Enable desktop notifications.`);
-    }
-    if (recommendations.length === 0) {
-      recommendations.push('High operational efficiency! On-time follow-ups and optimal pipeline load.');
-    }
-
-    // 7. Last Active Timestamp
-    const lastActivity = agentActivities[0];
-    const lastActiveAt = lastActivity?.created_at || profile?.created_at;
-
-    return {
-      agent_id: agentId,
-      overall_score: overallScore,
-      grade,
-      sla_score: slaScore,
-      followup_score: followupScore,
-      conversion_score: conversionScore,
-      workload_score: workloadScore,
-      avg_frt_minutes: avgFrtMins,
-      on_time_followup_pct: onTimeFollowupPct,
-      active_leads_count: activeLeads.length,
-      overdue_tasks_count: overdueTasks.length,
-      capacity_pct: capacityPct,
-      last_active_at: lastActiveAt,
-      recommendations,
-    };
+    const profile = profilesWithDynamicLoad.find((item) => item.id === agentId); const metrics = getAgentMetrics(agentId); const tasks = followUpsList.filter((item) => item.assigned_to === agentId); const overdue = tasks.filter((item) => item.status !== 'completed' && new Date(item.scheduled_at).getTime() < Date.now()); const completed = tasks.filter((item) => item.status === 'completed'); const onTime = completed.length + overdue.length ? Math.round((completed.length / (completed.length + overdue.length)) * 100) : 100; const slaScore = Math.max(0, 100 - metrics.breaches * 25 - (metrics.avgFrtMinutes > 30 ? 20 : metrics.avgFrtMinutes > 15 ? 10 : 0)); const followupScore = Math.max(0, onTime - overdue.length * 12); const conversionScore = Math.max(20, Math.min(100, Math.round(metrics.winRate * 0.6 + 40))); const workloadScore = metrics.capacityPct > 100 ? 35 : metrics.capacityPct > 85 ? 60 : metrics.capacityPct < 20 ? 75 : 95; const overall = Math.round(slaScore * .3 + followupScore * .3 + conversionScore * .25 + workloadScore * .15); const recommendations = overdue.length ? [`Clear ${overdue.length} overdue follow-up${overdue.length === 1 ? '' : 's'}.`] : metrics.breaches ? [`Prioritize ${metrics.breaches} SLA-breached lead${metrics.breaches === 1 ? '' : 's'}.`] : ['On-time follow-ups and healthy pipeline load.']; return { agent_id: agentId, overall_score: overall, grade: overall >= 85 ? 'elite' : overall >= 70 ? 'healthy' : overall >= 50 ? 'attention_needed' : 'burnout_risk', sla_score: slaScore, followup_score: followupScore, conversion_score: conversionScore, workload_score: workloadScore, avg_frt_minutes: metrics.avgFrtMinutes, on_time_followup_pct: onTime, active_leads_count: metrics.activeLeads, overdue_tasks_count: overdue.length, capacity_pct: metrics.capacityPct, last_active_at: activitiesList.find((activity) => activity.agent_id === agentId)?.created_at || profile?.created_at, recommendations };
   };
 
-  const rebalanceOverdueFollowUps = (fromAgentId: string, toAgentId?: string): number => {
-    const now = Date.now();
-    const overdueTasks = followUpsList.filter(
-      (f) => f.assigned_to === fromAgentId && f.status !== 'completed' && new Date(f.scheduled_at).getTime() < now
-    );
-
-    if (overdueTasks.length === 0) return 0;
-
-    let targetId = toAgentId;
-    if (!targetId) {
-      const candidates = profiles
-        .filter((p) => p.id !== fromAgentId && p.is_active && p.accepting_leads && p.status === 'available')
-        .map((p) => {
-          const load = leadsList.filter((l) => l.assigned_to === p.id && l.stage !== 'won' && l.stage !== 'lost').length;
-          const pct = (load / (p.max_capacity || 25)) * 100;
-          return { id: p.id, pct };
-        })
-        .sort((a, b) => a.pct - b.pct);
-
-      targetId = candidates[0]?.id || profiles.find((p) => p.id !== fromAgentId)?.id;
-    }
-
-    if (!targetId) return 0;
-
-    const targetAgent = profiles.find((p) => p.id === targetId);
-    const fromAgent = profiles.find((p) => p.id === fromAgentId);
-    const nowIso = new Date().toISOString();
-    const overdueLeadIds = Array.from(new Set(overdueTasks.map((t) => t.lead_id)));
-
-    setFollowUpsList((prev) =>
-      prev.map((f) =>
-        f.assigned_to === fromAgentId && f.status !== 'completed' && new Date(f.scheduled_at).getTime() < now
-          ? { ...f, assigned_to: targetId, notes: `${f.notes || ''} [Rebalanced from ${fromAgent?.full_name || 'agent'}]` }
-          : f
-      )
-    );
-
-    setLeadsList((prev) =>
-      prev.map((l) =>
-        overdueLeadIds.includes(l.id)
-          ? {
-              ...l,
-              assigned_to: targetId,
-              assigned_at: nowIso,
-              updated_at: nowIso,
-            }
-          : l
-      )
-    );
-
-    overdueLeadIds.forEach((lid) => {
-      const actId = `act-rebalance-${Date.now()}-${lid.slice(0, 4)}`;
-      setActivitiesList((prev) => [
-        {
-          id: actId,
-          lead_id: lid,
-          agent_id: currentUser.id,
-          activity_type: 'reassignment',
-          title: `Overdue Follow-up Rebalanced`,
-          outcome: 'Reassigned',
-          notes: `Lead rebalanced from ${fromAgent?.full_name} to ${targetAgent?.full_name} due to overdue callback SLA.`,
-          created_at: nowIso,
-        },
-        ...prev,
-      ]);
-    });
-
-    return overdueTasks.length;
+  const rebalanceOverdueFollowUps = (fromAgentId: string, toAgentId?: string) => {
+    if (!isManagement(currentUser)) return 0;
+    const overdue = followUpsList.filter((item) => item.assigned_to === fromAgentId && item.status !== 'completed' && new Date(item.scheduled_at).getTime() < Date.now()); if (!overdue.length) return 0;
+    const target = toAgentId || profilesWithDynamicLoad.filter((profile) => profile.id !== fromAgentId && profile.role === 'agent' && profile.is_active && profile.accepting_leads && profile.status === 'available').sort((a, b) => (a.current_load / a.max_capacity) - (b.current_load / b.max_capacity))[0]?.id; if (!target) return 0;
+    const ids = overdue.map((item) => item.id); const leadIds = Array.from(new Set(overdue.map((item) => item.lead_id)));
+    setFollowUpsList((prev) => prev.map((item) => ids.includes(item.id) ? { ...item, assigned_to: target } : item));
+    run('Rebalance follow-ups', getSupabaseBrowserClient().from('follow_ups').update({ assigned_to: target }).in('id', ids));
+    bulkAssignLeads(leadIds, target); return overdue.length;
   };
 
   const exportFollowUpsIcal = (tasks?: FollowUp[]) => {
-    const list = tasks || followUpsList.filter((f) => f.status !== 'completed');
     if (typeof window === 'undefined') return;
-
-    const formatIcalDate = (isoStr: string) => {
-      const d = new Date(isoStr);
-      return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    };
-
-    let icsContent = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//Wanderlust CRM//Follow-up Agenda//EN',
-      'CALSCALE:GREGORIAN',
-      'METHOD:PUBLISH',
-    ];
-
-    list.forEach((t) => {
-      const lead = leadsList.find((l) => l.id === t.lead_id);
-      const dtStart = formatIcalDate(t.scheduled_at);
-      const dtEnd = formatIcalDate(new Date(new Date(t.scheduled_at).getTime() + 30 * 60000).toISOString());
-      const summary = `CRM: ${t.title}${lead ? ` - ${lead.customer_name} (${lead.destination})` : ''}`;
-      const description = `Customer: ${lead?.customer_name || 'N/A'}\\nPhone: ${lead?.customer_phone || 'N/A'}\\nChannel: ${t.channel.toUpperCase()}\\nNotes: ${t.notes || 'None'}`;
-
-      icsContent.push(
-        'BEGIN:VEVENT',
-        `UID:wanderlust-${t.id}@travellms.com`,
-        `DTSTAMP:${formatIcalDate(new Date().toISOString())}`,
-        `DTSTART:${dtStart}`,
-        `DTEND:${dtEnd}`,
-        `SUMMARY:${summary}`,
-        `DESCRIPTION:${description}`,
-        'STATUS:CONFIRMED',
-        'END:VEVENT'
-      );
-    });
-
-    icsContent.push('END:VCALENDAR');
-
-    const blob = new Blob([icsContent.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `wanderlust_agenda_${new Date().toISOString().slice(0, 10)}.ics`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const escape = (value: string) => value.replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
+    const date = (value: string) => new Date(value).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const list = tasks || followUpsList.filter((item) => item.status !== 'completed');
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wanderlust CRM//Follow-up Agenda//EN', 'CALSCALE:GREGORIAN'];
+    list.forEach((task) => { const lead = leadsList.find((item) => item.id === task.lead_id); lines.push('BEGIN:VEVENT', `UID:${escape(task.id)}@wanderlust-crm`, `DTSTAMP:${date(new Date().toISOString())}`, `DTSTART:${date(task.scheduled_at)}`, `DTEND:${date(new Date(new Date(task.scheduled_at).getTime() + 30 * 60000).toISOString())}`, `SUMMARY:${escape(`CRM: ${task.title}${lead ? ` - ${lead.customer_name}` : ''}`)}`, `DESCRIPTION:${escape(`Customer: ${lead?.customer_name || 'N/A'}\nPhone: ${lead?.customer_phone || 'N/A'}\nChannel: ${task.channel}\nNotes: ${task.notes || 'None'}`)}`, 'END:VEVENT'); });
+    lines.push('END:VCALENDAR'); const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `wanderlust_agenda_${new Date().toISOString().slice(0, 10)}.ics`; link.click(); URL.revokeObjectURL(url);
   };
 
-  const profilesWithDynamicLoad = profiles.map((p) => {
-    const activeCount = leadsList.filter(
-      (l) => l.assigned_to === p.id && l.stage !== 'won' && l.stage !== 'lost'
-    ).length;
-    return { ...p, current_load: activeCount };
-  });
-
-  return (
-    <AppContext.Provider
-      value={{
-        currentUser,
-        allProfiles: profilesWithDynamicLoad,
-        leads: visibleLeads,
-        allLeads: leadsList,
-        followUps: followUpsList,
-        activities: activitiesList,
-        templates: templatesList,
-        slaSettings: sla,
-        agencySettings: sla,
-        notifications: userNotifications,
-        unreadCount,
-        incentiveTiers: tiers,
-        isAuthenticated,
-        login,
-        logout,
-        switchUser,
-        updateAgentStatus,
-        addLead,
-        updateLeadStage,
-        assignLead,
-        logActivity,
-        completeFollowUp,
-        createFollowUp,
-        markNotificationAsRead,
-        markAllNotificationsAsRead,
-        updateSlaSettings,
-        updateAgencySettings,
-        updateUserPreferences,
-        updateTemplates,
-        updateIncentiveTiers,
-        approveCommissionPayout,
-        getAgentIncentiveProfile,
-        updateProfile,
-        createProfile,
-        toggleAgentAcceptingLeads,
-        bulkReassignAgentLeads,
-        getAgentMetrics,
-        playNotificationSound,
-        formatCurrency,
-        formatAppDate,
-        isHydrated,
-        resetToFactoryDefaults,
-        exportCrmBackup,
-        importCrmBackup,
-        createLeadQuotation,
-        bulkAssignLeads,
-        bulkUpdateLeadStage,
-        addPaymentRecord,
-        updatePaymentMilestones,
-        updateItineraryDays,
-        addPassenger,
-        updatePassenger,
-        deletePassenger,
-        addDocument,
-        deleteDocument,
-        updatePreDepartureChecklist,
-        updateSupplierPayables,
-        recordPostTripReview,
-        updateTripStatus,
-        executeFollowUpDisposition,
-        getAgentHealthScore,
-        rebalanceOverdueFollowUps,
-        exportFollowUpsIcal,
-        toast,
-        showToast,
-        hideToast,
-      }}
-    >
-      {children}
-    </AppContext.Provider>
-  );
+  return <AppContext.Provider value={{ currentUser, allProfiles: profilesWithDynamicLoad, leads: visibleLeads, allLeads: visibleLeads, followUps: followUpsList, activities: activitiesList, templates: templatesList, slaSettings: sla, agencySettings: sla, notifications, unreadCount, incentiveTiers: tiers, isAuthenticated, login, logout, switchUser, updateAgentStatus, addLead, updateLeadStage, assignLead, logActivity, completeFollowUp, createFollowUp, markNotificationAsRead, markAllNotificationsAsRead, updateSlaSettings, updateAgencySettings, updateUserPreferences, updateTemplates, updateIncentiveTiers, approveCommissionPayout, getAgentIncentiveProfile, updateProfile, createProfile, toggleAgentAcceptingLeads, bulkReassignAgentLeads, getAgentMetrics, playNotificationSound, formatCurrency, formatAppDate, isHydrated, resetToFactoryDefaults, exportCrmBackup, importCrmBackup, createLeadQuotation, bulkAssignLeads, bulkUpdateLeadStage, addPaymentRecord, updatePaymentMilestones, updateItineraryDays, addPassenger, updatePassenger, deletePassenger, addDocument, deleteDocument, updatePreDepartureChecklist, updateSupplierPayables, recordPostTripReview, updateTripStatus, executeFollowUpDisposition, getAgentHealthScore, rebalanceOverdueFollowUps, exportFollowUpsIcal, toast, showToast, hideToast }}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {
