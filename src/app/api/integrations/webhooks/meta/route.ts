@@ -9,9 +9,18 @@ import {
   detectLocationFromText,
   type CustomerDemographics,
 } from '@/lib/integrations/customer-profile';
+import { mergeCustomerDemographics } from '@/lib/integrations/customer-profile-merge';
 import { fetchMetaCustomerProfile } from '@/lib/integrations/meta-profile';
 
 export const runtime = 'nodejs';
+
+type LeadFormField = { name?: string; values?: string[] };
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 function validSignature(raw: string, header: string | null) {
   const secret = process.env.META_APP_SECRET?.trim();
@@ -22,15 +31,42 @@ function validSignature(raw: string, header: string | null) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function valueFor(fields: Array<{ name?: string; values?: string[] }> | undefined, names: string[]) {
+function normalizeLeadFields(value: unknown): LeadFormField[] {
+  if (!Array.isArray(value)) return [];
+  const fields: LeadFormField[] = [];
+  for (const item of value) {
+    const field = record(item);
+    if (typeof field.name !== 'string' || !field.name.trim()) continue;
+    const values = Array.isArray(field.values)
+      ? field.values.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    fields.push({ name: field.name.trim(), values });
+  }
+  return fields;
+}
+
+function valueFor(fields: LeadFormField[] | null | undefined, names: string[]) {
   const normalized = new Set(names.map((name) => name.toLowerCase()));
-  for (const field of fields || []) {
-    if (field.name && normalized.has(field.name.toLowerCase())) {
-      const value = field.values?.[0]?.trim();
-      if (value) return value;
-    }
+  for (const field of Array.isArray(fields) ? fields : []) {
+    const fieldName = typeof field.name === 'string' ? field.name.toLowerCase() : '';
+    if (!fieldName || !normalized.has(fieldName)) continue;
+    const value = Array.isArray(field.values)
+      ? field.values.find((entry) => typeof entry === 'string' && Boolean(entry.trim()))?.trim()
+      : undefined;
+    if (value) return value;
   }
   return null;
+}
+
+function safeTimestamp(value: unknown, multiplier = 1) {
+  if (value === null || value === undefined || value === '') return new Date().toISOString();
+  const numeric = typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)
+    ? Number(value) * multiplier
+    : typeof value === 'number'
+      ? value * multiplier
+      : value;
+  const date = new Date(numeric as string | number | Date);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
 async function getConnections(provider: 'facebook' | 'instagram' | 'whatsapp') {
@@ -48,12 +84,12 @@ async function findMetaConnection(provider: 'facebook' | 'instagram', accountId:
   const connections = await getConnections(provider);
   return connections.find((connection) => {
     if (connection.external_account_id === accountId) return true;
-    const config = (connection.config || {}) as Record<string, unknown>;
-    const pages = Array.isArray(config.pages) ? config.pages as Array<Record<string, unknown>> : [];
+    const config = record(connection.config);
+    const pages = Array.isArray(config.pages) ? config.pages.map(record) : [];
     return pages.some((page) => {
       if (String(page.id || '') === accountId) return true;
-      const instagram = page.instagram_business_account as Record<string, unknown> | undefined;
-      return String(instagram?.id || '') === accountId;
+      const instagram = record(page.instagram_business_account);
+      return String(instagram.id || '') === accountId;
     });
   }) || null;
 }
@@ -61,9 +97,9 @@ async function findMetaConnection(provider: 'facebook' | 'instagram', accountId:
 async function findWhatsAppConnection(wabaId: string) {
   const connections = await getConnections('whatsapp');
   return connections.find((connection) => {
-    const config = (connection.config || {}) as Record<string, unknown>;
+    const config = record(connection.config);
     const wabas = Array.isArray(config.whatsapp_business_accounts)
-      ? config.whatsapp_business_accounts as Array<Record<string, unknown>>
+      ? config.whatsapp_business_accounts.map(record)
       : [];
     return wabas.some((waba) => String(waba.id || '') === wabaId);
   }) || null;
@@ -78,14 +114,14 @@ async function pageToken(connectionId: string, accountId: string) {
 
   const payload = decryptSecretPayload(secrets?.secret_payload || {}) as Record<string, unknown>;
   const pageTokens = Array.isArray(payload.page_access_tokens)
-    ? payload.page_access_tokens as Array<Record<string, unknown>>
+    ? payload.page_access_tokens.map(record)
     : [];
-  const config = (connection?.config || {}) as Record<string, unknown>;
-  const pages = Array.isArray(config.pages) ? config.pages as Array<Record<string, unknown>> : [];
+  const config = record(connection?.config);
+  const pages = Array.isArray(config.pages) ? config.pages.map(record) : [];
   const owningPage = pages.find((page) => {
     if (String(page.id || '') === accountId) return true;
-    const instagram = page.instagram_business_account as Record<string, unknown> | undefined;
-    return String(instagram?.id || '') === accountId;
+    const instagram = record(page.instagram_business_account);
+    return String(instagram.id || '') === accountId;
   });
   const pageId = String(owningPage?.id || accountId);
   const page = pageTokens.find((item) => String(item.id || '') === pageId);
@@ -93,12 +129,18 @@ async function pageToken(connectionId: string, accountId: string) {
   return storedPageToken || decryptIntegrationSecret(secrets?.access_token) || '';
 }
 
-async function updateDelivery(provider: string, externalMessageId: string, status: string, timestamp?: string | number, error?: Record<string, unknown>) {
+async function updateDelivery(
+  provider: string,
+  externalMessageId: string,
+  status: string,
+  timestamp?: string | number,
+  error?: Record<string, unknown>
+) {
   const normalized = ['sent', 'delivered', 'read', 'failed'].includes(status) ? status : null;
   if (!normalized || !externalMessageId) return;
-  const eventAt = timestamp
-    ? new Date(typeof timestamp === 'string' && /^\d+$/.test(timestamp) ? Number(timestamp) * 1000 : timestamp).toISOString()
-    : new Date().toISOString();
+  const eventAt = timestamp === undefined
+    ? new Date().toISOString()
+    : safeTimestamp(timestamp, typeof timestamp === 'string' && /^\d+$/.test(timestamp) ? 1000 : 1);
   const admin = createSupabaseAdminClient();
   const { error: rpcError } = await admin.rpc('update_message_delivery', {
     p_provider: provider,
@@ -125,11 +167,12 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
   url.searchParams.set('access_token', token);
   const { response, data: lead } = await metaFetchJson<Record<string, unknown>>(url);
   if (!response.ok) {
-    const providerError = lead.error as Record<string, unknown> | undefined;
-    throw new Error(typeof providerError?.message === 'string' ? providerError.message : 'Unable to fetch Facebook lead details.');
+    const providerError = record(lead.error);
+    throw new Error(typeof providerError.message === 'string' ? providerError.message : 'Unable to fetch Facebook lead details.');
   }
 
-  const fields = lead.field_data as Array<{ name?: string; values?: string[] }> | undefined;
+  // Meta fields are external input. Normalize at runtime instead of relying on a TS cast.
+  const fields = normalizeLeadFields(lead.field_data);
   const demographics = extractLeadFormDemographics(fields);
   const firstName = valueFor(fields, ['first_name', 'first name']);
   const lastName = valueFor(fields, ['last_name', 'last name']);
@@ -161,32 +204,32 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
       ad_id: lead.ad_id || value.ad_id || null,
       adset_id: lead.adset_id || value.adset_id || null,
       created_time: lead.created_time || value.created_time || null,
-      field_data: fields || [],
+      field_data: fields,
       customer_profile: demographics,
     },
   });
 }
 
 async function processMetaMessage(provider: 'facebook' | 'instagram', accountId: string, messaging: Record<string, unknown>) {
-  const delivery = messaging.delivery as Record<string, unknown> | undefined;
-  if (delivery) {
+  const delivery = record(messaging.delivery);
+  if (Object.keys(delivery).length > 0) {
     const mids = Array.isArray(delivery.mids) ? delivery.mids : [];
     for (const mid of mids) await updateDelivery(provider, String(mid), 'delivered', delivery.watermark as string | number | undefined);
   }
 
-  const sender = messaging.sender as Record<string, unknown> | undefined;
-  const recipient = messaging.recipient as Record<string, unknown> | undefined;
-  const message = messaging.message as Record<string, unknown> | undefined;
-  if (!message?.mid) return;
+  const sender = record(messaging.sender);
+  const recipient = record(messaging.recipient);
+  const message = record(messaging.message);
+  if (!message.mid) return;
 
   const isEcho = message.is_echo === true;
-  const customerId = isEcho ? String(recipient?.id || '') : String(sender?.id || '');
+  const customerId = isEcho ? String(recipient.id || '') : String(sender.id || '');
   if (!customerId) return;
 
   const connection = await findMetaConnection(provider, accountId);
   if (!connection) throw new Error(`No connected ${provider} account matches ${accountId}.`);
 
-  const sentAt = messaging.timestamp ? new Date(Number(messaging.timestamp)).toISOString() : new Date().toISOString();
+  const sentAt = safeTimestamp(messaging.timestamp);
   const text = typeof message.text === 'string' ? message.text : null;
   const threadId = `${accountId}:${customerId}`;
 
@@ -197,40 +240,45 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     const token = await pageToken(connection.id, accountId);
     if (token) {
       const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+      // Profile enrichment is optional. Keep its webhook budget small so a slow Graph
+      // profile edge cannot delay durable message ingestion for many seconds.
       const profile = await fetchMetaCustomerProfile({
         provider,
         customerId,
         accountId,
         token,
         version,
+        timeoutMs: 1_500,
+        retries: 0,
       });
       if (profile) {
         customerName = profile.name;
         customerAvatarUrl = profile.avatarUrl;
-        if (profile.demographics) {
-          demographics = profile.demographics;
-        }
+        demographics = profile.demographics || null;
       }
     }
   } catch {
-    // Profile lookup is optional and must never block message ingestion.
+    // Optional enrichment must never block message ingestion.
   }
 
-  // Heuristic location extraction from text if direct profile details are missing
   if (text) {
-    const detected = detectLocationFromText(text);
-    if (detected.city || detected.country) {
-      demographics = {
-        ...(demographics || {}),
-        city: demographics?.city || detected.city,
-        country: demographics?.country || detected.country,
-        inferredFromText: true,
-      };
+    try {
+      const detected = detectLocationFromText(text);
+      if (detected.city || detected.country) {
+        demographics = mergeCustomerDemographics(demographics, {
+          city: detected.city,
+          country: detected.country,
+          inferredFromText: true,
+          locationSource: 'chat_heuristic',
+        });
+      }
+    } catch {
+      // Heuristic parsing is also optional and must fail open.
     }
   }
 
   const attachments = Array.isArray(message.attachments)
-    ? message.attachments as Array<Record<string, unknown>>
+    ? message.attachments.map(record)
     : [];
   let messageType: 'text' | 'image' | 'audio' | 'video' | 'file' | 'media' = text ? 'text' : 'media';
   let attachmentUrl: string | null = null;
@@ -240,7 +288,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   if (attachments.length > 0) {
     const firstAttach = attachments[0];
     const attachType = String(firstAttach.type || '');
-    const attachmentPayload = (firstAttach.payload || {}) as Record<string, unknown>;
+    const attachmentPayload = record(firstAttach.payload);
     attachmentUrl = typeof attachmentPayload.url === 'string' ? attachmentPayload.url : null;
     previewUrl = attachmentUrl;
     fileName = typeof attachmentPayload.title === 'string' ? attachmentPayload.title : null;
@@ -297,13 +345,13 @@ async function processWhatsApp(entry: Record<string, unknown>) {
   if (!wabaId) return;
   const connection = await findWhatsAppConnection(wabaId);
   if (!connection) throw new Error(`No connected WhatsApp account matches ${wabaId}.`);
-  const changes = Array.isArray(entry.changes) ? entry.changes as Array<Record<string, unknown>> : [];
+  const changes = Array.isArray(entry.changes) ? entry.changes.map(record) : [];
 
   for (const change of changes) {
-    const value = (change.value || {}) as Record<string, unknown>;
-    const statuses = Array.isArray(value.statuses) ? value.statuses as Array<Record<string, unknown>> : [];
+    const value = record(change.value);
+    const statuses = Array.isArray(value.statuses) ? value.statuses.map(record) : [];
     for (const status of statuses) {
-      const errors = Array.isArray(status.errors) ? status.errors as Array<Record<string, unknown>> : [];
+      const errors = Array.isArray(status.errors) ? status.errors.map(record) : [];
       await updateDelivery(
         'whatsapp',
         String(status.id || ''),
@@ -313,25 +361,23 @@ async function processWhatsApp(entry: Record<string, unknown>) {
       );
     }
 
-    const messages = Array.isArray(value.messages) ? value.messages as Array<Record<string, unknown>> : [];
-    const contacts = Array.isArray(value.contacts) ? value.contacts as Array<Record<string, unknown>> : [];
+    const messages = Array.isArray(value.messages) ? value.messages.map(record) : [];
+    const contacts = Array.isArray(value.contacts) ? value.contacts.map(record) : [];
     for (const message of messages) {
       const from = String(message.from || '');
       const id = String(message.id || '');
       if (!from || !id) continue;
       const contact = contacts.find((item) => String(item.wa_id || '') === from) || contacts[0];
-      const profile = contact?.profile as Record<string, unknown> | undefined;
-      const textObject = message.text as Record<string, unknown> | undefined;
-      const buttonObject = message.button as Record<string, unknown> | undefined;
-      const interactive = message.interactive as Record<string, unknown> | undefined;
-      const body = typeof textObject?.body === 'string'
+      const profile = record(contact?.profile);
+      const textObject = record(message.text);
+      const buttonObject = record(message.button);
+      const interactive = record(message.interactive);
+      const body = typeof textObject.body === 'string'
         ? textObject.body
-        : typeof buttonObject?.text === 'string'
+        : typeof buttonObject.text === 'string'
           ? buttonObject.text
-          : interactive ? JSON.stringify(interactive) : null;
-      const sentAt = message.timestamp
-        ? new Date(Number(message.timestamp) * 1000).toISOString()
-        : new Date().toISOString();
+          : Object.keys(interactive).length > 0 ? JSON.stringify(interactive) : null;
+      const sentAt = safeTimestamp(message.timestamp, 1000);
 
       await ingestNormalizedLead({
         provider: 'whatsapp',
@@ -340,7 +386,7 @@ async function processWhatsApp(entry: Record<string, unknown>) {
         eventType: 'message',
         externalThreadId: `${wabaId}:${from}`,
         externalContactId: from,
-        customerName: typeof profile?.name === 'string' ? profile.name : 'WhatsApp inquiry',
+        customerName: typeof profile.name === 'string' ? profile.name : 'WhatsApp inquiry',
         customerPhone: from.startsWith('+') ? from : `+${from}`,
         destination: 'Not specified',
         sourceLabel: 'WhatsApp Business',
@@ -354,7 +400,7 @@ async function processWhatsApp(entry: Record<string, unknown>) {
         },
         metadata: {
           waba_id: wabaId,
-          phone_number_id: (value.metadata as Record<string, unknown> | undefined)?.phone_number_id || null,
+          phone_number_id: record(value.metadata).phone_number_id || null,
         },
       });
     }
@@ -382,12 +428,13 @@ export async function POST(request: Request) {
 
   let payload: Record<string, unknown>;
   try {
-    payload = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as unknown;
+    payload = record(parsed);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
   }
 
-  const entries = Array.isArray(payload.entry) ? payload.entry as Array<Record<string, unknown>> : [];
+  const entries = Array.isArray(payload.entry) ? payload.entry.map(record) : [];
   try {
     if (payload.object === 'whatsapp_business_account') {
       for (const entry of entries) await processWhatsApp(entry);
@@ -395,18 +442,19 @@ export async function POST(request: Request) {
       const provider: 'facebook' | 'instagram' = payload.object === 'instagram' ? 'instagram' : 'facebook';
       for (const entry of entries) {
         const accountId = String(entry.id || '');
-        const changes = Array.isArray(entry.changes) ? entry.changes as Array<Record<string, unknown>> : [];
+        if (!accountId) continue;
+        const changes = Array.isArray(entry.changes) ? entry.changes.map(record) : [];
         for (const change of changes) {
-          if (change.field === 'leadgen') await processLeadgen(accountId, (change.value || {}) as Record<string, unknown>);
+          if (change.field === 'leadgen') await processLeadgen(accountId, record(change.value));
         }
-        const messaging = Array.isArray(entry.messaging) ? entry.messaging as Array<Record<string, unknown>> : [];
+        const messaging = Array.isArray(entry.messaging) ? entry.messaging.map(record) : [];
         for (const event of messaging) await processMetaMessage(provider, accountId, event);
       }
     }
   } catch (error) {
     console.error('Meta webhook processing failed:', error);
-    // A non-2xx response is intentional: Meta should retry. Processed event IDs remain
-    // idempotent, while failed event IDs can be reclaimed by the ingestion state machine.
+    // Non-2xx intentionally asks Meta to retry. Already-processed event IDs remain
+    // idempotent while failed event IDs are reclaimable by the ingestion state machine.
     return NextResponse.json({ received: true, processed: false, retry: true }, { status: 500 });
   }
 
