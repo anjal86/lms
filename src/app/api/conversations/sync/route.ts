@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
-import { syncMetaConversations } from '@/lib/integrations/meta-sync';
+import { refreshMetaConversationProfiles, syncMetaConversations } from '@/lib/integrations/meta-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,20 @@ export async function POST(request: Request) {
 
   try {
     const result = await syncMetaConversations();
-    return NextResponse.json(result, { status: result.success ? 200 : 502 });
+    const avatarRefresh = internalSync
+      ? null
+      : await refreshMetaConversationProfiles({ limit: 500 });
+
+    return NextResponse.json(
+      {
+        ...result,
+        avatarsRefreshed: avatarRefresh?.updated || 0,
+        avatarProfilesAttempted: avatarRefresh?.attempted || 0,
+        avatarProfilesUnavailable: avatarRefresh?.unavailable || 0,
+        avatarErrors: avatarRefresh?.errors || [],
+      },
+      { status: result.success ? 200 : 502 }
+    );
   } catch (error) {
     console.error('Meta conversation sync failed:', error);
     return NextResponse.json({ success: false, error: 'Meta conversation sync failed.' }, { status: 500 });
