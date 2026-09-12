@@ -9,20 +9,60 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: 'var(--background)',
-        foreground: 'var(--foreground)',
+        background: 'var(--color-canvas)',
+        foreground: 'var(--color-text-primary)',
+        canvas: 'var(--color-canvas)',
+        surface: {
+          DEFAULT: 'var(--color-surface)',
+          subtle: 'var(--color-surface-subtle)',
+          hover: 'var(--color-surface-hover)',
+          selected: 'var(--color-surface-selected)',
+        },
+        line: {
+          DEFAULT: 'var(--color-border)',
+          strong: 'var(--color-border-strong)',
+        },
+        ink: {
+          DEFAULT: 'var(--color-text-primary)',
+          secondary: 'var(--color-text-secondary)',
+          muted: 'var(--color-text-muted)',
+          disabled: 'var(--color-text-disabled)',
+        },
+        accent: {
+          DEFAULT: 'var(--color-accent)',
+          hover: 'var(--color-accent-hover)',
+          soft: 'var(--color-accent-soft)',
+        },
+        danger: {
+          DEFAULT: 'var(--color-danger)',
+          soft: 'var(--color-danger-soft)',
+        },
+        warning: {
+          DEFAULT: 'var(--color-warning)',
+          soft: 'var(--color-warning-soft)',
+        },
+        success: {
+          DEFAULT: 'var(--color-success)',
+          soft: 'var(--color-success-soft)',
+        },
       },
       fontFamily: {
         sans: ['var(--font-inter)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
       },
+      borderRadius: {
+        'app-sm': 'var(--radius-sm)',
+        app: 'var(--radius-md)',
+        'app-lg': 'var(--radius-lg)',
+      },
       boxShadow: {
-        '2xs': '0 1px 2px 0 rgba(0, 0, 0, 0.04)',
-        xs: '0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05)',
-        panel: '0 1px 2px rgba(15, 23, 42, 0.03), 0 8px 24px rgba(15, 23, 42, 0.04)',
+        '2xs': 'var(--shadow-2xs)',
+        xs: '0 1px 3px rgba(9, 9, 11, 0.05), 0 1px 2px -1px rgba(9, 9, 11, 0.05)',
+        panel: 'var(--shadow-panel)',
       },
     },
   },
   plugins: [],
 };
+
 export default config;
