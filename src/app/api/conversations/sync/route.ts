@@ -4,6 +4,7 @@ import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { refreshMetaConversationProfiles, syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
+import { discoverSelectedMetaPageHistory } from '@/lib/integrations/meta-page-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -153,7 +154,6 @@ export async function POST(request: Request) {
       ? { requested: false, scope: null }
       : await resolveRequestedScope(request);
 
-    // Never broaden a stale/invalid selected Page into an all-Pages sync.
     if (requestedScope.requested && !requestedScope.scope) {
       return NextResponse.json({
         success: true,
@@ -179,18 +179,31 @@ export async function POST(request: Request) {
       });
     }
 
-    // A selected Page gets a bounded recent sync only. Full historical discovery
-    // across every connected Page is reserved for the explicit combined inbox.
-    // Full message history remains lazy and is backfilled only for the customer
-    // conversation the user opens.
     const result = await syncMetaConversations({
       liveMode: false,
       connectionId: requestedScope.scope?.connectionId,
       pageId: requestedScope.scope?.pageId,
     });
 
+    // When a Page is selected, walk that Page deeply enough to discover its full
+    // conversation list, but store only one preview message per customer. The
+    // customer's complete history is still fetched lazily when that chat opens.
+    const selectedHistory = requestedScope.scope
+      ? await discoverSelectedMetaPageHistory({
+          provider: requestedScope.scope.provider,
+          accountId: requestedScope.scope.accountId,
+          connectionId: requestedScope.scope.connectionId,
+          pageId: requestedScope.scope.pageId,
+          maxPages: 30,
+        })
+      : null;
+
     const history = requestedScope.scope
-      ? { conversationsDiscovered: 0, messagesInserted: 0, errors: [] as string[] }
+      ? {
+          conversationsDiscovered: selectedHistory?.conversationsDiscovered || 0,
+          messagesInserted: selectedHistory?.previewMessagesInserted || 0,
+          errors: selectedHistory?.errors || [],
+        }
       : await discoverMetaConversationHistory({ maxPages: 12 });
 
     const avatarRefresh = internalSync || requestedScope.scope
@@ -204,6 +217,7 @@ export async function POST(request: Request) {
         messagesCount: result.messagesCount + history.messagesInserted,
         olderConversationsDiscovered: history.conversationsDiscovered,
         historyPreviewMessagesInserted: history.messagesInserted,
+        historyConversationsScanned: selectedHistory?.conversationsScanned || 0,
         historyErrors: history.errors,
         avatarsRefreshed: avatarRefresh?.updated || 0,
         avatarProfilesAttempted: avatarRefresh?.attempted || 0,
