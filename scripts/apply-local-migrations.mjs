@@ -46,6 +46,10 @@ function exists(sql) {
   return query(sql) === 't';
 }
 
+function sqlLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 try {
   execFileSync('docker', ['inspect', dbContainer], { stdio: 'ignore' });
 } catch {
@@ -60,7 +64,7 @@ if (!exists("select to_regclass('public.profiles') is not null and to_regclass('
 }
 
 const functionDefinitionContains = (signature, marker) => exists(
-  `select coalesce(position(${JSON.stringify(marker)} in pg_get_functiondef(to_regprocedure(${JSON.stringify(signature)}))), 0) > 0`
+  `select coalesce(position(${sqlLiteral(marker)} in pg_get_functiondef(to_regprocedure(${sqlLiteral(signature)}))), 0) > 0`
 );
 
 const migrations = [
