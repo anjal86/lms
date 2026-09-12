@@ -54,9 +54,13 @@ export async function fetchMetaCustomerProfile(input: {
   accountId: string;
   token: string;
   version: string;
+  timeoutMs?: number;
+  retries?: number;
 }): Promise<MetaCustomerProfile | null> {
   if (!input.customerId || input.customerId === input.accountId || !input.token) return null;
 
+  const timeoutMs = input.timeoutMs ?? 8_000;
+  const retries = input.retries ?? 1;
   const url = new URL(`https://graph.facebook.com/${input.version}/${encodeURIComponent(input.customerId)}`);
   url.searchParams.set(
     'fields',
@@ -66,14 +70,14 @@ export async function fetchMetaCustomerProfile(input: {
   );
   url.searchParams.set('access_token', input.token);
 
-  let { response, data } = await metaFetchJson<Record<string, unknown>>(url, {}, { retries: 1, timeoutMs: 8_000 });
+  let { response, data } = await metaFetchJson<Record<string, unknown>>(url, {}, { retries, timeoutMs });
 
   // Extended Facebook fields are not available for every app/customer. Downgrade only
   // for field/permission failures; rate limits and provider outages should not trigger
   // an immediate duplicate Graph request.
   if (!response.ok && input.provider === 'facebook' && shouldRetryWithBasicFields(response, data)) {
     url.searchParams.set('fields', 'id,first_name,last_name,name,profile_pic');
-    const fallback = await metaFetchJson<Record<string, unknown>>(url, {}, { retries: 1, timeoutMs: 8_000 });
+    const fallback = await metaFetchJson<Record<string, unknown>>(url, {}, { retries, timeoutMs });
     if (fallback.response.ok) {
       response = fallback.response;
       data = fallback.data;
