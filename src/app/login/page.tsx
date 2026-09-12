@@ -1,6 +1,7 @@
 'use client';
 
 import React, { Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
@@ -8,8 +9,8 @@ import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawReturnUrl = searchParams.get('returnUrl') || '/leads';
-  const returnUrl = rawReturnUrl.startsWith('/') && !rawReturnUrl.startsWith('//') ? rawReturnUrl : '/leads';
+  const rawReturnUrl = searchParams.get('returnUrl') || '/dashboard';
+  const returnUrl = rawReturnUrl.startsWith('/') && !rawReturnUrl.startsWith('//') ? rawReturnUrl : '/dashboard';
   const initialError = searchParams.get('error');
 
   const [email, setEmail] = useState('');
@@ -33,14 +34,27 @@ function LoginContent() {
     setErrorMsg(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password,
       });
-      if (error) {
+      if (error || !data.user) {
         setErrorMsg('Invalid email or password.');
         return;
       }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_active')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (!profile?.is_active) {
+        await supabase.auth.signOut();
+        setErrorMsg('This account is disabled. Contact an administrator.');
+        return;
+      }
+
       router.replace(returnUrl);
       router.refresh();
     } catch (error) {
@@ -83,7 +97,10 @@ function LoginContent() {
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-[11px] font-medium text-zinc-300 mb-1.5">Password</label>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <label htmlFor="password" className="block text-[11px] font-medium text-zinc-300">Password</label>
+              <Link href="/forgot-password" className="text-[11px] font-medium text-zinc-400 hover:text-white">Forgot password?</Link>
+            </div>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
               <input
