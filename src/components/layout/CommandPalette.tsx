@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { exportToCsv } from '@/lib/export-csv';
@@ -67,19 +67,27 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+    const resetTimer = window.setTimeout(() => {
       setQuery('');
       setSearchResults([]);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+      setIsSearching(false);
+    }, 0);
+    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 50);
+    return () => {
+      window.clearTimeout(resetTimer);
+      window.clearTimeout(focusTimer);
+    };
   }, [isOpen]);
 
   useEffect(() => {
     const trimmed = query.trim();
     if (!isOpen || trimmed.length < 2) {
-      setSearchResults([]);
-      setIsSearching(false);
-      return;
+      const resetTimer = window.setTimeout(() => {
+        setSearchResults([]);
+        setIsSearching(false);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
     }
 
     const controller = new AbortController();
@@ -214,7 +222,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
     router.push(path);
   };
 
-  const leadPath = (leadId: string) => isAgent ? `/my-work/${leadId}` : `/leads/${leadId}`;
+  const leadPath = (leadId: string) => isAgent ? `/my-work/${leadId}` : `/leads/${leadId}/workspace`;
 
   return (
     <div
@@ -225,7 +233,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
       onClick={onClose}
     >
       <div
-        className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl animate-in zoom-in-95 duration-100"
+        className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl animate-in zoom-in-95 duration-100"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex h-12 items-center gap-2.5 border-b border-zinc-200 bg-zinc-50/50 px-4">
@@ -253,7 +261,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Quick actions</div>
               <div className="space-y-0.5">
                 {actionItems.map((item) => (
-                  <button key={item.label} onClick={item.action} className="group flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-left text-zinc-800 transition hover:bg-zinc-100">
+                  <button key={item.label} onClick={item.action} className="group flex min-h-10 w-full items-center justify-between rounded-md px-3 text-left text-zinc-800 transition hover:bg-zinc-100">
                     <div className="flex items-center gap-2.5">
                       <item.icon className="h-4 w-4 text-zinc-500 group-hover:text-zinc-900" />
                       <span className="font-medium text-zinc-900">{item.label}</span>
@@ -270,7 +278,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Leads</div>
               <div className="space-y-0.5">
                 {matchingLeads.map((lead) => (
-                  <button key={lead.id} onClick={() => navigate(leadPath(lead.id))} className="group flex min-h-12 w-full items-center justify-between rounded-lg px-3 text-left transition hover:bg-zinc-100">
+                  <button key={lead.id} onClick={() => navigate(leadPath(lead.id))} className="group flex min-h-12 w-full items-center justify-between rounded-md px-3 text-left transition hover:bg-zinc-100">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-zinc-900">{lead.title}</span>
@@ -296,7 +304,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Team</div>
               <div className="space-y-0.5">
                 {matchingAgents.map((agent) => (
-                  <button key={agent.id} onClick={() => navigate(`/team/${agent.id}`)} className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-left transition hover:bg-zinc-100">
+                  <button key={agent.id} onClick={() => navigate(`/team/${agent.id}`)} className="flex min-h-11 w-full items-center justify-between rounded-md px-3 text-left transition hover:bg-zinc-100">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <User className="h-4 w-4 flex-none text-zinc-400" />
                       <div className="min-w-0">
@@ -315,7 +323,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Pages</div>
               <div className="space-y-0.5">
                 {navItems.map((item) => (
-                  <button key={item.path} onClick={() => navigate(item.path)} className="group flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-left text-zinc-800 transition hover:bg-zinc-100">
+                  <button key={item.path} onClick={() => navigate(item.path)} className="group flex min-h-10 w-full items-center justify-between rounded-md px-3 text-left text-zinc-800 transition hover:bg-zinc-100">
                     <div className="flex items-center gap-2.5">
                       <item.icon className="h-4 w-4 text-zinc-400 group-hover:text-zinc-800" />
                       <span className="font-medium text-zinc-900">{item.label}</span>
