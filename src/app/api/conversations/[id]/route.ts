@@ -13,6 +13,11 @@ const PatchConversationSchema = z.object({
   customer_country: z.string().trim().max(120).optional().or(z.literal('')),
 });
 
+type LocationUpdateResult = {
+  conversation?: Record<string, unknown>;
+  lead_id?: string | null;
+};
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
@@ -112,35 +117,31 @@ export async function PATCH(
   if (parsed.data.assigned_to !== undefined) patch.assigned_to = parsed.data.assigned_to;
   if (parsed.data.mark_read === true) patch.unread_count = 0;
 
-  if (parsed.data.customer_city !== undefined || parsed.data.customer_country !== undefined) {
-    const { data: currentConv } = await actor.supabase
-      .from('lead_conversations')
-      .select('metadata, lead_id')
-      .eq('id', id)
-      .maybeSingle();
+  const locationRequested = parsed.data.customer_city !== undefined || parsed.data.customer_country !== undefined;
+  let locationConversation: Record<string, unknown> | null = null;
 
-    if (currentConv) {
-      const currentMeta = (currentConv.metadata || {}) as Record<string, unknown>;
-      const currentProfile = (currentMeta.customer_profile || {}) as Record<string, unknown>;
-      patch.metadata = {
-        ...currentMeta,
-        customer_profile: {
-          ...currentProfile,
-          ...(parsed.data.customer_city !== undefined ? { city: parsed.data.customer_city || null } : {}),
-          ...(parsed.data.customer_country !== undefined ? { country: parsed.data.customer_country || null } : {}),
-        },
-      };
+  if (locationRequested) {
+    const { data: locationData, error: locationError } = await actor.supabase.rpc('update_conversation_location', {
+      p_conversation_id: id,
+      p_customer_city: parsed.data.customer_city ?? '',
+      p_customer_country: parsed.data.customer_country ?? '',
+    });
 
-      if (currentConv.lead_id) {
-        const leadPatch: Record<string, string | null> = {};
-        if (parsed.data.customer_city !== undefined) leadPatch.customer_city = parsed.data.customer_city || null;
-        if (parsed.data.customer_country !== undefined) leadPatch.customer_country = parsed.data.customer_country || null;
-        await actor.supabase.from('leads').update(leadPatch).eq('id', currentConv.lead_id);
-      }
+    if (locationError) {
+      console.error('Failed to update conversation location:', locationError.message);
+      if (locationError.code === '42501') return NextResponse.json({ error: 'You do not have access to update this conversation.' }, { status: 403 });
+      if (locationError.code === 'P0002') return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+      return NextResponse.json({ error: 'Unable to update customer location.' }, { status: 500 });
     }
+
+    const result = (locationData || {}) as LocationUpdateResult;
+    locationConversation = result.conversation || null;
   }
 
   if (Object.keys(patch).length === 0) {
+    if (locationRequested && locationConversation) {
+      return NextResponse.json({ conversation: locationConversation });
+    }
     return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });
   }
 
