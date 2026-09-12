@@ -6,6 +6,7 @@ import {
   AlertCircle,
   CheckCircle2,
   CirclePause,
+  Copy,
   ExternalLink,
   Facebook,
   Globe2,
@@ -19,6 +20,7 @@ import {
   Send,
   Settings2,
   Unplug,
+  X,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 
@@ -31,6 +33,11 @@ type CatalogItem = {
   capabilities: string[];
   connectMode: 'meta_oauth' | 'tiktok_oauth' | 'manual';
   configured: boolean;
+  setup: {
+    configured: boolean;
+    required: string[];
+    missing: string[];
+  };
 };
 
 type Connection = {
@@ -49,6 +56,20 @@ type Connection = {
 type ConnectionsResponse = {
   connections: Connection[];
   catalog: CatalogItem[];
+  setup?: {
+    baseUrl: string;
+    urls: {
+      metaOauthCallbacks: {
+        facebook: string;
+        instagram: string;
+        whatsapp: string;
+      };
+      tiktokOauthCallback: string;
+      metaWebhook: string;
+      tiktokWebhook: string;
+      leadWebhook: string;
+    };
+  };
   migrationRequired?: boolean;
   message?: string;
 };
@@ -96,6 +117,12 @@ export default function ConnectionsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(friendlyError(params.get('error')));
+  const [setupProviderId, setSetupProviderId] = useState<CatalogItem['id'] | null>(() => {
+    const setup = params.get('setup');
+    return ['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api'].includes(setup || '')
+      ? setup as CatalogItem['id']
+      : null;
+  });
   const connectedProvider = params.get('connected');
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
 
@@ -128,10 +155,16 @@ export default function ConnectionsPage() {
     return map;
   }, [data.connections]);
 
-  const appOrigin = typeof window === 'undefined' ? '' : window.location.origin;
-  const metaWebhook = `${appOrigin}/api/integrations/webhooks/meta`;
-  const tiktokWebhook = `${appOrigin}/api/integrations/webhooks/tiktok`;
-  const leadWebhook = `${appOrigin}/api/leads/webhook`;
+  const setupProvider = useMemo(() => {
+    if (!setupProviderId) return null;
+    return data.catalog.find((item) => item.id === setupProviderId) || null;
+  }, [data.catalog, setupProviderId]);
+
+  const appOrigin = data.setup?.baseUrl || (typeof window === 'undefined' ? '' : window.location.origin);
+  const setupUrls = data.setup?.urls;
+  const metaWebhook = setupUrls?.metaWebhook || `${appOrigin}/api/integrations/webhooks/meta`;
+  const tiktokWebhook = setupUrls?.tiktokWebhook || `${appOrigin}/api/integrations/webhooks/tiktok`;
+  const leadWebhook = setupUrls?.leadWebhook || `${appOrigin}/api/leads/webhook`;
 
   const connectManual = async (provider: CatalogItem) => {
     setBusy(provider.id);
@@ -180,6 +213,19 @@ export default function ConnectionsPage() {
     await navigator.clipboard.writeText(value);
   };
 
+  const oauthCallbackRows = [
+    ['Facebook Lead Ads OAuth callback', setupUrls?.metaOauthCallbacks.facebook || `${appOrigin}/api/integrations/oauth/facebook/callback`],
+    ['Instagram Business OAuth callback', setupUrls?.metaOauthCallbacks.instagram || `${appOrigin}/api/integrations/oauth/instagram/callback`],
+    ['WhatsApp Business OAuth callback', setupUrls?.metaOauthCallbacks.whatsapp || `${appOrigin}/api/integrations/oauth/whatsapp/callback`],
+    ['TikTok OAuth callback', setupUrls?.tiktokOauthCallback || `${appOrigin}/api/integrations/oauth/tiktok/callback`],
+  ];
+
+  const webhookRows = [
+    ['Meta webhook callback', metaWebhook],
+    ['TikTok webhook callback', tiktokWebhook],
+    ['Website / automation lead webhook', leadWebhook],
+  ];
+
   if (!canManage) {
     return (
       <div className="empty-state surface-flat">
@@ -206,14 +252,14 @@ export default function ConnectionsPage() {
       </header>
 
       {connectedProvider && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
           <div className="flex items-center gap-2 font-semibold"><CheckCircle2 className="h-4 w-4" /> {connectedProvider[0]?.toUpperCase()}{connectedProvider.slice(1)} connected</div>
           <p className="mt-1 text-xs text-emerald-700">New events from this account can now enter the same lead pipeline.</p>
         </div>
       )}
 
       {(error || data.migrationRequired) && (
-        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-800"><AlertCircle className="h-4 w-4" /> Setup needs attention</div>
           <p className="mt-1 text-xs leading-5 text-amber-700">{error || data.message}</p>
           {data.migrationRequired && <code className="mt-2 inline-block rounded bg-white/70 px-2 py-1 text-[11px] text-amber-900">npm run db:migrate:local</code>}
@@ -236,19 +282,16 @@ export default function ConnectionsPage() {
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-3">
-                      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${ACCENTS[provider.id]}`}><Icon className="h-5 w-5" /></span>
+                      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${ACCENTS[provider.id]}`}><Icon className="h-5 w-5" /></span>
                       <div className="min-w-0">
                         <h3 className="text-sm font-semibold text-zinc-950">{provider.name}</h3>
                         <p className="mt-1 text-xs leading-5 text-zinc-500">{provider.description}</p>
                       </div>
                     </div>
-                    {active?.status === 'connected' ? (
-                      <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">Connected</span>
-                    ) : active?.status === 'paused' ? (
-                      <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700">Paused</span>
-                    ) : (
-                      <span className="rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-semibold text-zinc-500">Not connected</span>
-                    )}
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-zinc-600">
+                      <span className={`h-1.5 w-1.5 rounded-full ${active?.status === 'connected' ? 'bg-emerald-500' : active?.status === 'paused' ? 'bg-amber-500' : 'bg-zinc-300'}`} />
+                      {active?.status === 'connected' ? 'Connected' : active?.status === 'paused' ? 'Paused' : 'Not connected'}
+                    </span>
                   </div>
 
                   <div className="mt-4 flex flex-wrap gap-1.5">
@@ -276,9 +319,15 @@ export default function ConnectionsPage() {
                         {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Enable
                       </button>
                     ) : (
-                      <a href={`/api/integrations/oauth/${provider.id}/start`} aria-disabled={!provider.configured || data.migrationRequired} className={`button-primary button-sm ${!provider.configured || data.migrationRequired ? 'pointer-events-none opacity-50' : ''}`}>
-                        <ExternalLink className="h-3.5 w-3.5" /> Continue with {provider.id === 'tiktok' ? 'TikTok' : 'Meta'}
-                      </a>
+                      provider.configured && !data.migrationRequired ? (
+                        <a href={`/api/integrations/oauth/${provider.id}/start`} className="button-primary button-sm">
+                          <ExternalLink className="h-3.5 w-3.5" /> Continue with {provider.id === 'tiktok' ? 'TikTok' : 'Meta'}
+                        </a>
+                      ) : (
+                        <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-primary button-sm" disabled={data.migrationRequired}>
+                          <Settings2 className="h-3.5 w-3.5" /> Configure
+                        </button>
+                      )
                     )
                   ) : active.status === 'paused' ? (
                     <button type="button" onClick={() => void updateConnection(active, 'resume')} disabled={isBusy} className="button-primary button-sm"><PlugZap className="h-3.5 w-3.5" /> Resume</button>
@@ -288,7 +337,11 @@ export default function ConnectionsPage() {
                   {active && active.status !== 'disconnected' && (
                     <button type="button" onClick={() => void updateConnection(active, 'disconnect')} disabled={isBusy} className="button-ghost button-sm text-red-600"><Unplug className="h-3.5 w-3.5" /> Disconnect</button>
                   )}
-                  {!provider.configured && provider.connectMode !== 'manual' && <span className="text-[10px] text-zinc-400"><Settings2 className="mr-1 inline h-3 w-3" /> Server credentials required</span>}
+                  {!provider.configured && provider.connectMode !== 'manual' && (
+                    <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500">
+                      <Settings2 className="h-3.5 w-3.5" /> Setup required
+                    </button>
+                  )}
                 </div>
               </article>
             );
@@ -299,23 +352,84 @@ export default function ConnectionsPage() {
       <section className="surface-flat overflow-hidden">
         <div className="panel-header">
           <div>
-            <h2 className="section-heading">Provider callback URLs</h2>
+            <h2 className="section-heading">Provider portal URLs</h2>
             <p className="section-description">Use these HTTPS endpoints in the provider developer consoles. Keep provider secrets on the server.</p>
           </div>
         </div>
         <div className="divide-y divide-zinc-100">
-          {[
-            ['Meta / Facebook / Instagram / WhatsApp', metaWebhook],
-            ['TikTok Lead Generation', tiktokWebhook],
-            ['Website / automation lead webhook', leadWebhook],
-          ].map(([label, url]) => (
+          {[...oauthCallbackRows, ...webhookRows].map(([label, url]) => (
             <div key={label} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div><div className="text-xs font-semibold text-zinc-800">{label}</div><code className="mt-1 block break-all text-[11px] text-zinc-500">{url}</code></div>
-              <button type="button" onClick={() => void copy(url)} className="button-secondary button-sm shrink-0">Copy URL</button>
+              <button type="button" onClick={() => void copy(url)} className="button-secondary button-sm shrink-0"><Copy className="h-3.5 w-3.5" /> Copy URL</button>
             </div>
           ))}
         </div>
       </section>
+
+      {setupProvider && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-zinc-950/20" role="dialog" aria-modal="true" aria-labelledby="connection-setup-title">
+          <div className="h-full w-full max-w-[460px] overflow-y-auto border-l border-zinc-200 bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
+              <div>
+                <p className="page-eyebrow">Setup required</p>
+                <h2 id="connection-setup-title" className="text-base font-semibold text-zinc-950">{setupProvider.name}</h2>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">Add these server-side values to `.env.local`, restart Next.js, then return here to connect.</p>
+              </div>
+              <button type="button" onClick={() => setSetupProviderId(null)} className="button-ghost button-sm px-2" aria-label="Close setup instructions">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-5 p-4">
+              <section>
+                <h3 className="text-xs font-semibold text-zinc-800">Missing environment variables</h3>
+                <div className="mt-2 divide-y divide-zinc-100 rounded-md border border-zinc-200">
+                  {setupProvider.setup.missing.length > 0 ? setupProvider.setup.missing.map((key) => (
+                    <div key={key} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <code className="break-all text-[11px] text-zinc-700">{key}</code>
+                      <span className="inline-flex items-center gap-1.5 text-[11px] text-zinc-500"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Missing</span>
+                    </div>
+                  )) : (
+                    <div className="px-3 py-2 text-xs text-zinc-500">All required variables are present.</div>
+                  )}
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xs font-semibold text-zinc-800">Required server variables</h3>
+                <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                  {setupProvider.setup.required.map((key) => <code key={key} className="mb-1 block text-[11px] text-zinc-700">{key}=</code>)}
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xs font-semibold text-zinc-800">{setupProvider.connectMode === 'meta_oauth' ? 'Meta developer portal URLs' : 'TikTok developer portal URLs'}</h3>
+                <div className="mt-2 divide-y divide-zinc-100 rounded-md border border-zinc-200">
+                  {(setupProvider.connectMode === 'meta_oauth'
+                    ? [
+                      [`${setupProvider.shortName} OAuth callback`, setupUrls?.metaOauthCallbacks[setupProvider.id as 'facebook' | 'instagram' | 'whatsapp'] || `${appOrigin}/api/integrations/oauth/${setupProvider.id}/callback`],
+                      ['Meta webhook callback', metaWebhook],
+                    ]
+                    : [
+                      ['TikTok OAuth callback', setupUrls?.tiktokOauthCallback || `${appOrigin}/api/integrations/oauth/tiktok/callback`],
+                      ['TikTok webhook callback', tiktokWebhook],
+                    ]).map(([label, url]) => (
+                    <div key={label} className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[11px] font-medium text-zinc-600">{label}</span>
+                        <button type="button" onClick={() => void copy(url)} className="button-ghost button-sm px-2" aria-label={`Copy ${label}`}>
+                          <Copy className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <code className="mt-1 block break-all text-[11px] text-zinc-500">{url}</code>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

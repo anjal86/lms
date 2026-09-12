@@ -14,6 +14,7 @@ import {
   Award,
   Settings,
   MessageSquareQuote,
+  MessageSquare,
   Plus,
   FileSpreadsheet,
   MapPin,
@@ -119,6 +120,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const agentNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
+    { label: 'Inbox', hint: 'Omnichannel live chat & customer inquiries', path: '/inbox', icon: MessageSquare },
     { label: 'My Work', hint: 'Your active leads', path: '/my-work', icon: ListChecks },
     { label: 'Follow-ups', hint: 'People to contact again', path: '/my-follow-ups', icon: CalendarClock },
     { label: 'Messages', hint: 'Saved message templates', path: '/templates', icon: MessageSquareQuote },
@@ -127,6 +129,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const managementNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
+    { label: 'Inbox', hint: 'Omnichannel live chat & customer inquiries', path: '/inbox', icon: MessageSquare },
     { label: 'All Leads', hint: 'View every connected lead source in one pipeline', path: '/leads', icon: ArrowRight },
     { label: 'Connections', hint: 'Connect Facebook, Instagram, WhatsApp, TikTok, email and forms', path: '/connections', icon: PlugZap },
     { label: 'Follow-ups', hint: 'Upcoming and overdue follow-ups', path: '/follow-ups', icon: CalendarClock },

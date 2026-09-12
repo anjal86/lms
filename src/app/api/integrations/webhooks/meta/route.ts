@@ -133,14 +133,76 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   const sender = messaging.sender as Record<string, unknown> | undefined;
   const recipient = messaging.recipient as Record<string, unknown> | undefined;
   const message = messaging.message as Record<string, unknown> | undefined;
-  if (!sender?.id || !message?.mid) return;
-  if (message.is_echo === true) return;
+  if (!message?.mid) return;
+
+  const isEcho = message.is_echo === true;
+  // If echo, the message was sent from Meta Business Suite (page is sender, customer is recipient)
+  // If not echo, the customer sent the message to the page
+  const customerId = isEcho ? String(recipient?.id || '') : String(sender?.id || '');
+  if (!customerId) return;
 
   const connection = await findMetaConnection(provider, accountId);
   if (!connection) throw new Error(`No connected ${provider} account matches ${accountId}.`);
-  const senderId = String(sender.id);
+
   const sentAt = messaging.timestamp ? new Date(Number(messaging.timestamp)).toISOString() : new Date().toISOString();
   const text = typeof message.text === 'string' ? message.text : null;
+  const threadId = `${accountId}:${customerId}`;
+
+  // Attempt to fetch traveler's profile name & photo from Meta Graph API
+  let customerName: string | null = null;
+  let customerAvatarUrl: string | null = null;
+  try {
+    const token = await pageToken(connection.id, accountId);
+    if (token) {
+      const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+      const profRes = await fetch(
+        `https://graph.facebook.com/${version}/${customerId}?fields=first_name,last_name,name,profile_pic&access_token=${token}`,
+        { cache: 'no-store' }
+      );
+      if (profRes.ok) {
+        const prof = await profRes.json();
+        customerName = prof.name || [prof.first_name, prof.last_name].filter(Boolean).join(' ') || null;
+        customerAvatarUrl = prof.profile_pic || null;
+      }
+    }
+  } catch {
+    // Non-fatal if user profile permissions are restricted
+  }
+
+  // Parse rich attachments (photos, voice notes, files)
+  const attachments = Array.isArray(message.attachments)
+    ? (message.attachments as Array<Record<string, unknown>>)
+    : [];
+  let messageType: 'text' | 'image' | 'audio' | 'video' | 'file' | 'media' = text ? 'text' : 'media';
+  let attachmentUrl: string | null = null;
+  let previewUrl: string | null = null;
+  let fileName: string | null = null;
+
+  if (attachments.length > 0) {
+    const firstAttach = attachments[0];
+    const attachType = String(firstAttach.type || '');
+    const payload = (firstAttach.payload || {}) as Record<string, unknown>;
+    attachmentUrl = typeof payload.url === 'string' ? payload.url : null;
+    previewUrl = attachmentUrl;
+    fileName = typeof payload.title === 'string' ? payload.title : null;
+
+    if (attachType === 'image') {
+      messageType = 'image';
+      if (!isEcho && attachmentUrl && !customerAvatarUrl) {
+        customerAvatarUrl = attachmentUrl;
+      }
+    } else if (attachType === 'audio') {
+      messageType = 'audio';
+    } else if (attachType === 'video') {
+      messageType = 'video';
+    } else if (attachType === 'file') {
+      messageType = 'file';
+    }
+  }
+
+  if (!customerAvatarUrl && customerName) {
+    customerAvatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(customerName)}&backgroundColor=0f172a,1e293b,1e1b4b,172554,064e3b&textColor=ffffff&fontWeight=600`;
+  }
 
   await ingestNormalizedLead({
     provider,
@@ -148,21 +210,39 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     externalEventId: `${provider}:message:${String(message.mid)}`,
     eventType: 'message',
     externalLeadId: null,
-    externalThreadId: `${accountId}:${senderId}`,
-    externalContactId: senderId,
-    customerName: `${provider === 'instagram' ? 'Instagram' : 'Messenger'} inquiry`,
-    customerPhone: `${provider}:${senderId}`,
+    externalThreadId: threadId,
+    externalContactId: customerId,
+    customerName: customerName || `${provider === 'instagram' ? 'Instagram' : 'Messenger'} User`,
+    customerPhone: `${provider}:${customerId}`,
     destination: 'Not specified',
     sourceLabel: provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger',
-    notes: 'Conversation started automatically from an inbound social message.',
+    notes: isEcho
+      ? 'Outbound message sent via Meta Business Suite.'
+      : 'Conversation started automatically from an inbound social message.',
     message: {
       externalMessageId: String(message.mid),
-      type: text ? 'text' : 'media',
-      body: text,
+      direction: isEcho ? 'outbound' : 'inbound',
+      type: messageType,
+      body: text || (messageType === 'image' ? '[Photo]' : messageType === 'audio' ? '[Voice message]' : null),
       sentAt,
-      metadata: { message, sender, recipient },
+      metadata: {
+        message,
+        sender,
+        recipient,
+        attachments,
+        attachment_url: attachmentUrl,
+        preview_url: previewUrl,
+        file_name: fileName,
+        is_echo: isEcho,
+        sent_via: isEcho ? 'meta_business_suite' : 'customer',
+      },
     },
-    metadata: { account_id: accountId, sender_id: senderId },
+    metadata: {
+      account_id: accountId,
+      customer_id: customerId,
+      is_echo: isEcho,
+      customer_avatar_url: customerAvatarUrl,
+    },
   });
 }
 

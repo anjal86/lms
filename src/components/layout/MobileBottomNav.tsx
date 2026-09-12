@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { CalendarClock, Kanban, LayoutDashboard, ListChecks, MessageSquareQuote, Users } from 'lucide-react';
+import { CalendarClock, Kanban, LayoutDashboard, ListChecks, MessageSquare, MessageSquareQuote, Users } from 'lucide-react';
 import { useApp } from '@/lib/store';
 
 type Tone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet';
@@ -31,12 +31,14 @@ export default function MobileBottomNav() {
   const items = isAgent
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' as const },
+        { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
         { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const },
         { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' as const },
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' as const },
       ]
     : [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' as const },
+        { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
         { label: 'All Leads', href: '/leads', icon: Kanban, tone: 'cyan' as const },
         { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const },
         { label: 'Team', href: '/team', icon: Users, tone: 'emerald' as const },
@@ -44,7 +46,7 @@ export default function MobileBottomNav() {
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/80 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-10px_30px_rgba(37,99,235,0.08)] backdrop-blur md:hidden" aria-label="Primary navigation">
-      <div className="mx-auto grid max-w-lg grid-cols-4 gap-1">
+      <div className="mx-auto grid max-w-lg grid-cols-5 gap-1">
         {items.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
           const Icon = item.icon;

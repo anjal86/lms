@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getProvider, metaScopes, type IntegrationProvider } from '@/lib/integrations/catalog';
+import { integrationEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
 
 export const runtime = 'nodejs';
 
@@ -22,20 +23,21 @@ export async function GET(request: Request, context: { params: Promise<{ provide
     return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || new URL(request.url).origin;
+  const appUrl = publicAppUrl(request.url);
   const callbackUrl = `${appUrl}/api/integrations/oauth/${provider}/callback`;
   const state = randomBytes(24).toString('hex');
+  const envStatus = integrationEnvStatus(definition);
+  if (!envStatus.configured) {
+    const error = definition.connectMode === 'meta_oauth' ? 'meta_not_configured' : 'tiktok_not_configured';
+    return NextResponse.redirect(new URL(`/connections?error=${error}&setup=${provider}`, appUrl));
+  }
   let destination: string;
 
   if (definition.connectMode === 'meta_oauth') {
     const appId = process.env.META_APP_ID?.trim();
-    const appSecret = process.env.META_APP_SECRET?.trim();
-    if (!appId || !appSecret) {
-      return NextResponse.redirect(new URL('/connections?error=meta_not_configured', appUrl));
-    }
     const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
     const url = new URL(`https://www.facebook.com/${version}/dialog/oauth`);
-    url.searchParams.set('client_id', appId);
+    url.searchParams.set('client_id', appId || '');
     url.searchParams.set('redirect_uri', callbackUrl);
     url.searchParams.set('state', state);
     url.searchParams.set('scope', metaScopes(provider));
@@ -44,12 +46,8 @@ export async function GET(request: Request, context: { params: Promise<{ provide
     destination = url.toString();
   } else {
     const appId = process.env.TIKTOK_APP_ID?.trim();
-    const appSecret = process.env.TIKTOK_APP_SECRET?.trim();
-    if (!appId || !appSecret) {
-      return NextResponse.redirect(new URL('/connections?error=tiktok_not_configured', appUrl));
-    }
     const url = new URL('https://business-api.tiktok.com/portal/auth');
-    url.searchParams.set('app_id', appId);
+    url.searchParams.set('app_id', appId || '');
     url.searchParams.set('state', state);
     url.searchParams.set('redirect_uri', callbackUrl);
     destination = url.toString();

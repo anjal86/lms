@@ -24,6 +24,11 @@ const remotePatterns = [
   { protocol: 'https', hostname: 'api.dicebear.com' },
   { protocol: 'https', hostname: 'ui-avatars.com' },
   { protocol: 'https', hostname: '**.supabase.co' },
+  { protocol: 'https', hostname: '**.fbcdn.net' },
+  { protocol: 'https', hostname: '**.fbsbx.com' },
+  { protocol: 'https', hostname: '**.facebook.com' },
+  { protocol: 'https', hostname: '**.cdninstagram.com' },
+  { protocol: 'https', hostname: '**.instagram.com' },
 ];
 
 if (supabaseUrl && !supabaseUrl.hostname.endsWith('.supabase.co')) {
@@ -49,12 +54,32 @@ const nextConfig = {
       'https://api.dicebear.com',
       'https://ui-avatars.com',
       'https://*.supabase.co',
+      'https://*.fbcdn.net',
+      'https://*.fbsbx.com',
+      'https://*.facebook.com',
+      'https://*.cdninstagram.com',
+      'https://*.instagram.com',
+      'https://*.whatsapp.net',
+      'https://*.tiktokcdn.com',
+      supabaseOrigin,
+    ].filter(Boolean);
+    const mediaSources = [
+      "'self'",
+      'blob:',
+      'data:',
+      'https://*.fbcdn.net',
+      'https://*.fbsbx.com',
+      'https://cdn.fbsbx.com',
+      'https://*.cdninstagram.com',
+      'https://*.whatsapp.net',
       supabaseOrigin,
     ].filter(Boolean);
     const connectSources = [
       "'self'",
       'https://*.supabase.co',
       'wss://*.supabase.co',
+      'https://*.fbcdn.net',
+      'https://*.fbsbx.com',
       'http://localhost:8000',
       'ws://localhost:8000',
       supabaseOrigin,
@@ -76,7 +101,7 @@ const nextConfig = {
       `img-src ${[...new Set(imgSources)].join(' ')}`,
       "font-src 'self' data:",
       `connect-src ${[...new Set(connectSources)].join(' ')}`,
-      "media-src 'self' blob:",
+      `media-src ${[...new Set(mediaSources)].join(' ')}`,
     ].join('; ');
 
     return [{

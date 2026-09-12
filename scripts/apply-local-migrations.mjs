@@ -1,12 +1,39 @@
+import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
+function parseEnvFile(path) {
+  if (!fs.existsSync(path)) return {};
+  const result = {};
+  for (const rawLine of fs.readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const index = line.indexOf('=');
+    if (index < 1) continue;
+    const key = line.slice(0, index).trim();
+    let value = line.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+const env = {
+  ...parseEnvFile('.env'),
+  ...parseEnvFile('.env.local'),
+  ...process.env,
+};
+
 const dbContainer = 'travel-lms-db';
-const database = process.env.POSTGRES_DB || 'postgres';
+const database = env.POSTGRES_DB || 'postgres';
+const postgresPassword = env.POSTGRES_PASSWORD;
 
 function dockerPsql(args, options = {}) {
+  const envArgs = postgresPassword ? ['-e', `PGPASSWORD=${postgresPassword}`] : [];
   return execFileSync(
     'docker',
-    ['exec', dbContainer, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'supabase_admin', '-d', database, ...args],
+    ['exec', ...envArgs, dbContainer, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'supabase_admin', '-d', database, ...args],
     { encoding: 'utf8', stdio: options.stdio || ['ignore', 'pipe', 'pipe'] }
   );
 }
@@ -52,6 +79,10 @@ const migrations = [
   {
     file: '202609120013_omnichannel_integrations.sql',
     applied: () => exists("select to_regclass('public.integration_connections') is not null and to_regclass('public.lead_messages') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='source_channel')"),
+  },
+  {
+    file: '202609120014_inbox_and_lead_conversion.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='lead_id' and is_nullable='YES') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='customer_name')"),
   },
 ];
 

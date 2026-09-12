@@ -26,6 +26,7 @@ export type NormalizedChannelLead = {
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   message?: {
     externalMessageId?: string | null;
+    direction?: 'inbound' | 'outbound';
     type?: string | null;
     body?: string | null;
     sentAt?: string | null;
@@ -87,25 +88,25 @@ async function findExistingLead(input: NormalizedChannelLead) {
   return null;
 }
 
-async function saveMessage(leadId: string, input: NormalizedChannelLead) {
-  if (!input.message) return;
+async function saveMessage(leadId: string | null, input: NormalizedChannelLead) {
+  if (!input.message) return null;
   const admin = createSupabaseAdminClient();
   let conversationId: string | null = null;
 
   if (input.externalThreadId) {
     const { data } = await admin
       .from('lead_conversations')
-      .select('id')
+      .select('id,unread_count')
       .eq('provider', input.provider)
       .eq('external_thread_id', input.externalThreadId)
       .maybeSingle();
     conversationId = data?.id || null;
   }
 
-  if (!conversationId) {
+  if (!conversationId && leadId) {
     const { data } = await admin
       .from('lead_conversations')
-      .select('id')
+      .select('id,unread_count')
       .eq('lead_id', leadId)
       .eq('provider', input.provider)
       .order('last_message_at', { ascending: false })
@@ -115,36 +116,72 @@ async function saveMessage(leadId: string, input: NormalizedChannelLead) {
   }
 
   const sentAt = input.message.sentAt || new Date().toISOString();
+  const preview = input.message.body?.slice(0, 180) || (input.message.type ? `[${input.message.type}]` : null);
+  const customerName = input.customerName?.trim() || `${input.sourceLabel || input.provider} User`;
+
+  const direction = input.message.direction || 'inbound';
+  const isOutbound = direction === 'outbound';
+  const avatarUrl = (input.metadata?.customer_avatar_url as string) || null;
+
   if (!conversationId) {
     const { data, error } = await admin
       .from('lead_conversations')
       .insert({
-        lead_id: leadId,
+        lead_id: leadId || null,
         connection_id: input.connectionId || null,
         provider: input.provider,
         external_thread_id: input.externalThreadId || null,
         external_contact_id: input.externalContactId || null,
+        customer_name: customerName,
+        customer_phone: input.customerPhone?.trim() || null,
+        customer_email: input.customerEmail?.trim() || null,
+        customer_avatar_url: avatarUrl,
+        last_message_preview: preview,
         status: 'open',
         last_message_at: sentAt,
+        unread_count: isOutbound ? 0 : 1,
       })
       .select('id')
       .single();
     if (error) throw error;
     conversationId = data.id;
   } else {
+    const patch: Record<string, unknown> = {
+      last_message_at: sentAt,
+      last_message_preview: preview,
+      status: 'open',
+    };
+    if (leadId) patch.lead_id = leadId;
+    if (input.customerName && input.customerName !== 'Messenger User' && input.customerName !== 'Instagram User') {
+      patch.customer_name = input.customerName;
+    }
+    if (input.customerPhone) patch.customer_phone = input.customerPhone;
+    if (input.customerEmail) patch.customer_email = input.customerEmail;
+    if (avatarUrl) patch.customer_avatar_url = avatarUrl;
+
+    if (!isOutbound) {
+      // Increment unread count for inbound messages
+      const { data: cur } = await admin
+        .from('lead_conversations')
+        .select('unread_count')
+        .eq('id', conversationId)
+        .single();
+      patch.unread_count = (cur?.unread_count || 0) + 1;
+    }
+
     await admin
       .from('lead_conversations')
-      .update({ last_message_at: sentAt, status: 'open' })
+      .update(patch)
       .eq('id', conversationId);
   }
 
   const { error: messageError } = await admin.from('lead_messages').insert({
     conversation_id: conversationId,
-    lead_id: leadId,
+    lead_id: leadId || null,
     connection_id: input.connectionId || null,
     provider: input.provider,
     external_message_id: input.message.externalMessageId || null,
-    direction: 'inbound',
+    direction,
     message_type: input.message.type || 'text',
     body: input.message.body || null,
     metadata: input.message.metadata || {},
@@ -152,27 +189,36 @@ async function saveMessage(leadId: string, input: NormalizedChannelLead) {
   });
   if (messageError && messageError.code !== '23505') throw messageError;
 
-  await admin.from('activity_logs').insert({
-    lead_id: leadId,
-    activity_type: activityType(input.provider),
-    title: `${input.sourceLabel || input.provider} message received`,
-    notes: input.message.body || `Inbound ${input.message.type || 'message'} received.`,
-    metadata: {
-      provider: input.provider,
-      external_message_id: input.message.externalMessageId || null,
-      external_thread_id: input.externalThreadId || null,
-    },
-  });
+  if (leadId) {
+    await admin.from('activity_logs').insert({
+      lead_id: leadId,
+      activity_type: activityType(input.provider),
+      title: isOutbound
+        ? `${input.sourceLabel || input.provider} reply sent (Meta Business Suite)`
+        : `${input.sourceLabel || input.provider} message received`,
+      notes: input.message.body || `${isOutbound ? 'Outbound' : 'Inbound'} ${input.message.type || 'message'}.`,
+      metadata: {
+        provider: input.provider,
+        direction,
+        external_message_id: input.message.externalMessageId || null,
+        external_thread_id: input.externalThreadId || null,
+      },
+    });
 
-  await admin
-    .from('leads')
-    .update({ last_contacted_at: sentAt, last_activity_type: activityType(input.provider) })
-    .eq('id', leadId);
+    await admin
+      .from('leads')
+      .update({ last_contacted_at: sentAt, last_activity_type: activityType(input.provider) })
+      .eq('id', leadId);
+  }
+
+  return conversationId;
 }
 
 export async function ingestNormalizedLead(input: NormalizedChannelLead): Promise<IngestionResult> {
   const admin = createSupabaseAdminClient();
   const now = new Date().toISOString();
+
+  const isPureMessage = Boolean(input.message) && (input.eventType === 'message' || !input.externalLeadId);
 
   const { data: event, error: eventError } = await admin
     .from('inbound_channel_events')
@@ -180,7 +226,7 @@ export async function ingestNormalizedLead(input: NormalizedChannelLead): Promis
       connection_id: input.connectionId || null,
       provider: input.provider,
       external_event_id: input.externalEventId,
-      event_type: input.eventType || (input.message ? 'message' : 'lead'),
+      event_type: input.eventType || (isPureMessage ? 'message' : 'lead'),
       status: 'received',
       payload: input.metadata || {},
       received_at: now,
@@ -209,7 +255,9 @@ export async function ingestNormalizedLead(input: NormalizedChannelLead): Promis
     let created = false;
     let routed = Boolean(lead?.assigned_to);
 
-    if (!lead) {
+    // If this is a message and no existing lead exists, do NOT automatically create a lead.
+    // Instead, start/update a Conversation in the Inbox so agents can qualify and convert.
+    if (!lead && !isPureMessage) {
       const externalId = input.externalLeadId || input.externalEventId;
       const fallbackPhone = input.customerPhone?.trim() || `${input.provider}:${input.externalContactId || externalId}`;
       const payload = {
@@ -288,12 +336,13 @@ export async function ingestNormalizedLead(input: NormalizedChannelLead): Promis
       }
     }
 
-    if (!lead) throw new Error('Lead could not be resolved after ingestion.');
-    await saveMessage(lead.id, input);
+    if (input.message) {
+      await saveMessage(lead?.id || null, input);
+    }
 
     await admin
       .from('inbound_channel_events')
-      .update({ status: 'processed', lead_id: lead.id, processed_at: new Date().toISOString() })
+      .update({ status: 'processed', lead_id: lead?.id || null, processed_at: new Date().toISOString() })
       .eq('id', event.id);
 
     if (input.connectionId) {

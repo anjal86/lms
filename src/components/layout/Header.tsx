@@ -22,6 +22,7 @@ import {
   BarChart3,
   Trophy,
   MessageSquareQuote,
+  MessageSquare,
   Settings,
   LogOut,
   LayoutDashboard,
@@ -53,12 +54,14 @@ export default function Header() {
   const mobileNavItems = isAgent
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
+        { label: 'Inbox', href: '/inbox', icon: MessageSquare },
         { label: 'My Work', href: '/my-work', icon: ListChecks },
         { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock },
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
       ]
     : [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
+        { label: 'Inbox', href: '/inbox', icon: MessageSquare },
         { label: 'All Leads', href: '/leads', icon: Kanban },
         { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
         { label: 'Team', href: '/team', icon: Users },

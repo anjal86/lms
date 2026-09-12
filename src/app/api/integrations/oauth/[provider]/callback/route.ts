@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider, type IntegrationProvider } from '@/lib/integrations/catalog';
+import { integrationEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
 import { encryptIntegrationSecret, encryptSecretPayload } from '@/lib/integrations/secrets';
 
 export const runtime = 'nodejs';
@@ -298,8 +299,12 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   const { provider: rawProvider } = await context.params;
   const provider = rawProvider as IntegrationProvider;
   const definition = getProvider(provider);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || new URL(request.url).origin;
+  const appUrl = publicAppUrl(request.url);
   if (!definition || !['meta_oauth', 'tiktok_oauth'].includes(definition.connectMode)) return redirectWith(appUrl, 'error', 'unsupported_provider');
+  const envStatus = integrationEnvStatus(definition);
+  if (!envStatus.configured) {
+    return redirectWith(appUrl, 'error', definition.connectMode === 'meta_oauth' ? 'meta_not_configured' : 'tiktok_not_configured');
+  }
 
   const url = new URL(request.url);
   const state = url.searchParams.get('state') || '';

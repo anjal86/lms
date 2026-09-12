@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { PROVIDERS, getProvider, providerConfigured } from '@/lib/integrations/catalog';
+import { getProvider } from '@/lib/integrations/catalog';
+import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,7 @@ async function getActor() {
   return { supabase, user, profile } as const;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getActor();
   if ('error' in actor) return actor.error;
 
@@ -43,16 +44,16 @@ export async function GET() {
     .select('id,provider,display_name,external_account_id,status,capabilities,config,last_sync_at,last_event_at,last_error,created_at,updated_at')
     .order('created_at', { ascending: true });
 
-  const catalog = PROVIDERS.map((provider) => ({
-    ...provider,
-    configured: providerConfigured(provider),
-  }));
+  const appUrl = publicAppUrl(request.url);
+  const catalog = integrationCatalogWithEnvStatus();
+  const setup = buildIntegrationSetup(appUrl);
 
   if (error) {
     if (error.code === '42P01' || error.message.toLowerCase().includes('integration_connections')) {
       return NextResponse.json({
         connections: [],
         catalog,
+        setup,
         migrationRequired: true,
         message: 'Apply the omnichannel database migration to enable connections.',
       });
@@ -61,7 +62,7 @@ export async function GET() {
     return NextResponse.json({ error: 'Unable to load connections.' }, { status: 500 });
   }
 
-  return NextResponse.json({ connections: data || [], catalog, migrationRequired: false });
+  return NextResponse.json({ connections: data || [], catalog, setup, migrationRequired: false });
 }
 
 export async function POST(request: Request) {
