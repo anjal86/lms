@@ -267,7 +267,7 @@ export default function InboxPage() {
   const searchParams = useSearchParams();
   const conversationIdParam = searchParams.get('conversationId');
 
-  const [filter, setFilter] = useState<'unconverted' | 'all' | 'has_phone' | 'mine' | 'converted'>('unconverted');
+  const [filter, setFilter] = useState<'unconverted' | 'all' | 'has_phone' | 'mine' | 'converted'>('all');
   const [providerFilter, setProviderFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -1222,7 +1222,6 @@ export default function InboxPage() {
                   </dl>
                 )}
 
-                {/* Lead Form Answers if from Facebook Lead Ads */}
                 {demographics?.formFields && demographics.formFields.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-dashed border-zinc-200">
                     <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-2">
