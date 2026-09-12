@@ -9,6 +9,8 @@ const ConvertToLeadSchema = z.object({
   customerName: z.string().trim().min(2).max(120).optional(),
   customerPhone: z.string().trim().min(3).max(60).optional(),
   customerEmail: z.string().trim().email().optional().or(z.literal('')),
+  customerCity: z.string().trim().max(120).optional().or(z.literal('')),
+  customerCountry: z.string().trim().max(120).optional().or(z.literal('')),
   destination: z.string().trim().min(2).max(120),
   travelDates: z.string().trim().max(120).optional().or(z.literal('')),
   budgetRange: z.string().trim().max(120).optional().or(z.literal('')),
@@ -71,10 +73,29 @@ export async function POST(
   const result = (data || {}) as ConversionResult;
   if (!result.lead?.id) return NextResponse.json({ error: 'Conversion did not return a lead.' }, { status: 500 });
 
+  let leadRecord = result.lead;
+
+  if (parsed.data.customerCity || parsed.data.customerCountry) {
+    const patch: Record<string, string | null> = {};
+    if (parsed.data.customerCity) patch.customer_city = parsed.data.customerCity;
+    if (parsed.data.customerCountry) patch.customer_country = parsed.data.customerCountry;
+
+    const { data: updatedLead } = await actor.supabase
+      .from('leads')
+      .update(patch)
+      .eq('id', leadRecord.id)
+      .select('*')
+      .maybeSingle();
+
+    if (updatedLead) {
+      leadRecord = updatedLead;
+    }
+  }
+
   return NextResponse.json({
-    lead: result.lead,
+    lead: leadRecord,
     conversationId: result.conversation_id || conversationId,
-    workspaceUrl: `/leads/${result.lead.id}/workspace`,
+    workspaceUrl: `/leads/${leadRecord.id}/workspace`,
     alreadyConverted: Boolean(result.already_converted),
   }, { status: result.already_converted ? 200 : 201 });
 }

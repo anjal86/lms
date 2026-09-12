@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
 import { fetchMetaCustomerProfile, type MetaCustomerProfile } from '@/lib/integrations/meta-profile';
+import { detectLocationFromText, type CustomerDemographics } from '@/lib/integrations/customer-profile';
 
 export type MetaSyncProvider = 'facebook' | 'instagram';
 
@@ -258,6 +259,25 @@ async function facebookThreads(input: {
     const updatedAt = typeof conversation.updated_time === 'string'
       ? new Date(conversation.updated_time).toISOString()
       : new Date().toISOString();
+
+    let threadDemographics: CustomerDemographics | null = profile?.demographics || null;
+    if (!threadDemographics?.city) {
+      for (const m of mapped) {
+        if (m.direction === 'inbound' && m.body) {
+          const detected = detectLocationFromText(m.body);
+          if (detected.city || detected.country) {
+            threadDemographics = {
+              ...(threadDemographics || {}),
+              city: threadDemographics?.city || detected.city,
+              country: threadDemographics?.country || detected.country,
+              inferredFromText: true,
+            };
+            break;
+          }
+        }
+      }
+    }
+
     threads.push({
       provider: 'facebook',
       connectionId: input.connectionId,
@@ -285,6 +305,7 @@ async function facebookThreads(input: {
         avatar_source: profile ? 'meta_profile' : null,
         avatar_synced_at: profile ? new Date().toISOString() : null,
         synced_at: new Date().toISOString(),
+        ...(threadDemographics ? { customer_profile: threadDemographics } : {}),
       },
       messages: mapped,
     });
@@ -372,6 +393,25 @@ async function instagramThreads(input: {
     const updatedAt = typeof conversation.updated_time === 'string'
       ? new Date(conversation.updated_time).toISOString()
       : new Date().toISOString();
+
+    let threadDemographics: CustomerDemographics | null = profile?.demographics || null;
+    if (!threadDemographics?.city) {
+      for (const m of mapped) {
+        if (m.direction === 'inbound' && m.body) {
+          const detected = detectLocationFromText(m.body);
+          if (detected.city || detected.country) {
+            threadDemographics = {
+              ...(threadDemographics || {}),
+              city: threadDemographics?.city || detected.city,
+              country: threadDemographics?.country || detected.country,
+              inferredFromText: true,
+            };
+            break;
+          }
+        }
+      }
+    }
+
     threads.push({
       provider: 'instagram',
       connectionId: input.connectionId,
@@ -394,6 +434,7 @@ async function instagramThreads(input: {
         avatar_source: profile ? 'meta_profile' : null,
         avatar_synced_at: profile ? new Date().toISOString() : null,
         synced_at: new Date().toISOString(),
+        ...(threadDemographics ? { customer_profile: threadDemographics } : {}),
       },
       messages: mapped,
     });

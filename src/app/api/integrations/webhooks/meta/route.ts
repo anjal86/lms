@@ -4,6 +4,12 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedLead } from '@/lib/integrations/ingest';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import {
+  extractLeadFormDemographics,
+  detectLocationFromText,
+  type CustomerDemographics,
+} from '@/lib/integrations/customer-profile';
+import { fetchMetaCustomerProfile } from '@/lib/integrations/meta-profile';
 
 export const runtime = 'nodejs';
 
@@ -124,6 +130,7 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
   }
 
   const fields = lead.field_data as Array<{ name?: string; values?: string[] }> | undefined;
+  const demographics = extractLeadFormDemographics(fields);
   const firstName = valueFor(fields, ['first_name', 'first name']);
   const lastName = valueFor(fields, ['last_name', 'last name']);
   const fullName = valueFor(fields, ['full_name', 'full name', 'name']) || [firstName, lastName].filter(Boolean).join(' ') || null;
@@ -137,6 +144,8 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
     customerName: fullName,
     customerPhone: valueFor(fields, ['phone_number', 'phone', 'mobile_number', 'mobile']),
     customerEmail: valueFor(fields, ['email', 'email_address']),
+    customerCity: demographics.city || null,
+    customerCountry: demographics.country || null,
     destination: valueFor(fields, ['destination', 'travel_destination', 'where_do_you_want_to_travel']),
     travelDates: valueFor(fields, ['travel_dates', 'travel_date', 'departure_date']),
     budgetRange: valueFor(fields, ['budget', 'budget_range', 'travel_budget']),
@@ -153,6 +162,7 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
       adset_id: lead.adset_id || value.adset_id || null,
       created_time: lead.created_time || value.created_time || null,
       field_data: fields || [],
+      customer_profile: demographics,
     },
   });
 }
@@ -182,23 +192,41 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
 
   let customerName: string | null = null;
   let customerAvatarUrl: string | null = null;
+  let demographics: CustomerDemographics | null = null;
   try {
     const token = await pageToken(connection.id, accountId);
     if (token) {
       const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
-      const profileUrl = new URL(`https://graph.facebook.com/${version}/${customerId}`);
-      profileUrl.searchParams.set('fields', 'first_name,last_name,name,profile_pic');
-      profileUrl.searchParams.set('access_token', token);
-      const { response, data: profile } = await metaFetchJson<Record<string, unknown>>(profileUrl, {}, { retries: 1 });
-      if (response.ok) {
-        customerName = typeof profile.name === 'string'
-          ? profile.name
-          : [profile.first_name, profile.last_name].filter((item) => typeof item === 'string').join(' ') || null;
-        customerAvatarUrl = typeof profile.profile_pic === 'string' ? profile.profile_pic : null;
+      const profile = await fetchMetaCustomerProfile({
+        provider,
+        customerId,
+        accountId,
+        token,
+        version,
+      });
+      if (profile) {
+        customerName = profile.name;
+        customerAvatarUrl = profile.avatarUrl;
+        if (profile.demographics) {
+          demographics = profile.demographics;
+        }
       }
     }
   } catch {
     // Profile lookup is optional and must never block message ingestion.
+  }
+
+  // Heuristic location extraction from text if direct profile details are missing
+  if (text) {
+    const detected = detectLocationFromText(text);
+    if (detected.city || detected.country) {
+      demographics = {
+        ...(demographics || {}),
+        city: demographics?.city || detected.city,
+        country: demographics?.country || detected.country,
+        inferredFromText: true,
+      };
+    }
   }
 
   const attachments = Array.isArray(message.attachments)
@@ -231,6 +259,8 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     externalContactId: customerId,
     customerName: customerName || `${provider === 'instagram' ? 'Instagram' : 'Messenger'} User`,
     customerPhone: `${provider}:${customerId}`,
+    customerCity: demographics?.city || null,
+    customerCountry: demographics?.country || null,
     destination: 'Not specified',
     sourceLabel: provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger',
     notes: isEcho ? 'Outbound message sent through Meta.' : 'Conversation started from an inbound social message.',
@@ -257,6 +287,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
       customer_id: customerId,
       is_echo: isEcho,
       customer_avatar_url: customerAvatarUrl,
+      ...(demographics ? { customer_profile: demographics } : {}),
     },
   });
 }

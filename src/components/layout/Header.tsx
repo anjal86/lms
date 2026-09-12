@@ -23,6 +23,7 @@ import {
   Trophy,
   MessageSquareQuote,
   MessageSquare,
+  Phone,
   Settings,
   LogOut,
   LayoutDashboard,
@@ -55,6 +56,7 @@ export default function Header() {
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         { label: 'Inbox', href: '/inbox', icon: MessageSquare },
+        { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
         { label: 'My Work', href: '/my-work', icon: ListChecks },
         { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock },
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
@@ -62,6 +64,7 @@ export default function Header() {
     : [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         { label: 'Inbox', href: '/inbox', icon: MessageSquare },
+        { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
         { label: 'All Leads', href: '/leads', icon: Kanban },
         { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
         { label: 'Team', href: '/team', icon: Users },

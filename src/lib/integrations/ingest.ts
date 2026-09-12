@@ -1,4 +1,5 @@
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { extractPhoneNumbers } from './phone-extractor';
 
 export type NormalizedChannelLead = {
   provider: string;
@@ -11,6 +12,8 @@ export type NormalizedChannelLead = {
   customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
+  customerCity?: string | null;
+  customerCountry?: string | null;
   destination?: string | null;
   travelDates?: string | null;
   budgetRange?: string | null;
@@ -113,6 +116,8 @@ async function createLeadFromChannel(input: NormalizedChannelLead) {
     customer_name: input.customerName?.trim() || `${input.sourceLabel || input.provider} inquiry`,
     customer_phone: fallbackPhone,
     customer_email: input.customerEmail?.trim() || null,
+    customer_city: input.customerCity?.trim() || null,
+    customer_country: input.customerCountry?.trim() || null,
     destination: input.destination?.trim() || 'Not specified',
     travel_dates: input.travelDates?.trim() || null,
     budget_range: input.budgetRange?.trim() || null,
@@ -308,6 +313,35 @@ export async function ingestNormalizedLead(input: NormalizedChannelLead): Promis
       if (!lead && messageResult.leadId) {
         lead = await loadLead(messageResult.leadId);
         routed = Boolean(lead?.assigned_to);
+      }
+
+      if (messageResult.conversationId && input.message.body && input.message.direction !== 'outbound') {
+        const detected = extractPhoneNumbers(input.message.body);
+        if (detected.length > 0) {
+          const { data: conv } = await admin
+            .from('lead_conversations')
+            .select('id, metadata, customer_phone, provider')
+            .eq('id', messageResult.conversationId)
+            .maybeSingle();
+          if (conv) {
+            const existingMetadata = (conv.metadata || {}) as Record<string, unknown>;
+            const existingPhones = Array.isArray(existingMetadata.detected_phones) ? existingMetadata.detected_phones as string[] : [];
+            const merged = Array.from(new Set([...detected, ...existingPhones]));
+            const patch: Record<string, unknown> = {
+              metadata: {
+                ...existingMetadata,
+                detected_phone: detected[0],
+                detected_phones: merged,
+                detected_phone_at: input.message.sentAt || new Date().toISOString(),
+                detected_phone_snippet: input.message.body.slice(0, 160),
+              },
+            };
+            if (!conv.customer_phone || conv.customer_phone.startsWith(`${conv.provider}:`)) {
+              patch.customer_phone = detected[0];
+            }
+            await admin.from('lead_conversations').update(patch).eq('id', conv.id);
+          }
+        }
       }
     }
 

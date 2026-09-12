@@ -9,6 +9,8 @@ const PatchConversationSchema = z.object({
   status: z.enum(['open', 'closed', 'archived']).optional(),
   assigned_to: z.string().uuid().nullable().optional(),
   mark_read: z.boolean().optional(),
+  customer_city: z.string().trim().max(120).optional().or(z.literal('')),
+  customer_country: z.string().trim().max(120).optional().or(z.literal('')),
 });
 
 export async function GET(
@@ -41,7 +43,7 @@ export async function GET(
       updated_at,
       converted_at,
       metadata,
-      lead:leads(id, lead_code, customer_name, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
+      lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
       assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role)
     `)
     .eq('id', id)
@@ -109,6 +111,34 @@ export async function PATCH(
   if (parsed.data.status !== undefined) patch.status = parsed.data.status;
   if (parsed.data.assigned_to !== undefined) patch.assigned_to = parsed.data.assigned_to;
   if (parsed.data.mark_read === true) patch.unread_count = 0;
+
+  if (parsed.data.customer_city !== undefined || parsed.data.customer_country !== undefined) {
+    const { data: currentConv } = await actor.supabase
+      .from('lead_conversations')
+      .select('metadata, lead_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (currentConv) {
+      const currentMeta = (currentConv.metadata || {}) as Record<string, unknown>;
+      const currentProfile = (currentMeta.customer_profile || {}) as Record<string, unknown>;
+      patch.metadata = {
+        ...currentMeta,
+        customer_profile: {
+          ...currentProfile,
+          ...(parsed.data.customer_city !== undefined ? { city: parsed.data.customer_city || null } : {}),
+          ...(parsed.data.customer_country !== undefined ? { country: parsed.data.customer_country || null } : {}),
+        },
+      };
+
+      if (currentConv.lead_id) {
+        const leadPatch: Record<string, string | null> = {};
+        if (parsed.data.customer_city !== undefined) leadPatch.customer_city = parsed.data.customer_city || null;
+        if (parsed.data.customer_country !== undefined) leadPatch.customer_country = parsed.data.customer_country || null;
+        await actor.supabase.from('leads').update(leadPatch).eq('id', currentConv.lead_id);
+      }
+    }
+  }
 
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });

@@ -13,6 +13,7 @@ import {
   Users,
   MessageSquareQuote,
   MessageSquare,
+  Phone,
   Settings,
   History,
   LogOut,
@@ -89,6 +90,7 @@ export default function Sidebar() {
   const agentItems: NavItem[] = [
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' },
+    { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' },
     { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' },
     { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' },
     { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' },
@@ -97,6 +99,7 @@ export default function Sidebar() {
   const workItems: NavItem[] = [
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' },
+    { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' },
     { label: 'All Leads', href: '/leads', icon: Kanban, tone: 'cyan' },
     { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' },
     { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },

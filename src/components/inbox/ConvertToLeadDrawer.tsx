@@ -23,6 +23,7 @@ export type ConversationForConversion = {
   customer_email?: string | null;
   last_message_preview?: string | null;
   assigned_to?: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 interface ConvertToLeadDrawerProps {
@@ -30,6 +31,7 @@ interface ConvertToLeadDrawerProps {
   onClose: () => void;
   conversation: ConversationForConversion | null;
   onConverted: (lead: { id: string; customer_name: string; destination: string }) => void;
+  initialPhone?: string | null;
 }
 
 export default function ConvertToLeadDrawer({
@@ -37,6 +39,7 @@ export default function ConvertToLeadDrawer({
   onClose,
   conversation,
   onConverted,
+  initialPhone,
 }: ConvertToLeadDrawerProps) {
   useDialog({ isOpen, onClose });
   const { allProfiles, currentUser, showToast } = useApp();
@@ -44,6 +47,9 @@ export default function ConvertToLeadDrawer({
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
+  const [customerCity, setCustomerCity] = useState('');
+  const [customerCountry, setCustomerCountry] = useState('');
+  const [detectedLocationLabel, setDetectedLocationLabel] = useState<string | null>(null);
   const [destination, setDestination] = useState('');
   const [travelDates, setTravelDates] = useState('');
   const [budgetRange, setBudgetRange] = useState('$2,000 - $3,500');
@@ -59,8 +65,21 @@ export default function ConvertToLeadDrawer({
   useEffect(() => {
     if (conversation && isOpen) {
       setCustomerName(conversation.customer_name || 'Traveler');
-      setCustomerPhone(conversation.customer_phone?.startsWith(`${conversation.provider}:`) ? '' : (conversation.customer_phone || ''));
+      const fallbackPhone = conversation.customer_phone?.startsWith(`${conversation.provider}:`) ? '' : (conversation.customer_phone || '');
+      setCustomerPhone(initialPhone || fallbackPhone);
       setCustomerEmail(conversation.customer_email || '');
+
+      const profile = (conversation.metadata as Record<string, unknown> | undefined)?.customer_profile as Record<string, unknown> | undefined;
+      const detectedCity = typeof profile?.city === 'string' ? profile.city : '';
+      const detectedCountry = typeof profile?.country === 'string' ? profile.country : '';
+      setCustomerCity(detectedCity);
+      setCustomerCountry(detectedCountry);
+      if (detectedCity || detectedCountry) {
+        setDetectedLocationLabel([detectedCity, detectedCountry].filter(Boolean).join(', '));
+      } else {
+        setDetectedLocationLabel(null);
+      }
+
       setDestination('');
       setTravelDates('');
       setBudgetRange('$2,000 - $3,500');
@@ -71,7 +90,7 @@ export default function ConvertToLeadDrawer({
       setNotes(conversation.last_message_preview ? `Inquiry snippet: "${conversation.last_message_preview}"` : '');
       setError(null);
     }
-  }, [conversation, isOpen, currentUser]);
+  }, [conversation, isOpen, currentUser, initialPhone]);
 
   if (!isOpen || !conversation) return null;
 
@@ -93,6 +112,8 @@ export default function ConvertToLeadDrawer({
           customerName: customerName.trim() || 'Traveler',
           customerPhone: customerPhone.trim() || `${conversation.provider}:${conversation.id.slice(0, 8)}`,
           customerEmail: customerEmail.trim() || undefined,
+          customerCity: customerCity.trim() || undefined,
+          customerCountry: customerCountry.trim() || undefined,
           destination: destination.trim(),
           travelDates: travelDates.trim() || undefined,
           budgetRange: budgetRange.trim() || undefined,
@@ -169,11 +190,11 @@ export default function ConvertToLeadDrawer({
             <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5 text-xs">
               {/* Customer Info Section */}
               <div className="space-y-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                   Traveler Contact
                 </div>
                 <div>
-                  <label htmlFor="drawer-customer-name" className="mb-1 block font-medium text-zinc-700">
+                  <label htmlFor="drawer-customer-name" className="mb-1 block font-semibold text-zinc-800">
                     Full Name <span className="text-red-500">*</span>
                   </label>
                   <input
@@ -182,27 +203,32 @@ export default function ConvertToLeadDrawer({
                     required
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     placeholder="e.g. Liam Smith"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="drawer-customer-phone" className="mb-1 block font-medium text-zinc-700">
-                      Phone Number
+                    <label htmlFor="drawer-customer-phone" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
+                      <span>Phone Number</span>
+                      {initialPhone && (
+                        <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                          From chat
+                        </span>
+                      )}
                     </label>
                     <input
                       id="drawer-customer-phone"
                       type="text"
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="h-9 w-full font-mono rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className={`h-9 w-full font-mono rounded-md border ${initialPhone ? 'border-emerald-400 bg-emerald-50/20' : 'border-zinc-200 bg-white'} px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950`}
                       placeholder="+1 555 0192"
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-customer-email" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-customer-email" className="mb-1 block font-semibold text-zinc-800">
                       Email Address
                     </label>
                     <input
@@ -210,8 +236,47 @@ export default function ConvertToLeadDrawer({
                       type="email"
                       value={customerEmail}
                       onChange={(e) => setCustomerEmail(e.target.value)}
-                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                       placeholder="liam@example.com"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="drawer-customer-city" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
+                      <span>City / Town</span>
+                      {detectedLocationLabel && customerCity && (
+                        <span className="rounded bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700">
+                          Detected
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      id="drawer-customer-city"
+                      type="text"
+                      value={customerCity}
+                      onChange={(e) => setCustomerCity(e.target.value)}
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      placeholder="e.g. Kathmandu, Austin"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="drawer-customer-country" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
+                      <span>Country</span>
+                      {detectedLocationLabel && customerCountry && (
+                        <span className="rounded bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700">
+                          Detected
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      id="drawer-customer-country"
+                      type="text"
+                      value={customerCountry}
+                      onChange={(e) => setCustomerCountry(e.target.value)}
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      placeholder="e.g. Nepal, USA, India"
                     />
                   </div>
                 </div>
@@ -219,23 +284,23 @@ export default function ConvertToLeadDrawer({
 
               {/* Trip Requirements Section */}
               <div className="space-y-3 pt-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                   Trip Details
                 </div>
 
                 <div>
-                  <label htmlFor="drawer-destination" className="mb-1 block font-medium text-zinc-700">
+                  <label htmlFor="drawer-destination" className="mb-1 block font-semibold text-zinc-800">
                     Destination <span className="text-red-500">*</span>
                   </label>
                   <div className="relative">
-                    <MapPin className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                    <MapPin className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                     <input
                       id="drawer-destination"
                       type="text"
                       required
                       value={destination}
                       onChange={(e) => setDestination(e.target.value)}
-                      className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                       placeholder="e.g. Japan Cherry Blossom, Maldives, Swiss Alps"
                     />
                   </div>
@@ -243,33 +308,33 @@ export default function ConvertToLeadDrawer({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="drawer-travel-dates" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-travel-dates" className="mb-1 block font-semibold text-zinc-800">
                       Travel Dates
                     </label>
                     <div className="relative">
-                      <Calendar className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                      <Calendar className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                       <input
                         id="drawer-travel-dates"
                         type="text"
                         value={travelDates}
                         onChange={(e) => setTravelDates(e.target.value)}
-                        className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                        className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                         placeholder="Oct 2026 / Flexible"
                       />
                     </div>
                   </div>
                   <div>
-                    <label htmlFor="drawer-budget" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-budget" className="mb-1 block font-semibold text-zinc-800">
                       Budget Range
                     </label>
                     <div className="relative">
-                      <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                      <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                       <input
                         id="drawer-budget"
                         type="text"
                         value={budgetRange}
                         onChange={(e) => setBudgetRange(e.target.value)}
-                        className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                        className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                         placeholder="$3,000 - $5,000"
                       />
                     </div>
@@ -278,7 +343,7 @@ export default function ConvertToLeadDrawer({
 
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label htmlFor="drawer-adults" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-adults" className="mb-1 block font-semibold text-zinc-800">
                       Adults
                     </label>
                     <input
@@ -288,11 +353,11 @@ export default function ConvertToLeadDrawer({
                       max={50}
                       value={paxAdults}
                       onChange={(e) => setPaxAdults(Number(e.target.value))}
-                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-children" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-children" className="mb-1 block font-semibold text-zinc-800">
                       Children
                     </label>
                     <input
@@ -302,18 +367,18 @@ export default function ConvertToLeadDrawer({
                       max={30}
                       value={paxChildren}
                       onChange={(e) => setPaxChildren(Number(e.target.value))}
-                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-priority" className="mb-1 block font-medium text-zinc-700">
+                    <label htmlFor="drawer-priority" className="mb-1 block font-semibold text-zinc-800">
                       Priority
                     </label>
                     <select
                       id="drawer-priority"
                       value={priority}
                       onChange={(e) => setPriority(e.target.value as any)}
-                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                      className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     >
                       <option value="low">Low</option>
                       <option value="normal">Normal</option>
@@ -326,19 +391,19 @@ export default function ConvertToLeadDrawer({
 
               {/* Assignment & Notes Section */}
               <div className="space-y-3 pt-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                   Routing & Notes
                 </div>
 
                 <div>
-                  <label htmlFor="drawer-assign-to" className="mb-1 block font-medium text-zinc-700">
+                  <label htmlFor="drawer-assign-to" className="mb-1 block font-semibold text-zinc-800">
                     Assign To Travel Agent
                   </label>
                   <select
                     id="drawer-assign-to"
                     value={assignedTo}
                     onChange={(e) => setAssignedTo(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                   >
                     <option value="">Unassigned (Queue / Pool)</option>
                     {activeAgents.map((profile) => (

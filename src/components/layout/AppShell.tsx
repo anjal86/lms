@@ -75,13 +75,25 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const isInbox = pathname === '/inbox';
+
   return (
     <div className="app-shell flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main id="main-content" tabIndex={-1} className="app-main">
-          <div className="app-page-frame">{children}</div>
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={
+            isInbox
+              ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden p-2 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-3 md:pb-3 lg:p-4 lg:pb-4 bg-zinc-100/70'
+              : 'app-main'
+          }
+        >
+          <div className={isInbox ? 'h-full w-full min-w-0 overflow-hidden' : 'app-page-frame'}>
+            {children}
+          </div>
         </main>
         <MobileBottomNav />
       </div>
