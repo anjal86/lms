@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, KeyRound, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import AuthShell from '@/components/auth/AuthShell';
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -51,46 +53,96 @@ export default function ResetPasswordPage() {
     }
   };
 
+  if (success) {
+    return (
+      <AuthShell
+        eyebrow="Password updated"
+        title="You’re all set"
+        description="Your recovery session has been signed out for security. Sign in again with your new password."
+      >
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+          <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+          <p className="mt-3 text-sm leading-6 text-emerald-900">Your password was changed successfully.</p>
+        </div>
+        <Link href="/login" className="button-primary mt-5 w-full">Return to sign in</Link>
+      </AuthShell>
+    );
+  }
+
+  const passwordLengthOk = password.length >= 12;
+  const passwordsMatch = confirm.length > 0 && password === confirm;
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-4 text-zinc-100">
-      <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-2xl">
-        {success ? (
-          <div className="text-center">
-            <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-400" />
-            <h1 className="mt-3 text-xl font-semibold">Password updated</h1>
-            <p className="mt-2 text-xs leading-5 text-zinc-400">Your recovery session has been signed out. Sign in again with the new password.</p>
-            <Link href="/login" className="mt-5 inline-flex rounded-md bg-white px-4 py-2.5 text-sm font-semibold text-zinc-950">Return to sign in</Link>
+    <AuthShell
+      eyebrow="Secure recovery"
+      title="Choose a new password"
+      description="Create a strong password for your agency account. You’ll sign in again after the update."
+      footer={
+        !ready ? (
+          <Link href="/forgot-password" className="font-medium text-blue-600 transition hover:text-blue-700">Request a new recovery link</Link>
+        ) : undefined
+      }
+    >
+      <form onSubmit={submit} className="space-y-5">
+        <div>
+          <label htmlFor="password" className="mb-2 block text-sm font-medium text-zinc-700">New password</label>
+          <div className="relative">
+            <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <input
+              id="password"
+              type={showPassword ? 'text' : 'password'}
+              autoComplete="new-password"
+              required
+              minLength={12}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="field pl-10 pr-11"
+              placeholder="At least 12 characters"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((value) => !value)}
+              className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
           </div>
-        ) : (
-          <>
-            <div className="mb-5">
-              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-1 text-[11px] text-zinc-400">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" /> Recovery session
-              </div>
-              <h1 className="text-xl font-semibold tracking-tight">Choose a new password</h1>
-              <p className="mt-1.5 text-xs leading-5 text-zinc-400">Use at least 12 characters. Avoid reusing a password from another service.</p>
+          <div className={`mt-2 text-xs ${passwordLengthOk ? 'text-emerald-600' : 'text-zinc-400'}`}>
+            {passwordLengthOk ? '✓ Password length is good' : 'Use 12 or more characters'}
+          </div>
+        </div>
+
+        <div>
+          <label htmlFor="confirm" className="mb-2 block text-sm font-medium text-zinc-700">Confirm password</label>
+          <input
+            id="confirm"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="new-password"
+            required
+            minLength={12}
+            value={confirm}
+            onChange={(event) => setConfirm(event.target.value)}
+            className="field"
+            placeholder="Repeat your new password"
+          />
+          {confirm.length > 0 && (
+            <div className={`mt-2 text-xs ${passwordsMatch ? 'text-emerald-600' : 'text-red-600'}`}>
+              {passwordsMatch ? '✓ Passwords match' : 'Passwords do not match yet'}
             </div>
-            <form onSubmit={submit} className="space-y-4">
-              <div>
-                <label htmlFor="password" className="mb-1.5 block text-[11px] font-medium text-zinc-300">New password</label>
-                <div className="relative">
-                  <KeyRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-                  <input id="password" type="password" autoComplete="new-password" required minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} className="w-full rounded-md border border-zinc-700 bg-zinc-950 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-zinc-500" />
-                </div>
-              </div>
-              <div>
-                <label htmlFor="confirm" className="mb-1.5 block text-[11px] font-medium text-zinc-300">Confirm password</label>
-                <input id="confirm" type="password" autoComplete="new-password" required minLength={12} value={confirm} onChange={(event) => setConfirm(event.target.value)} className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-zinc-500" />
-              </div>
-              {error && <div role="alert" className="rounded-md border border-red-900 bg-red-950/50 px-3 py-2 text-xs text-red-300">{error}</div>}
-              <button type="submit" disabled={!ready || loading} className="w-full rounded-md bg-white py-2.5 text-sm font-semibold text-zinc-950 disabled:opacity-50">
-                {loading ? 'Updating…' : 'Update password'}
-              </button>
-              {!ready && <Link href="/forgot-password" className="block text-center text-xs text-zinc-400 hover:text-white">Request a new recovery link</Link>}
-            </form>
-          </>
+          )}
+        </div>
+
+        {error && (
+          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">
+            {error}
+          </div>
         )}
-      </div>
-    </main>
+
+        <button type="submit" disabled={!ready || loading} className="button-primary w-full">
+          {loading ? 'Updating password…' : 'Update password'}
+        </button>
+      </form>
+    </AuthShell>
   );
 }
