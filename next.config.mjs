@@ -47,9 +47,7 @@ const nextConfig = {
   images: { remotePatterns },
   async headers() {
     const imgSources = [
-      "'self'",
-      'data:',
-      'blob:',
+      "'self'", 'data:', 'blob:',
       'https://images.unsplash.com',
       'https://api.dicebear.com',
       'https://ui-avatars.com',
@@ -64,9 +62,7 @@ const nextConfig = {
       supabaseOrigin,
     ].filter(Boolean);
     const mediaSources = [
-      "'self'",
-      'blob:',
-      'data:',
+      "'self'", 'blob:', 'data:',
       'https://*.fbcdn.net',
       'https://*.fbsbx.com',
       'https://cdn.fbsbx.com',
@@ -80,14 +76,11 @@ const nextConfig = {
       'wss://*.supabase.co',
       'https://*.fbcdn.net',
       'https://*.fbsbx.com',
-      'http://localhost:8000',
-      'ws://localhost:8000',
       supabaseOrigin,
       supabaseWsOrigin,
+      ...(isDev ? ['http://localhost:8000', 'ws://localhost:8000'] : []),
     ].filter(Boolean);
 
-    // React/Turbopack use eval() for development-only debugging features.
-    // Keep unsafe-eval out of production CSP.
     const scriptSources = ["'self'", "'unsafe-inline'", ...(isDev ? ["'unsafe-eval'"] : [])];
 
     const csp = [
@@ -97,6 +90,7 @@ const nextConfig = {
       "form-action 'self'",
       "object-src 'none'",
       `script-src ${scriptSources.join(' ')}`,
+      "script-src-attr 'none'",
       "style-src 'self' 'unsafe-inline'",
       `img-src ${[...new Set(imgSources)].join(' ')}`,
       "font-src 'self' data:",

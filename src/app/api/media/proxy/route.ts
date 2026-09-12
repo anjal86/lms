@@ -1,94 +1,105 @@
 import { NextResponse } from 'next/server';
+import { isAllowedMediaContentType, validateRemoteMediaUrl } from '@/lib/security/media-proxy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_HOST_PATTERNS = [
-  /fbcdn\.net$/i,
-  /fbsbx\.com$/i,
-  /facebook\.com$/i,
-  /cdninstagram\.com$/i,
-  /instagram\.com$/i,
-  /whatsapp\.net$/i,
-  /tiktokcdn\.com$/i,
-  /unsplash\.com$/i,
-  /dicebear\.com$/i,
-  /ui-avatars\.com$/i,
-];
+const MAX_REDIRECTS = 3;
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+const RANGE_PATTERN = /^bytes=\d*-\d*$/i;
 
-function isAllowedHost(host: string): boolean {
-  return ALLOWED_HOST_PATTERNS.some((pattern) => pattern.test(host));
+async function fetchValidatedMedia(initialUrl: URL, rangeHeader: string | null) {
+  let current = initialUrl;
+
+  for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
+    const headers: HeadersInit = {
+      Accept: 'image/*,audio/*,video/*,application/pdf,application/octet-stream;q=0.9,*/*;q=0.1',
+      'User-Agent': 'Travel-LMS-Media-Proxy/1.0',
+    };
+    if (rangeHeader && RANGE_PATTERN.test(rangeHeader)) headers.Range = rangeHeader;
+
+    const response = await fetch(current, {
+      headers,
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(12_000),
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location || redirectCount === MAX_REDIRECTS) throw new Error('Media redirect was rejected.');
+      current = await validateRemoteMediaUrl(new URL(location, current).toString());
+      continue;
+    }
+
+    return response;
+  }
+
+  throw new Error('Too many media redirects.');
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const targetUrl = searchParams.get('url');
-
-  if (!targetUrl) {
-    return new NextResponse('Missing url parameter', { status: 400 });
-  }
+  const targetUrl = new URL(request.url).searchParams.get('url');
+  if (!targetUrl) return new NextResponse('Missing url parameter', { status: 400 });
 
   let parsed: URL;
   try {
-    parsed = new URL(targetUrl);
+    parsed = await validateRemoteMediaUrl(targetUrl);
   } catch {
-    return new NextResponse('Invalid url parameter', { status: 400 });
+    return new NextResponse('Media URL is not allowed', { status: 403 });
   }
 
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return new NextResponse('Invalid protocol', { status: 400 });
-  }
-
-  // Security: prevent SSRF and internal network probing
-  if (!isAllowedHost(parsed.hostname)) {
-    return new NextResponse('Host not allowed for proxy', { status: 403 });
+  const requestedRange = request.headers.get('range');
+  if (requestedRange && !RANGE_PATTERN.test(requestedRange)) {
+    return new NextResponse('Invalid Range header', { status: 416 });
   }
 
   try {
-    const rangeHeader = request.headers.get('range');
-    const upstreamHeaders: HeadersInit = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      'Accept': '*/*',
-    };
-    if (rangeHeader) {
-      upstreamHeaders['Range'] = rangeHeader;
+    const upstream = await fetchValidatedMedia(parsed, requestedRange);
+    if (!upstream.ok && upstream.status !== 206) {
+      console.warn('Media proxy upstream failed:', upstream.status, parsed.hostname);
+      return new NextResponse('Media unavailable', { status: upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502 });
     }
 
-    const upstream = await fetch(parsed.toString(), {
-      headers: upstreamHeaders,
-      cache: 'no-store',
-    });
+    const contentType = upstream.headers.get('content-type');
+    if (!isAllowedMediaContentType(contentType)) {
+      return new NextResponse('Unsupported media type', { status: 415 });
+    }
 
-    if (!upstream.ok && upstream.status !== 304 && upstream.status !== 206) {
-      console.warn('Proxy upstream failed:', upstream.status, parsed.hostname);
-      return new NextResponse(`Upstream failed: ${upstream.status}`, { status: upstream.status });
+    const contentLength = Number(upstream.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_MEDIA_BYTES) {
+      return new NextResponse('Media is too large', { status: 413 });
     }
 
     const responseHeaders = new Headers();
-    const forwardHeaders = [
-      'content-type',
-      'content-length',
-      'content-range',
-      'accept-ranges',
-      'etag',
-      'last-modified',
-    ];
-
-    for (const h of forwardHeaders) {
-      const val = upstream.headers.get(h);
-      if (val) responseHeaders.set(h, val);
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+      const value = upstream.headers.get(header);
+      if (value) responseHeaders.set(header, value);
     }
+    responseHeaders.set('Cache-Control', 'private, max-age=3600, stale-while-revalidate=86400');
+    responseHeaders.set('Cross-Origin-Resource-Policy', 'same-origin');
+    responseHeaders.set('Referrer-Policy', 'no-referrer');
+    responseHeaders.set('X-Content-Type-Options', 'nosniff');
+    responseHeaders.set('Vary', 'Range');
 
-    // Cache media on the client for 24 hours
-    responseHeaders.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-    responseHeaders.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    let streamedBytes = 0;
+    const limitedBody = upstream.body?.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        streamedBytes += chunk.byteLength;
+        if (streamedBytes > MAX_MEDIA_BYTES) {
+          controller.error(new Error('Media response exceeded the size limit.'));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    })) ?? null;
 
-    return new NextResponse(upstream.body, {
+    return new NextResponse(limitedBody, {
       status: upstream.status,
       headers: responseHeaders,
     });
-  } catch (err: any) {
-    console.error('Media proxy error:', err);
-    return new NextResponse(`Media proxy error: ${err?.message || 'Unknown error'}`, { status: 502 });
+  } catch (error) {
+    console.error('Media proxy fetch failed:', error instanceof Error ? error.message : 'Unknown error');
+    return new NextResponse('Media proxy request failed', { status: 502 });
   }
 }

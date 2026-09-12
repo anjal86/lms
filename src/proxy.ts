@@ -8,8 +8,8 @@ const PUBLIC_PATHS = [
   '/auth/callback',
   '/api/leads/webhook',
   '/api/integrations/webhooks',
-  '/api/media/proxy',
 ];
+
 const safeInternalPath = (value: string | null, fallback = '/leads') =>
   value && value.startsWith('/') && !value.startsWith('//') ? value : fallback;
 
@@ -39,17 +39,17 @@ export async function proxy(request: NextRequest) {
   });
 
   const authHeader = request.headers.get('authorization');
-  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const { data: { user } } = bearerToken
-    ? await supabase.auth.getUser(bearerToken)
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const serviceRole = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const safeBearerToken = bearerToken && (!serviceRole || bearerToken !== serviceRole) ? bearerToken : null;
+  const { data: { user } } = safeBearerToken
+    ? await supabase.auth.getUser(safeBearerToken)
     : await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 
-  const isServiceRole = Boolean(bearerToken && bearerToken === process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-  if (!user && !isPublic && !isServiceRole) {
+  if (!user && !isPublic) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

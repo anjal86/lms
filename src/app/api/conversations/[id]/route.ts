@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,57 +8,18 @@ export const dynamic = 'force-dynamic';
 const PatchConversationSchema = z.object({
   status: z.enum(['open', 'closed', 'archived']).optional(),
   assigned_to: z.string().uuid().nullable().optional(),
+  mark_read: z.boolean().optional(),
 });
-
-async function getActor(request: Request) {
-  const authHeader = request.headers.get('authorization') || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-
-  if (token && serviceKey && token === serviceKey) {
-    return {
-      supabase: null as any,
-      user: { id: '11111111-1111-1111-1111-111111111111', email: 'admin@travellms.com' } as any,
-      profile: { id: '11111111-1111-1111-1111-111111111111', role: 'admin', is_active: true, full_name: 'Admin' } as any,
-    };
-  }
-
-  const supabase = await createSupabaseServerClient();
-  let { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    if (authHeader?.startsWith('Bearer ')) {
-      const token = authHeader.slice(7);
-      const admin = createSupabaseAdminClient();
-      const { data: adminUser } = await admin.auth.getUser(token);
-      if (adminUser?.user) user = adminUser.user;
-    }
-  }
-
-  if (!user) return { error: NextResponse.json({ error: 'Unauthorized.' }, { status: 401 }) } as const;
-
-  const admin = createSupabaseAdminClient();
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('id,role,is_active,full_name')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_active) return { error: NextResponse.json({ error: 'Account disabled.' }, { status: 403 }) } as const;
-  return { supabase, user, profile } as const;
-}
 
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const actor = await getActor(request);
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
   const { id } = await context.params;
-  const admin = createSupabaseAdminClient();
-
-  const { data: conversation, error: convError } = await admin
+  const { data: conversation, error: convError } = await actor.supabase
     .from('lead_conversations')
     .select(`
       id,
@@ -79,6 +39,7 @@ export async function GET(
       last_message_at,
       created_at,
       updated_at,
+      converted_at,
       metadata,
       lead:leads(id, lead_code, customer_name, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
       assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role)
@@ -90,8 +51,7 @@ export async function GET(
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
 
-  // Load message history
-  const { data: messages, error: msgError } = await admin
+  const { data: messages, error: msgError } = await actor.supabase
     .from('lead_messages')
     .select(`
       id,
@@ -102,6 +62,8 @@ export async function GET(
       message_type,
       body,
       metadata,
+      delivery_status,
+      client_request_id,
       sent_at,
       created_by,
       created_at,
@@ -116,23 +78,14 @@ export async function GET(
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
   }
 
-  // Clear unread count on view
-  if (conversation.unread_count > 0) {
-    await admin.from('lead_conversations').update({ unread_count: 0 }).eq('id', id);
-    conversation.unread_count = 0;
-  }
-
-  return NextResponse.json({
-    conversation,
-    messages: messages || [],
-  });
+  return NextResponse.json({ conversation, messages: messages || [] }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const actor = await getActor(request);
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
   const { id } = await context.params;
@@ -148,22 +101,31 @@ export async function PATCH(
     return NextResponse.json({ error: 'Validation failed.', details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const admin = createSupabaseAdminClient();
+  if (parsed.data.assigned_to !== undefined && !isManagement(actor.profile) && parsed.data.assigned_to !== actor.user.id) {
+    return NextResponse.json({ error: 'Agents may only claim a conversation for themselves.' }, { status: 403 });
+  }
+
   const patch: Record<string, unknown> = {};
   if (parsed.data.status !== undefined) patch.status = parsed.data.status;
   if (parsed.data.assigned_to !== undefined) patch.assigned_to = parsed.data.assigned_to;
+  if (parsed.data.mark_read === true) patch.unread_count = 0;
 
-  const { data: updated, error } = await admin
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });
+  }
+
+  const { data: updated, error } = await actor.supabase
     .from('lead_conversations')
     .update(patch)
     .eq('id', id)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Failed to update conversation:', error.message);
     return NextResponse.json({ error: 'Unable to update conversation.' }, { status: 500 });
   }
+  if (!updated) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
 
   return NextResponse.json({ conversation: updated });
 }
