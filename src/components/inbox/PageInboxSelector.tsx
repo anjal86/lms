@@ -95,13 +95,13 @@ export default function PageInboxSelector() {
           <select
             value={selectedPage ? selectedPage.key : 'all'}
             onChange={(event) => handleChange(event.target.value)}
-            className="select-field h-7 min-w-0 max-w-[260px] text-xs font-semibold text-zinc-900"
+            className="select-field h-7 min-w-0 max-w-[320px] text-xs font-semibold text-zinc-900"
             aria-label="Choose which connected Page inbox to work"
           >
             <option value="all">All Pages · combined inbox</option>
             {pages.map((page) => (
               <option key={page.key} value={page.key}>
-                {page.provider === 'facebook' ? 'Facebook' : 'Instagram'} · {page.name} · {page.newConversations} new
+                {page.provider === 'facebook' ? 'Facebook' : 'Instagram'} · {page.name} · {page.conversations} chats · {page.newConversations} new
               </option>
             ))}
           </select>
@@ -117,6 +117,7 @@ export default function PageInboxSelector() {
             <span className="truncate">{selectedPage.name}</span>
           </span>
           <span className="font-mono">{selectedPage.conversations} chats</span>
+          <span className="font-mono">{selectedPage.newConversations} new</span>
           {selectedPage.unreadMessages > 0 && <span className="font-mono font-semibold text-blue-700">{selectedPage.unreadMessages} unread</span>}
         </div>
       )}
