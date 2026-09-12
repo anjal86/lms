@@ -4,6 +4,12 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function isMissingAuditTable(error: { code?: string; message?: string }) {
+  return error.code === '42P01'
+    || error.code === 'PGRST205'
+    || Boolean(error.message?.toLowerCase().includes('audit_events'));
+}
+
 export async function GET(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
   const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -16,7 +22,10 @@ export async function GET(req: NextRequest) {
     .select('role')
     .eq('id', authData.user.id)
     .single();
-  if (profileError || !profile || !['admin', 'manager'].includes(profile.role)) {
+  if (profileError) {
+    return NextResponse.json({ error: 'Unable to verify management access.' }, { status: 503 });
+  }
+  if (!profile || !['admin', 'manager'].includes(profile.role)) {
     return NextResponse.json({ error: 'Management access required.' }, { status: 403 });
   }
 
@@ -30,12 +39,19 @@ export async function GET(req: NextRequest) {
     .limit(limit);
 
   if (error) {
+    if (isMissingAuditTable(error)) {
+      console.warn('Audit table is not available; migration 009 is required:', error.message);
+      return NextResponse.json(
+        { events: [], migrationRequired: true },
+        { headers: { 'Cache-Control': 'private, no-store' } }
+      );
+    }
     console.error('Audit log query failed:', error.message);
     return NextResponse.json({ error: 'Unable to load audit history.' }, { status: 500 });
   }
 
   return NextResponse.json(
-    { events: data || [] },
+    { events: data || [], migrationRequired: false },
     { headers: { 'Cache-Control': 'private, no-store' } }
   );
 }
