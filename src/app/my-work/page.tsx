@@ -49,10 +49,7 @@ export default function MyWorkPage() {
 
     return leads
       .filter((lead) => lead.assigned_to === currentUser.id && !['won', 'lost', 'junk'].includes(lead.stage))
-      .map((lead) => ({
-        lead,
-        state: getWorkState(lead, pendingLeadIds.has(lead.id)),
-      }))
+      .map((lead) => ({ lead, state: getWorkState(lead, pendingLeadIds.has(lead.id)) }))
       .sort((a, b) => {
         const order: Record<WorkState, number> = { reply: 0, follow_up: 1, active: 2 };
         if (order[a.state] !== order[b.state]) return order[a.state] - order[b.state];
@@ -86,29 +83,17 @@ export default function MyWorkPage() {
       </div>
 
       <section className="grid gap-3 sm:grid-cols-3">
-        <button
-          type="button"
-          onClick={() => setShowAll(false)}
-          className="panel p-4 text-left transition hover:border-zinc-300"
-        >
+        <button type="button" onClick={() => setShowAll(false)} className="panel p-4 text-left transition hover:border-zinc-300">
           <div className="text-xs font-medium text-zinc-500">Needs a reply</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{replyCount}</div>
           <div className="mt-1 text-xs text-zinc-500">Start here</div>
         </button>
-        <button
-          type="button"
-          onClick={() => setShowAll(false)}
-          className="panel p-4 text-left transition hover:border-zinc-300"
-        >
+        <button type="button" onClick={() => setShowAll(false)} className="panel p-4 text-left transition hover:border-zinc-300">
           <div className="text-xs font-medium text-zinc-500">Follow-ups</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{followUpCount}</div>
           <div className="mt-1 text-xs text-zinc-500">People to contact again</div>
         </button>
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          className="panel p-4 text-left transition hover:border-zinc-300"
-        >
+        <button type="button" onClick={() => setShowAll(true)} className="panel p-4 text-left transition hover:border-zinc-300">
           <div className="text-xs font-medium text-zinc-500">All my active leads</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{myLeads.length}</div>
           <div className="mt-1 text-xs text-zinc-500">Everything assigned to you</div>
@@ -123,26 +108,16 @@ export default function MyWorkPage() {
           </div>
           <div className="relative w-full sm:w-64">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search my leads"
-              className="field pl-9"
-            />
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search my leads" className="field pl-9" />
           </div>
         </div>
 
         {visible.length === 0 ? (
           <div className="px-6 py-16 text-center">
-            <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-              <CheckCircle2 className="h-5 w-5" />
-            </span>
+            <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><CheckCircle2 className="h-5 w-5" /></span>
             <h3 className="mt-3 text-sm font-semibold text-zinc-900">You’re caught up</h3>
             <p className="mt-1 text-xs text-zinc-500">There are no leads needing action in this view.</p>
-            {!showAll && myLeads.length > 0 && (
-              <button type="button" onClick={() => setShowAll(true)} className="button-secondary mt-4">Show all my leads</button>
-            )}
+            {!showAll && myLeads.length > 0 && <button type="button" onClick={() => setShowAll(true)} className="button-secondary mt-4">Show all my leads</button>}
           </div>
         ) : (
           <div className="divide-y divide-zinc-100">
@@ -152,48 +127,28 @@ export default function MyWorkPage() {
               return (
                 <div key={lead.id} className="flex flex-col gap-4 px-4 py-4 transition hover:bg-zinc-50/60 lg:flex-row lg:items-center">
                   <div className="flex min-w-0 flex-1 items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-600">
-                      <UserRound className="h-4 w-4" />
-                    </span>
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-600"><UserRound className="h-4 w-4" /></span>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Link href={`/leads/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">
-                          {lead.customer_name}
-                        </Link>
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateInfo.className}`}>
-                          {stateInfo.label}
-                        </span>
+                        <Link href={`/my-work/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">{lead.customer_name}</Link>
+                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateInfo.className}`}>{stateInfo.label}</span>
                       </div>
                       <p className="mt-1 text-xs text-zinc-500">{lead.destination} · {lead.customer_phone}</p>
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                        <span className="inline-flex items-center gap-1.5">
-                          <CalendarClock className="h-3.5 w-3.5" /> {formatNextDate(lead.next_follow_up_at)}
-                        </span>
-                        <span className="capitalize">Stage: {lead.stage.replaceAll('_', ' ')}</span>
+                        <span className="inline-flex items-center gap-1.5"><CalendarClock className="h-3.5 w-3.5" /> {formatNextDate(lead.next_follow_up_at)}</span>
+                        <span className="capitalize">Status: {lead.stage.replaceAll('_', ' ')}</span>
                       </div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 pl-13 lg:pl-0">
-                    {lead.customer_phone && (
-                      <a href={`tel:${lead.customer_phone}`} className="button-secondary px-3" aria-label={`Call ${lead.customer_name}`}>
-                        <Phone className="h-4 w-4" /> <span className="hidden sm:inline">Call</span>
-                      </a>
-                    )}
+                    {lead.customer_phone && <a href={`tel:${lead.customer_phone}`} className="button-secondary px-3" aria-label={`Call ${lead.customer_name}`}><Phone className="h-4 w-4" /> <span className="hidden sm:inline">Call</span></a>}
                     {whatsappPhone && (
-                      <a
-                        href={`https://wa.me/${whatsappPhone}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="button-secondary px-3"
-                        aria-label={`Message ${lead.customer_name} on WhatsApp`}
-                      >
+                      <a href={`https://wa.me/${whatsappPhone}`} target="_blank" rel="noreferrer" className="button-secondary px-3" aria-label={`Message ${lead.customer_name} on WhatsApp`}>
                         <MessageCircle className="h-4 w-4" /> <span className="hidden sm:inline">WhatsApp</span>
                       </a>
                     )}
-                    <Link href={`/leads/${lead.id}`} className="button-primary px-3">
-                      Open <ArrowRight className="h-4 w-4" />
-                    </Link>
+                    <Link href={`/my-work/${lead.id}`} className="button-primary px-3">Open <ArrowRight className="h-4 w-4" /></Link>
                   </div>
                 </div>
               );
