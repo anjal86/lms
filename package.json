@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
+    "e2e:install": "npm install --no-save @playwright/test@1.55.0 && npx playwright install chromium",
+    "test:e2e": "playwright test",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
     "doctor:local": "node scripts/doctor-local.mjs",
     "keys:local": "node scripts/generate-local-supabase-secrets.mjs --write",
