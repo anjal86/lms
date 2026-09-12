@@ -16,7 +16,10 @@ export async function GET(request: Request) {
   const filter = url.searchParams.get('filter') || 'all';
   const provider = url.searchParams.get('provider') || 'all';
   const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
-  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 40));
+  // The inbox is intentionally scroll-based today, so return a useful working set
+  // instead of silently truncating the list at 40 conversations. Keep a hard cap
+  // to protect the API until cursor pagination is added to the client.
+  const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
   let query = actor.supabase
@@ -75,6 +78,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     conversations: data || [],
     total: count || 0,
+    hasMore: offset + (data?.length || 0) < (count || 0),
     metrics: {
       unconvertedOpen: unconvertedCountRes.count || 0,
       totalOpen: allOpenRes.count || 0,
