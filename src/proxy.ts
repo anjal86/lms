@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/leads/webhook'];
+const safeInternalPath = (value: string | null, fallback = '/leads') =>
+  value && value.startsWith('/') && !value.startsWith('//') ? value : fallback;
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -40,7 +42,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (user && pathname === '/login') {
-    const target = request.nextUrl.searchParams.get('returnUrl') || '/leads';
+    const target = safeInternalPath(request.nextUrl.searchParams.get('returnUrl'));
     return NextResponse.redirect(new URL(target, request.url));
   }
 
