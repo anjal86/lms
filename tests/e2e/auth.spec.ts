@@ -32,8 +32,8 @@ test('authenticated operator workflow', async ({ page }) => {
   await page.getByLabel('Password').fill(password!);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/dashboard/);
-  await expect(page.getByRole('heading', { name: 'What needs attention now' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'What needs attention today' })).toBeVisible();
 
   await page.goto('/leads');
-  await expect(page.getByText('Active Pipeline')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Leads pipeline' })).toBeVisible();
 });
