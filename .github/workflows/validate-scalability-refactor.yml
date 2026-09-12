@@ -1,0 +1,61 @@
+name: Validate production scalability refactor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/apply-scalability-refactor.mjs
+      - .github/workflows/validate-scalability-refactor.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      LEADS_WEBHOOK_SECRET: ci-placeholder-secret-at-least-32-characters-long
+      SLA_CRON_SECRET: ci-placeholder-sla-secret-at-least-32-characters-long
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+      POSTGRES_PASSWORD: ci-postgres-password-not-for-production
+      JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+      ANON_KEY: ci-placeholder-anon-key
+      SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install current dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Apply guarded source refactor
+        run: node scripts/apply-scalability-refactor.mjs
+      - name: Add Playwright dependency
+        run: npm install --save-dev @playwright/test --no-audit --no-fund
+      - name: Validate application
+        run: npm run check
+      - name: Validate migration chain and RLS
+        run: npm run test:db
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run browser smoke tests
+        run: npm run test:e2e
+      - name: Package verified changed files
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-scalability-refactor
+          if-no-files-found: error
+          path: |
+            src/lib/store.tsx
+            src/app/leads/page.tsx
+            src/components/layout/Sidebar.tsx
+            package.json
+            package-lock.json
+            .github/workflows/ci.yml
