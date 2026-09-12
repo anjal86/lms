@@ -13,6 +13,40 @@ function sanitizeAccountId(value: string | null) {
   return /^[A-Za-z0-9:_-]{1,128}$/.test(trimmed) ? trimmed : '';
 }
 
+function readCookie(request: Request, name: string) {
+  const cookieHeader = request.headers.get('cookie') || '';
+  for (const pair of cookieHeader.split(';')) {
+    const [rawName, ...rawValue] = pair.trim().split('=');
+    if (rawName === name) {
+      try {
+        return decodeURIComponent(rawValue.join('='));
+      } catch {
+        return rawValue.join('=');
+      }
+    }
+  }
+  return '';
+}
+
+function selectedAccountScope(request: Request, url: URL) {
+  const explicitAccountId = sanitizeAccountId(url.searchParams.get('accountId'));
+  const explicitProvider = url.searchParams.get('accountProvider');
+  if (explicitAccountId && (explicitProvider === 'facebook' || explicitProvider === 'instagram')) {
+    return { accountId: explicitAccountId, accountProvider: explicitProvider } as const;
+  }
+
+  const cookieValue = readCookie(request, 'inbox_page_filter');
+  if (!cookieValue || cookieValue === 'all') return { accountId: '', accountProvider: '' } as const;
+  const separator = cookieValue.indexOf(':');
+  if (separator <= 0) return { accountId: '', accountProvider: '' } as const;
+  const accountProvider = cookieValue.slice(0, separator);
+  const accountId = sanitizeAccountId(cookieValue.slice(separator + 1));
+  if (!accountId || !['facebook', 'instagram'].includes(accountProvider)) {
+    return { accountId: '', accountProvider: '' } as const;
+  }
+  return { accountId, accountProvider } as const;
+}
+
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
@@ -21,8 +55,7 @@ export async function GET(request: Request) {
   const filter = url.searchParams.get('filter') || 'all';
   const provider = url.searchParams.get('provider') || 'all';
   const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
-  const accountId = sanitizeAccountId(url.searchParams.get('accountId'));
-  const accountProvider = url.searchParams.get('accountProvider');
+  const { accountId, accountProvider } = selectedAccountScope(request, url);
   // The inbox is intentionally scroll-based today. The current production queue
   // already exceeds 300 conversations, so return 500 by default instead of
   // silently hiding older clients. Keep a hard cap until cursor pagination lands.
@@ -63,7 +96,6 @@ export async function GET(request: Request) {
   if (provider !== 'all') query = query.eq('provider', provider);
 
   // Keep connected Meta Page / Instagram account inboxes isolated when requested.
-  // IDs are validated above before becoming part of the PostgREST filter.
   if (accountId && accountProvider === 'facebook') {
     query = query.eq('metadata->>meta_page_id', accountId);
   } else if (accountId && accountProvider === 'instagram') {
@@ -125,6 +157,7 @@ export async function GET(request: Request) {
     conversations: data || [],
     total: count || 0,
     hasMore: offset + (data?.length || 0) < (count || 0),
+    scope: accountId && accountProvider ? { accountId, accountProvider } : null,
     metrics: {
       unconvertedOpen: unconvertedCountRes.count || 0,
       totalOpen: allOpenRes.count || 0,
