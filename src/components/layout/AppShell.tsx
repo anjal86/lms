@@ -1,28 +1,36 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import React from 'react';
+import { usePathname } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import Sidebar from './Sidebar';
 import Header from './Header';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { isAuthenticated, isHydrated } = useApp();
+  const isPublicAuthPage = pathname === '/login';
 
-  const isLoginPage = pathname === '/login';
+  if (isPublicAuthPage) return <>{children}</>;
 
-  // Client-side route protection
-  useEffect(() => {
-    if (isHydrated && !isAuthenticated && !isLoginPage) {
-      router.push(`/login?returnUrl=${encodeURIComponent(pathname)}`);
-    }
-  }, [isHydrated, isAuthenticated, isLoginPage, pathname, router]);
+  if (!isHydrated) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center" role="status" aria-live="polite">
+        <div className="text-xs font-medium text-zinc-500">Loading secure workspace…</div>
+      </div>
+    );
+  }
 
-  // Render standalone page without CRM chrome for /login
-  if (isLoginPage) {
-    return <>{children}</>;
+  // Server-side proxy is authoritative. This fallback prevents protected UI from
+  // rendering if the session expires between navigation and hydration.
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center">
+        <a href={`/login?returnUrl=${encodeURIComponent(pathname)}`} className="text-sm font-medium text-zinc-700 underline">
+          Session expired — sign in again
+        </a>
+      </div>
+    );
   }
 
   return (
