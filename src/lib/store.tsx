@@ -67,6 +67,14 @@ const DEFAULT_SETTINGS: AgencySettings = {
   auto_archive_days: 30,
 };
 
+const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  idle_auto_away_minutes: 15,
+  default_landing_page: '/leads',
+  kanban_density: 'expanded',
+  instant_whatsapp_direct: false,
+  default_country_code: '+1',
+};
+
 const EMPTY_PROFILE: Profile = {
   id: '',
   email: '',
@@ -80,6 +88,7 @@ const EMPTY_PROFILE: Profile = {
   accepting_leads: false,
   languages: [],
   certifications: [],
+  user_preferences: DEFAULT_USER_PREFERENCES,
   created_at: new Date(0).toISOString(),
 };
 
@@ -161,8 +170,15 @@ const isManagement = (profile: Profile) => profile.role === 'admin' || profile.r
 const toNumber = (value: unknown) => typeof value === 'number' ? value : Number(value || 0);
 const normalizeLead = (row: any): Lead => {
   const quotes = Array.isArray(row.quotes) ? row.quotes : [];
-  return { ...row, quotes, latest_quote: quotes[0] } as Lead;
+  return { ...row, quotes, latest_quote: row.latest_quote || quotes[0] } as Lead;
 };
+const normalizeProfile = (row: any): Profile => ({
+  ...row,
+  destination_tags: Array.isArray(row.destination_tags) ? row.destination_tags : [],
+  languages: Array.isArray(row.languages) ? row.languages : [],
+  certifications: Array.isArray(row.certifications) ? row.certifications : [],
+  user_preferences: { ...DEFAULT_USER_PREFERENCES, ...(row.user_preferences || {}) },
+}) as Profile;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -226,7 +242,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const failed = [profileRes, leadRes, followUpRes, activityRes, templateRes, settingsRes, notificationRes, tierRes].find((result: any) => result.error);
     if (failed?.error) throw failed.error;
 
-    setProfiles((profileRes.data || []) as Profile[]);
+    setProfiles((profileRes.data || []).map(normalizeProfile));
     setLeadsList((leadRes.data || []).map(normalizeLead));
     setFollowUpsList((followUpRes.data || []) as FollowUp[]);
     setActivitiesList((activityRes.data || []) as ActivityLog[]);
@@ -488,7 +504,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!data.lead_id) return;
     const now = new Date().toISOString();
     const assignedTo = currentUser.role === 'agent' ? currentUser.id : (data.assigned_to || currentUser.id);
-    const followUp: FollowUp = { id: uuid(), lead_id: data.lead_id, assigned_to: assignedTo, title: data.title || 'Scheduled Follow-up', scheduled_at: data.scheduled_at || new Date(Date.now() + 86400000).toISOString(), channel: data.channel || 'call', priority: data.priority || 'normal', status: 'pending', notes: data.notes || '', created_at: now };
+    const followUp: FollowUp = { id: uuid(), lead_id: data.lead_id, assigned_to: assignedTo, title: data.title || 'Scheduled Follow-up', scheduled_at: data.scheduled_at || new Date(Date.now() + 86400000).toISOString(), channel: data.channel || 'call', priority: data.priority || 'normal', status: 'pending', notes: data.notes || '', retry_count: data.retry_count || 0, rescheduled_from_id: data.rescheduled_from_id, created_at: now };
     setFollowUpsList((prev) => [followUp, ...prev]);
     run('Create follow-up', getSupabaseBrowserClient().from('follow_ups').insert(followUp));
   };
@@ -525,7 +541,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (profileId !== currentUser.id) return;
     const profile = profiles.find((item) => item.id === profileId);
     if (!profile) return;
-    const user_preferences = { ...(profile.user_preferences || {}), ...prefs };
+    const user_preferences: UserPreferences = { ...DEFAULT_USER_PREFERENCES, ...(profile.user_preferences || {}), ...prefs };
     setProfiles((prev) => prev.map((item) => item.id === profileId ? { ...item, user_preferences } : item));
     run('Preferences update', getSupabaseBrowserClient().from('profiles').update({ user_preferences }).eq('id', profileId));
   };
@@ -546,8 +562,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateIncentiveTiers = (nextTiers: IncentiveTier[]) => {
     if (currentUser.role !== 'admin') return showToast('Administrator access required.', 'error');
+    const previous = tiers;
     setTiers(nextTiers);
-    showToast('Incentive tier edits require the protected server administration endpoint.', 'warning');
+    void fetch('/api/incentives', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tiers: nextTiers }),
+    }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.json()).error || 'Incentive update failed');
+      showToast('Incentive tiers saved.', 'success');
+    }).catch((error) => {
+      setTiers(previous);
+      handleMutationError('Incentive tier update', error);
+    });
   };
 
   const updateProfile = (profileId: string, updates: Partial<Profile>) => {

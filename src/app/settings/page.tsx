@@ -253,7 +253,7 @@ export default function SettingsPage() {
   const copyWebhookCode = () => {
     const curlCommand = `curl -X POST http://localhost:3000/api/leads/webhook \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer travel_lms_secret_webhook_key_2026" \\
+  -H "Authorization: Bearer <YOUR_WEBHOOK_SECRET>" \\
   -d '${sampleWebhookPayload.replace(/\n/g, '')}'`;
     navigator.clipboard.writeText(curlCommand);
     setCopiedWebhook(true);

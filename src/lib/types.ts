@@ -29,7 +29,7 @@ export interface Profile {
   languages?: string[];
   office_location?: string;
   certifications?: string[];
-  user_preferences?: Partial<UserPreferences>;
+  user_preferences?: UserPreferences;
   created_at: string;
   updated_at?: string;
 }

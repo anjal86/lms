@@ -36,7 +36,7 @@ export default function InviteMemberModal({
   onClose,
   onSuccess,
 }: InviteMemberModalProps) {
-  const { createProfile, showToast } = useApp();
+  const { createProfile, showToast, currentUser } = useApp();
   useDialog(isOpen, onClose);
 
   const [fullName, setFullName] = useState('');
@@ -59,7 +59,7 @@ export default function InviteMemberModal({
     );
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !email.trim()) return;
 
@@ -73,7 +73,7 @@ export default function InviteMemberModal({
     ];
     const pickedAvatar = avatars[Math.floor(Math.random() * avatars.length)];
 
-    createProfile({
+    const createdProfile = await createProfile({
       full_name: fullName.trim(),
       email: email.trim(),
       phone: phone.trim(),
@@ -91,7 +91,8 @@ export default function InviteMemberModal({
       certifications: ['Virtuoso Partner Specialist'],
     });
 
-    showToast(`Team member ${fullName.trim()} created successfully`, 'success');
+    if (!createdProfile) return;
+    showToast(`Invitation sent to ${fullName.trim()}`, 'success');
     if (onSuccess) onSuccess();
     onClose();
   };
@@ -176,8 +177,8 @@ export default function InviteMemberModal({
                   className="w-full text-xs px-2 py-1.5 border border-zinc-200 rounded-md bg-white text-zinc-800 focus:outline-none focus:border-zinc-400"
                 >
                   <option value="agent">Travel Consultant</option>
-                  <option value="manager">Sales Manager</option>
-                  <option value="admin">Super Admin</option>
+                  {currentUser.role === 'admin' && <option value="manager">Sales Manager</option>}
+                  {currentUser.role === 'admin' && <option value="admin">Super Admin</option>}
                 </select>
               </div>
 

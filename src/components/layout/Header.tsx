@@ -53,7 +53,7 @@ export default function Header() {
 
   const overdueCount = followUps.filter((fu) => {
     const isPast = new Date(fu.scheduled_at).getTime() < Date.now();
-    return fu.status === 'pending' || (fu.status === 'missed' && isPast);
+    return (fu.status === 'pending' || fu.status === 'missed') && isPast;
   }).length;
 
   const breachedSlaCount = leads.filter((l) => l.is_first_response_breached).length;
