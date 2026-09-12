@@ -144,32 +144,29 @@ returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $$;
--- Placeholder replaced below to keep migration compatible with all supported PostgreSQL trigger operations.
-$$;
-
-drop function if exists public.audit_incentive_change();
-create function public.audit_incentive_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
 as $$
 declare
   row_id text;
   payload jsonb;
 begin
-  row_id := coalesce(new.id, old.id);
-  payload := case tg_op
-    when 'INSERT' then jsonb_build_object('to', to_jsonb(new))
-    when 'DELETE' then jsonb_build_object('from', to_jsonb(old))
-    else jsonb_build_object('from', to_jsonb(old), 'to', to_jsonb(new))
-  end;
+  if tg_op = 'DELETE' then
+    row_id := old.id;
+    payload := jsonb_build_object('from', to_jsonb(old));
+  elsif tg_op = 'INSERT' then
+    row_id := new.id;
+    payload := jsonb_build_object('to', to_jsonb(new));
+  else
+    row_id := new.id;
+    payload := jsonb_build_object('from', to_jsonb(old), 'to', to_jsonb(new));
+  end if;
 
   insert into public.audit_events(actor_id, actor_role, entity_type, entity_id, action, changes)
   values (auth.uid(), public.audit_actor_role(), 'incentive_tier', row_id, lower(tg_op), payload);
 
-  return coalesce(new, old);
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
 end;
 $$;
 
