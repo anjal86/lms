@@ -84,6 +84,14 @@ const migrations = [
     file: '202609120014_inbox_and_lead_conversion.sql',
     applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='lead_id' and is_nullable='YES') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='customer_name')"),
   },
+  {
+    file: '202609120015_full_unique_indexes_for_upsert.sql',
+    applied: () => exists("select to_regclass('public.idx_lead_messages_provider_ext_msg_full') is not null"),
+  },
+  {
+    file: '202609120016_add_converted_at_to_conversations.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='converted_at')"),
+  },
 ];
 
 console.log('\nChecking local Wanderlust database migrations...\n');
