@@ -59,6 +59,10 @@ if (!exists("select to_regclass('public.profiles') is not null and to_regclass('
   process.exit(1);
 }
 
+const functionDefinitionContains = (signature, marker) => exists(
+  `select coalesce(position(${JSON.stringify(marker)} in pg_get_functiondef(to_regprocedure(${JSON.stringify(signature)}))), 0) > 0`
+);
+
 const migrations = [
   {
     file: '202609120009_management_audit_log.sql',
@@ -95,6 +99,26 @@ const migrations = [
   {
     file: '202609120017_omnichannel_delivery_and_retry.sql',
     applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='provider_message_id')"),
+  },
+  {
+    file: '202609120018_customer_profile_integrity.sql',
+    applied: () => exists("select to_regprocedure('public.update_conversation_location(uuid,text,text)') is not null"),
+  },
+  {
+    file: '202609120019_customer_profile_merge_protection.sql',
+    applied: () => exists("select to_regprocedure('public.merge_customer_profile_jsonb(jsonb,jsonb)') is not null and exists(select 1 from pg_trigger where tgname='trg_preserve_conversation_customer_metadata' and not tgisinternal)"),
+  },
+  {
+    file: '202609120020_sync_cursor_safety.sql',
+    applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_preserve_integration_cursor_on_error' and not tgisinternal)"),
+  },
+  {
+    file: '202609120021_customer_profile_merge_consistency.sql',
+    applied: () => functionDefinitionContains('public.merge_customer_profile_jsonb(jsonb,jsonb)', 'v_existing_country'),
+  },
+  {
+    file: '202609120022_profile_load_trigger_integrity.sql',
+    applied: () => functionDefinitionContains('public.protect_profile_privileged_fields()', 'pg_trigger_depth() > 1'),
   },
 ];
 
