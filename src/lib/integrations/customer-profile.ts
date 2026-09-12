@@ -4,6 +4,8 @@
  * Messenger Profile API, Instagram, and conversational text heuristics).
  */
 
+export type CustomerLocationSource = 'manual' | 'lead_form' | 'meta_profile' | 'chat_heuristic' | 'existing_lead';
+
 export type FormAnswerField = {
   key: string;
   label: string;
@@ -28,103 +30,119 @@ export type CustomerDemographics = {
   companyName?: string | null;
   formFields?: FormAnswerField[];
   inferredFromText?: boolean;
+  locationSource?: CustomerLocationSource | null;
 };
 
-/**
- * Convert ISO 3166-1 alpha-2 country code to emoji flag (e.g. NP -> 🇳🇵, US -> 🇺🇸)
- */
+function emptyCountryResult() {
+  return { country: null, countryCode: null, countryFlag: null };
+}
+
+function normalizeLocale(locale: string) {
+  return locale.trim().replace(/_/g, '-');
+}
+
+function localeParts(locale: string): { language: string | null; region: string | null } {
+  const normalized = normalizeLocale(locale);
+  if (!normalized) return { language: null, region: null };
+
+  try {
+    const parsed = new Intl.Locale(normalized);
+    return {
+      language: parsed.language || null,
+      region: parsed.region?.toUpperCase() || null,
+    };
+  } catch {
+    // Conservative fallback for runtimes with stricter Intl.Locale parsing.
+    const parts = normalized.split('-').filter(Boolean);
+    const language = /^[A-Za-z]{2,3}$/.test(parts[0] || '') ? parts[0].toLowerCase() : null;
+    const regionPart = parts.find((part, index) => index > 0 && /^[A-Za-z]{2}$/.test(part));
+    return { language, region: regionPart?.toUpperCase() || null };
+  }
+}
+
+/** Convert ISO 3166-1 alpha-2 country code to emoji flag. */
 export function countryCodeToFlag(countryCode: string | null | undefined): string | null {
-  if (!countryCode || countryCode.length !== 2) return null;
-  const upper = countryCode.toUpperCase();
+  if (!countryCode || typeof countryCode !== 'string') return null;
+  const upper = countryCode.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(upper)) return null;
   const first = upper.codePointAt(0);
   const second = upper.codePointAt(1);
-  if (!first || !second || first < 65 || first > 90 || second < 65 || second > 90) return null;
+  if (!first || !second) return null;
   return String.fromCodePoint(first + 127397, second + 127397);
 }
 
-/**
- * Parse country name and flag from Meta locale string (e.g., "ne_NP", "en_US", "hi_IN")
- */
+/** Parse country name and flag from a Meta/BCP-47 locale string. */
 export function parseCountryFromLocale(locale: string | null | undefined): {
   country: string | null;
   countryCode: string | null;
   countryFlag: string | null;
 } {
-  if (!locale || typeof locale !== 'string') {
-    return { country: null, countryCode: null, countryFlag: null };
-  }
-
-  const parts = locale.replace('-', '_').split('_');
-  const code = parts.length > 1 ? parts[1].toUpperCase() : null;
-
-  if (!code || code.length !== 2) {
-    return { country: null, countryCode: null, countryFlag: null };
-  }
+  if (!locale || typeof locale !== 'string') return emptyCountryResult();
+  const { region: code } = localeParts(locale);
+  if (!code || !/^[A-Z]{2}$/.test(code)) return emptyCountryResult();
 
   try {
     const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
-    const country = regionNames.of(code) || null;
-    const countryFlag = countryCodeToFlag(code);
-    return { country, countryCode: code, countryFlag };
+    const country = regionNames.of(code);
+    // Intl implementations may return the code unchanged for an unknown region.
+    if (!country || country === code) return emptyCountryResult();
+    return { country, countryCode: code, countryFlag: countryCodeToFlag(code) };
   } catch {
     return { country: code, countryCode: code, countryFlag: countryCodeToFlag(code) };
   }
 }
 
-/**
- * Parse language name from Meta locale string (e.g., "ne_NP" -> "Nepali")
- */
+/** Parse language name from a Meta/BCP-47 locale string. */
 export function parseLanguageFromLocale(locale: string | null | undefined): string | null {
   if (!locale || typeof locale !== 'string') return null;
-  const langCode = locale.replace('-', '_').split('_')[0].toLowerCase();
+  const { language } = localeParts(locale);
+  if (!language) return null;
   try {
     const langNames = new Intl.DisplayNames(['en'], { type: 'language' });
-    return langNames.of(langCode) || null;
+    const display = langNames.of(language);
+    return display && display !== language ? display : null;
   } catch {
-    return langCode;
+    return language;
   }
 }
 
-/**
- * Format numeric timezone offset in hours to friendly label (e.g. 5.75 -> "UTC+05:45 (Nepal Standard Time)")
- */
+function isValidTimezoneOffset(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= -14 && value <= 14;
+}
+
+/** Format a fixed UTC offset. Region labels are intentionally approximate. */
 export function formatTimezoneOffset(tzOffsetHours: number | null | undefined): {
   label: string | null;
   approximateRegion: string | null;
 } {
-  if (typeof tzOffsetHours !== 'number' || Number.isNaN(tzOffsetHours)) {
-    return { label: null, approximateRegion: null };
-  }
+  if (!isValidTimezoneOffset(tzOffsetHours)) return { label: null, approximateRegion: null };
 
   const sign = tzOffsetHours >= 0 ? '+' : '-';
   const totalMinutes = Math.round(Math.abs(tzOffsetHours) * 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  const formattedHours = String(hours).padStart(2, '0');
-  const formattedMinutes = String(minutes).padStart(2, '0');
-  const offsetString = `UTC${sign}${formattedHours}:${formattedMinutes}`;
+  const offsetString = `UTC${sign}${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 
-  // Common regional timezone mapping for travel industry
   let region = '';
   if (tzOffsetHours === 5.75) region = 'Nepal Standard Time';
   else if (tzOffsetHours === 5.5) region = 'India Standard Time';
   else if (tzOffsetHours === 6) region = 'Bangladesh / Bhutan';
-  else if (tzOffsetHours === 0) region = 'GMT / Western Europe';
-  else if (tzOffsetHours === 1) region = 'Central European Time';
-  else if (tzOffsetHours === 2) region = 'Eastern European / Cairo';
-  else if (tzOffsetHours === 3) region = 'Arabia Standard / Moscow';
-  else if (tzOffsetHours === 4) region = 'Gulf Standard (Dubai)';
+  else if (tzOffsetHours === 0) region = 'GMT';
+  else if (tzOffsetHours === 1) region = 'Central Europe offset (approx.)';
+  else if (tzOffsetHours === 2) region = 'Eastern Europe offset (approx.)';
+  else if (tzOffsetHours === 3) region = 'Arabia / Moscow offset (approx.)';
+  else if (tzOffsetHours === 4) region = 'Gulf Standard Time';
   else if (tzOffsetHours === 7) region = 'Indochina / Bangkok';
   else if (tzOffsetHours === 8) region = 'Singapore / Hong Kong / Perth';
   else if (tzOffsetHours === 9) region = 'Japan / Korea';
-  else if (tzOffsetHours === 10) region = 'Sydney / Eastern Australia';
+  else if (tzOffsetHours === 10) region = 'Eastern Australia offset (approx.)';
   else if (tzOffsetHours === 11) region = 'Solomon Islands';
-  else if (tzOffsetHours === 12) region = 'New Zealand';
-  else if (tzOffsetHours === -5) region = 'US Eastern Time (EST)';
-  else if (tzOffsetHours === -6) region = 'US Central Time (CST)';
-  else if (tzOffsetHours === -7) region = 'US Mountain Time (MST)';
-  else if (tzOffsetHours === -8) region = 'US Pacific Time (PST)';
-  else if (tzOffsetHours === -4) region = 'Atlantic Standard';
+  else if (tzOffsetHours === 12) region = 'New Zealand offset (approx.)';
+  else if (tzOffsetHours === -5) region = 'Eastern North America offset (approx.)';
+  else if (tzOffsetHours === -6) region = 'Central North America offset (approx.)';
+  else if (tzOffsetHours === -7) region = 'Mountain North America offset (approx.)';
+  else if (tzOffsetHours === -8) region = 'Pacific North America offset (approx.)';
+  else if (tzOffsetHours === -4) region = 'Atlantic offset (approx.)';
 
   return {
     label: region ? `${offsetString} (${region})` : offsetString,
@@ -132,49 +150,42 @@ export function formatTimezoneOffset(tzOffsetHours: number | null | undefined): 
   };
 }
 
-/**
- * Calculate current local time for traveler based on timezone offset hours
- */
-export function calculateTravelerLocalTime(tzOffsetHours: number | null | undefined): string | null {
-  if (typeof tzOffsetHours !== 'number' || Number.isNaN(tzOffsetHours)) return null;
+/** Calculate traveler local time from a fixed UTC offset without depending on server/browser timezone. */
+export function calculateTravelerLocalTime(
+  tzOffsetHours: number | null | undefined,
+  now: Date = new Date()
+): string | null {
+  if (!isValidTimezoneOffset(tzOffsetHours) || Number.isNaN(now.getTime())) return null;
   try {
-    const now = new Date();
-    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const travelerDate = new Date(utcMs + (tzOffsetHours * 3600000));
-    return travelerDate.toLocaleTimeString('en-US', {
+    const travelerDate = new Date(now.getTime() + tzOffsetHours * 3_600_000);
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-    });
+    }).format(travelerDate);
   } catch {
     return null;
   }
 }
 
-/**
- * Normalize Facebook Lead Ads Instant Form field names to match common customer demographics
- */
-export function extractLeadFormDemographics(
-  fields: Array<{ name?: string; values?: string[] }> | undefined
-): CustomerDemographics {
-  const result: CustomerDemographics = {
-    formFields: [],
-  };
+type LeadFormField = { name?: unknown; values?: unknown };
 
+/** Normalize Facebook Lead Ads Instant Form field names to common customer demographics. */
+export function extractLeadFormDemographics(fields: LeadFormField[] | null | undefined): CustomerDemographics {
+  const result: CustomerDemographics = { formFields: [] };
   if (!Array.isArray(fields) || fields.length === 0) return result;
 
   const valueMap = new Map<string, string>();
-  for (const f of fields) {
-    if (f.name && Array.isArray(f.values) && f.values[0]?.trim()) {
-      const key = f.name.toLowerCase().trim();
-      const val = f.values[0].trim();
-      valueMap.set(key, val);
-      result.formFields?.push({
-        key: f.name,
-        label: formatFieldLabel(f.name),
-        value: val,
-      });
-    }
+  for (const field of fields) {
+    if (!field || typeof field !== 'object' || typeof field.name !== 'string' || !Array.isArray(field.values)) continue;
+    const firstValue = field.values.find((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    if (!firstValue) continue;
+    const key = field.name.toLowerCase().trim();
+    const value = firstValue.trim();
+    if (!key) continue;
+    valueMap.set(key, value);
+    result.formFields?.push({ key: field.name, label: formatFieldLabel(field.name), value });
   }
 
   const findValue = (aliases: string[]) => {
@@ -195,96 +206,89 @@ export function extractLeadFormDemographics(
   result.jobTitle = findValue(['job_title', 'profession', 'occupation', 'work_title', 'position']);
   result.companyName = findValue(['company_name', 'company', 'organization', 'employer', 'workplace']);
 
-  if (result.country) {
-    // Try resolving flag if country name matches
-    result.countryFlag = getCountryFlagFromName(result.country);
-  }
-
+  if (result.country) result.countryFlag = getCountryFlagFromName(result.country);
+  if (result.city || result.country) result.locationSource = 'lead_form';
   return result;
 }
 
 function formatFieldLabel(name: string): string {
-  return name
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return name.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 const KNOWN_COUNTRY_CODES: Record<string, string> = {
-  nepal: 'NP',
-  india: 'IN',
-  'united states': 'US',
-  usa: 'US',
-  'united kingdom': 'GB',
-  uk: 'GB',
-  australia: 'AU',
-  canada: 'CA',
-  germany: 'DE',
-  france: 'FR',
-  japan: 'JP',
-  china: 'CN',
-  uae: 'AE',
-  'united arab emirates': 'AE',
-  qatar: 'QA',
-  singapore: 'SG',
-  malaysia: 'MY',
-  thailand: 'TH',
+  nepal: 'NP', india: 'IN', 'united states': 'US', usa: 'US', 'united states of america': 'US',
+  'united kingdom': 'GB', uk: 'GB', australia: 'AU', canada: 'CA', germany: 'DE', france: 'FR',
+  japan: 'JP', china: 'CN', uae: 'AE', 'united arab emirates': 'AE', qatar: 'QA', singapore: 'SG',
+  malaysia: 'MY', thailand: 'TH', 'new zealand': 'NZ', bangladesh: 'BD', bhutan: 'BT',
+  'south korea': 'KR', korea: 'KR', 'saudi arabia': 'SA', italy: 'IT', spain: 'ES', switzerland: 'CH',
 };
 
 export function getCountryFlagFromName(countryName: string): string | null {
+  if (!countryName || typeof countryName !== 'string') return null;
   const code = KNOWN_COUNTRY_CODES[countryName.toLowerCase().trim()];
   return code ? countryCodeToFlag(code) : null;
 }
 
+const KNOWN_CITY_NAMES = new Map<string, { city: string; country: string | null }>([
+  ['kathmandu', { city: 'Kathmandu', country: 'Nepal' }],
+  ['pokhara', { city: 'Pokhara', country: 'Nepal' }],
+  ['lalitpur', { city: 'Lalitpur', country: 'Nepal' }],
+  ['bhaktapur', { city: 'Bhaktapur', country: 'Nepal' }],
+  ['chitwan', { city: 'Chitwan', country: 'Nepal' }],
+  ['biratnagar', { city: 'Biratnagar', country: 'Nepal' }],
+  ['dharan', { city: 'Dharan', country: 'Nepal' }],
+  ['butwal', { city: 'Butwal', country: 'Nepal' }],
+  ['bhairahawa', { city: 'Bhairahawa', country: 'Nepal' }],
+  ['nepalgunj', { city: 'Nepalgunj', country: 'Nepal' }],
+  ['hetauda', { city: 'Hetauda', country: 'Nepal' }],
+  ['delhi', { city: 'Delhi', country: null }], ['mumbai', { city: 'Mumbai', country: null }],
+  ['bangalore', { city: 'Bangalore', country: null }], ['bengaluru', { city: 'Bengaluru', country: null }],
+  ['dubai', { city: 'Dubai', country: null }], ['sydney', { city: 'Sydney', country: null }],
+  ['melbourne', { city: 'Melbourne', country: null }], ['london', { city: 'London', country: null }],
+  ['new york', { city: 'New York', country: null }], ['dallas', { city: 'Dallas', country: null }],
+  ['austin', { city: 'Austin', country: null }], ['toronto', { city: 'Toronto', country: null }],
+  ['vancouver', { city: 'Vancouver', country: null }], ['tokyo', { city: 'Tokyo', country: null }],
+  ['singapore', { city: 'Singapore', country: null }],
+]);
+
+function cleanDetectedPlace(raw: string) {
+  return raw.trim().replace(/\s+/g, ' ').replace(/[.,!?;:]+$/g, '').trim();
+}
+
 /**
- * Heuristic location extraction from customer chat messages
- * Detects phrases like "from Kathmandu", "living in Pokhara", "based in Texas", etc.
+ * Conservative chat-location extraction. Only explicit origin/residence phrases qualify;
+ * mentioning a destination city by itself is intentionally ignored.
  */
 export function detectLocationFromText(text: string | null | undefined): {
   city: string | null;
   country: string | null;
   formattedLocation: string | null;
 } {
-  if (!text || typeof text !== 'string') {
-    return { city: null, country: null, formattedLocation: null };
-  }
+  if (!text || typeof text !== 'string') return { city: null, country: null, formattedLocation: null };
 
+  const place = String.raw`([\p{L}\p{M}][\p{L}\p{M}\s.'’-]{1,49}?)`;
+  const end = String.raw`(?=[.,!?;:]|\s+(?:and|but|now|currently|looking|want|would|planning|interested|need|travel|travelling|traveling)\b|$)`;
   const patterns = [
-    /(?:i am|i'm|im|we are|we're|living|located|based|staying|from)\s+(?:in|at|from)?\s*([A-Za-z\s]+?)(?:[.,!?]|\s+and|\s+now|$)/i,
-    /(?:currently in|hometown is|residing in)\s+([A-Za-z\s]+?)(?:[.,!?]|$)/i,
+    new RegExp(String.raw`\b(?:i\s+am|i'm|im|we\s+are|we're)\s+from\s+${place}${end}`, 'iu'),
+    new RegExp(String.raw`\b(?:i\s+live|we\s+live|living|based|located|staying|residing)\s+(?:in|at)\s+${place}${end}`, 'iu'),
+    new RegExp(String.raw`\b(?:currently\s+living|currently\s+based|currently\s+located|currently\s+residing)\s+(?:in|at)\s+${place}${end}`, 'iu'),
+    new RegExp(String.raw`\b(?:my\s+hometown|my\s+home\s+town|my\s+home\s+city|my\s+city|hometown)\s+(?:is|:)\s*${place}${end}`, 'iu'),
   ];
-
-  // Specific high-frequency cities
-  const knownCities = [
-    'Kathmandu', 'Pokhara', 'Lalitpur', 'Bhaktapur', 'Chitwan', 'Biratnagar',
-    'Dharan', 'Butwal', 'Bhairahawa', 'Nepalgunj', 'Hetauda', 'Delhi', 'Mumbai',
-    'Bangalore', 'Dubai', 'Sydney', 'Melbourne', 'London', 'New York', 'Dallas',
-    'Austin', 'Toronto', 'Vancouver', 'Tokyo', 'Singapore'
-  ];
-
-  for (const city of knownCities) {
-    const cityRegex = new RegExp(`\\b${city}\\b`, 'i');
-    if (cityRegex.test(text)) {
-      const isNepal = ['Kathmandu', 'Pokhara', 'Lalitpur', 'Bhaktapur', 'Chitwan', 'Biratnagar', 'Dharan', 'Butwal', 'Bhairahawa', 'Nepalgunj', 'Hetauda'].includes(city);
-      return {
-        city,
-        country: isNepal ? 'Nepal' : null,
-        formattedLocation: isNepal ? `${city}, Nepal` : city,
-      };
-    }
-  }
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match && match[1]) {
-      const raw = match[1].trim();
-      if (raw.length > 2 && raw.length < 35 && !/^(here|there|home|travel|vacation|holiday)$/i.test(raw)) {
-        return {
-          city: raw,
-          country: null,
-          formattedLocation: raw,
-        };
-      }
-    }
+    if (!match?.[1]) continue;
+    const raw = cleanDetectedPlace(match[1]);
+    if (raw.length < 2 || raw.length > 50 || /^(here|there|home|abroad|overseas)$/iu.test(raw)) continue;
+
+    const known = KNOWN_CITY_NAMES.get(raw.toLowerCase());
+    const city = known?.city || raw;
+    const country = known?.country || null;
+    return {
+      city,
+      country,
+      formattedLocation: country ? `${city}, ${country}` : city,
+    };
   }
 
   return { city: null, country: null, formattedLocation: null };
