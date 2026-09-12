@@ -12,6 +12,7 @@ const QuerySchema = z.object({
   q: z.string().trim().max(120).default(''),
   dest: z.string().trim().max(160).default('ALL'),
   trip: z.enum(['ALL', 'planning', 'booked', 'pre_departure', 'on_trip', 'completed']).default('ALL'),
+  channel: z.string().trim().max(80).default('ALL'),
 });
 
 type SummaryLead = {
@@ -101,12 +102,19 @@ export async function GET(request: Request) {
   if (input.tab === 'won') query = query.eq('stage', 'won');
   if (input.dest !== 'ALL') query = query.eq('destination', input.dest);
   if (input.trip !== 'ALL') query = query.eq('trip_status', input.trip);
+  if (input.channel !== 'ALL') {
+    if (input.channel === 'legacy') {
+      query = query.is('source_channel', null);
+    } else {
+      query = query.eq('source_channel', input.channel);
+    }
+  }
 
   const term = safeFilterTerm(input.q);
   if (term) {
     const pattern = `%${term}%`;
     query = query.or(
-      `customer_name.ilike.${pattern},lead_code.ilike.${pattern},destination.ilike.${pattern},customer_phone.ilike.${pattern},customer_email.ilike.${pattern}`
+      `customer_name.ilike.${pattern},lead_code.ilike.${pattern},destination.ilike.${pattern},customer_phone.ilike.${pattern},customer_email.ilike.${pattern},source.ilike.${pattern}`
     );
   }
 
