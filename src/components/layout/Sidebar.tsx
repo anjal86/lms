@@ -1,6 +1,5 @@
 'use client';
 
-import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
@@ -15,181 +14,131 @@ import {
   MessageSquareQuote,
   Settings,
   History,
-  Lock,
   LogOut,
+  UserCog,
 } from 'lucide-react';
+
+type NavItem = {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+};
+
+function NavGroup({
+  label,
+  items,
+  pathname,
+}: {
+  label: string;
+  items: NavItem[];
+  pathname: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
+        {label}
+      </div>
+      {items.map((item) => {
+        const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
+        const Icon = item.icon;
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-current={isActive ? 'page' : undefined}
+            className={`group flex min-h-10 items-center gap-3 rounded-lg px-3 text-[13px] font-medium transition ${
+              isActive
+                ? 'bg-white/10 text-white shadow-inner shadow-white/[0.03]'
+                : 'text-zinc-400 hover:bg-white/[0.055] hover:text-zinc-100'
+            }`}
+          >
+            <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-blue-400' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
+            <span className="truncate">{item.label}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { leads, followUps, currentUser, logout } = useApp();
-  const canViewSettings = canAccessSettings(currentUser.role);
+  const { currentUser, logout } = useApp();
+  const canManage = canAccessSettings(currentUser.role);
 
-  const overdueCount = followUps.filter((fu) => {
-    const isPast = new Date(fu.scheduled_at).getTime() < Date.now();
-    return (fu.status === 'pending' || fu.status === 'missed') && isPast;
-  }).length;
-
-  const breachedSlaCount = leads.filter((l) => l.is_first_response_breached).length;
-  const actionCount = overdueCount + breachedSlaCount;
-
-  const navItems = [
-    {
-      label: 'Action Center',
-      href: '/dashboard',
-      icon: LayoutDashboard,
-      badge: actionCount || null,
-      alert: actionCount > 0 ? `${actionCount} urgent` : null,
-    },
-    {
-      label: 'Pipeline',
-      href: '/leads',
-      icon: Kanban,
-      badge: leads.length,
-      alert: breachedSlaCount > 0 ? `${breachedSlaCount} breached` : null,
-    },
-    {
-      label: 'Follow-ups',
-      href: '/follow-ups',
-      icon: CalendarClock,
-      badge: followUps.filter((f) => f.status === 'pending').length,
-      alert: overdueCount > 0 ? `${overdueCount} overdue` : null,
-    },
-    {
-      label: 'Team Directory',
-      href: '/team',
-      icon: Users,
-      badge: null,
-      alert: null,
-    },
-    {
-      label: 'Performance',
-      href: '/analytics',
-      icon: BarChart3,
-      badge: null,
-      alert: null,
-    },
-    {
-      label: 'Incentives',
-      href: '/incentives',
-      icon: Trophy,
-      badge: null,
-      alert: null,
-    },
-    {
-      label: 'Templates',
-      href: '/templates',
-      icon: MessageSquareQuote,
-      badge: null,
-      alert: null,
-    },
-    ...(canViewSettings
-      ? [
-          {
-            label: 'Security Audit',
-            href: '/audit',
-            icon: History,
-            badge: null,
-            alert: null,
-          },
-          {
-            label: 'SLA Rules',
-            href: '/settings',
-            icon: Settings,
-            badge: null,
-            alert: null,
-          },
-        ]
-      : []),
+  const workItems: NavItem[] = [
+    { label: 'Action Center', href: '/dashboard', icon: LayoutDashboard },
+    { label: 'Pipeline', href: '/leads', icon: Kanban },
+    { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
+    { label: 'Team', href: '/team', icon: Users },
   ];
 
+  const insightItems: NavItem[] = [
+    { label: 'Performance', href: '/analytics', icon: BarChart3 },
+    { label: 'Incentives', href: '/incentives', icon: Trophy },
+    { label: 'Templates', href: '/templates', icon: MessageSquareQuote },
+  ];
+
+  const adminItems: NavItem[] = canManage
+    ? [
+        { label: 'User Management', href: '/team/users', icon: UserCog },
+        { label: 'Security Audit', href: '/audit', icon: History },
+        { label: 'Settings', href: '/settings', icon: Settings },
+      ]
+    : [];
+
+  const loadPercent = currentUser.max_capacity > 0
+    ? Math.min(100, Math.round((currentUser.current_load / currentUser.max_capacity) * 100))
+    : 0;
+
   return (
-    <aside className="hidden md:flex w-56 bg-zinc-950 text-zinc-400 flex-col justify-between flex-shrink-0 border-r border-zinc-800/80">
-      <div>
-        <div className="h-12 px-4 flex items-center gap-2.5 border-b border-zinc-800/80">
-          <div className="w-6 h-6 rounded bg-zinc-100 text-zinc-950 flex items-center justify-center font-bold text-xs">
-            W
-          </div>
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-100 tracking-tight">
-            <span>Wanderlust</span>
-            <span className="text-[10px] text-zinc-500 font-mono">CRM</span>
-          </div>
-        </div>
-
-        <nav className="p-2 space-y-0.5">
-          <div className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-            Workspace
-          </div>
-          {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href === '/dashboard' && pathname === '/');
-            const Icon = item.icon;
-
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
-                  isActive
-                    ? 'bg-zinc-900 text-zinc-100 border border-zinc-800 shadow-2xs'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-zinc-100' : 'text-zinc-400'}`} />
-                  <span>{item.label}</span>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  {item.alert && (
-                    <span suppressHydrationWarning className="text-[10px] px-1 py-0.2 rounded font-mono font-medium bg-red-950/80 text-red-400 border border-red-900/50">
-                      {item.alert}
-                    </span>
-                  )}
-                  {item.badge !== null && !item.alert && (
-                    <span suppressHydrationWarning className="text-[11px] font-mono text-zinc-500">
-                      {item.badge}
-                    </span>
-                  )}
-                </div>
-              </Link>
-            );
-          })}
-        </nav>
+    <aside className="hidden w-60 shrink-0 flex-col border-r border-zinc-900 bg-zinc-950 text-zinc-300 md:flex">
+      <div className="flex h-16 items-center border-b border-white/[0.06] px-4">
+        <Link href="/dashboard" className="flex items-center gap-3 rounded-lg" aria-label="Wanderlust CRM home">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-xs font-bold text-zinc-950 shadow-sm">W</span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold tracking-[-0.01em] text-white">Wanderlust</span>
+            <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Travel CRM</span>
+          </span>
+        </Link>
       </div>
 
-      <div className="p-3 border-t border-zinc-800/80 space-y-2">
+      <nav className="flex-1 overflow-y-auto px-2.5 py-3">
+        <NavGroup label="Work" items={workItems} pathname={pathname} />
+        <NavGroup label="Insights" items={insightItems} pathname={pathname} />
+        {adminItems.length > 0 && <NavGroup label="Admin" items={adminItems} pathname={pathname} />}
+      </nav>
+
+      <div className="border-t border-white/[0.06] p-3">
         <Link
           href="/profile"
-          className="block p-2.5 rounded-md bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800/80 hover:border-zinc-700 text-xs transition group"
+          className="group block rounded-xl border border-white/[0.07] bg-white/[0.035] p-3 transition hover:border-white/[0.12] hover:bg-white/[0.055]"
         >
-          <div className="flex items-center justify-between text-[11px] text-zinc-400 mb-1.5">
-            <span className="font-medium group-hover:text-zinc-200 transition">My Profile</span>
-            <span suppressHydrationWarning className="font-mono text-zinc-300">
-              {currentUser.current_load}/{currentUser.max_capacity} leads
-            </span>
+          <div className="flex items-center gap-2.5">
+            <img
+              src={currentUser.avatar_url}
+              alt=""
+              className="h-8 w-8 rounded-full object-cover ring-1 ring-white/10"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold text-zinc-100">{currentUser.full_name}</div>
+              <div className="mt-0.5 text-[11px] capitalize text-zinc-500">{currentUser.role}</div>
+            </div>
+            <span className="text-[10px] font-medium text-zinc-600 group-hover:text-zinc-400">Edit</span>
           </div>
-          <div className="w-full bg-zinc-800 rounded-full h-1 overflow-hidden">
+
+          <div className="mt-3 flex items-center justify-between text-[10px] text-zinc-500">
+            <span>Lead capacity</span>
+            <span className="font-mono text-zinc-400">{currentUser.current_load}/{currentUser.max_capacity}</span>
+          </div>
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
             <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                currentUser.current_load >= currentUser.max_capacity ? 'bg-red-500' : 'bg-zinc-400'
-              }`}
-              style={{
-                width: `${Math.min(100, (currentUser.current_load / currentUser.max_capacity) * 100)}%`,
-              }}
+              className={`h-full rounded-full transition-all ${loadPercent >= 100 ? 'bg-red-500' : loadPercent >= 80 ? 'bg-amber-400' : 'bg-blue-500'}`}
+              style={{ width: `${loadPercent}%` }}
             />
           </div>
-          <div className="mt-2 text-[10px] text-zinc-500 group-hover:text-zinc-400 truncate flex items-center justify-between">
-            <span className="truncate">{currentUser.destination_tags.slice(0, 2).join(', ')}</span>
-            <span className="text-[9px] font-mono text-zinc-500 uppercase">Edit →</span>
-          </div>
         </Link>
-
-        {!canViewSettings && (
-          <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-zinc-600 font-mono">
-            <Lock className="w-3 h-3 text-zinc-600" />
-            <span>Settings — Admin/Manager Only</span>
-          </div>
-        )}
 
         <button
           type="button"
@@ -197,11 +146,10 @@ export default function Sidebar() {
             logout();
             router.push('/login');
           }}
-          aria-label="Log out of Wanderlust CRM"
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11px] text-zinc-500 hover:text-red-400 hover:bg-zinc-900/80 transition cursor-pointer"
+          className="mt-2 flex min-h-10 w-full items-center gap-2.5 rounded-lg px-3 text-[12px] font-medium text-zinc-500 transition hover:bg-red-500/10 hover:text-red-300"
         >
-          <LogOut className="w-3 h-3" />
-          <span>Log Out</span>
+          <LogOut className="h-3.5 w-3.5" />
+          Sign out
         </button>
       </div>
     </aside>
