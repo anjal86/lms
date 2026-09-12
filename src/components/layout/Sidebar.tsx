@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { canAccessSettings } from '@/lib/permissions';
 import {
+  LayoutDashboard,
   Kanban,
   CalendarClock,
   BarChart3,
@@ -13,7 +14,6 @@ import {
   Users,
   MessageSquareQuote,
   Settings,
-  Compass,
   Lock,
   LogOut,
 } from 'lucide-react';
@@ -30,8 +30,16 @@ export default function Sidebar() {
   }).length;
 
   const breachedSlaCount = leads.filter((l) => l.is_first_response_breached).length;
+  const actionCount = overdueCount + breachedSlaCount;
 
   const navItems = [
+    {
+      label: 'Action Center',
+      href: '/dashboard',
+      icon: LayoutDashboard,
+      badge: actionCount || null,
+      alert: actionCount > 0 ? `${actionCount} urgent` : null,
+    },
     {
       label: 'Pipeline',
       href: '/leads',
@@ -89,7 +97,6 @@ export default function Sidebar() {
   return (
     <aside className="hidden md:flex w-56 bg-zinc-950 text-zinc-400 flex-col justify-between flex-shrink-0 border-r border-zinc-800/80">
       <div>
-        {/* Brand Header */}
         <div className="h-12 px-4 flex items-center gap-2.5 border-b border-zinc-800/80">
           <div className="w-6 h-6 rounded bg-zinc-100 text-zinc-950 flex items-center justify-center font-bold text-xs">
             W
@@ -100,13 +107,12 @@ export default function Sidebar() {
           </div>
         </div>
 
-        {/* Navigation */}
         <nav className="p-2 space-y-0.5">
           <div className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
             Workspace
           </div>
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href === '/leads' && pathname === '/');
+            const isActive = pathname === item.href || (item.href === '/dashboard' && pathname === '/');
             const Icon = item.icon;
 
             return (
@@ -142,7 +148,6 @@ export default function Sidebar() {
         </nav>
       </div>
 
-      {/* Footer Workload Mini-Widget, Profile Link & Log Out */}
       <div className="p-3 border-t border-zinc-800/80 space-y-2">
         <Link
           href="/profile"
@@ -170,7 +175,6 @@ export default function Sidebar() {
           </div>
         </Link>
 
-        {/* Agent: Settings Locked indicator */}
         {!canViewSettings && (
           <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-zinc-600 font-mono">
             <Lock className="w-3 h-3 text-zinc-600" />
@@ -178,7 +182,6 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Log Out Button */}
         <button
           type="button"
           onClick={() => {
