@@ -62,7 +62,9 @@ async function pagedGraph(url: URL, maxPages: number) {
   const result: MetaRecord[] = [];
   let next: string | null = url.toString();
   for (let page = 0; page < maxPages && next; page += 1) {
-    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 15_000, retries: 2 });
+    // Foreground Page discovery must stay responsive. If Meta is slow, fail this
+    // small chunk and let a later sync cycle continue instead of retrying for a minute.
+    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 5_000, retries: 0 });
     if (!response.ok) {
       const providerError = record(data.error);
       throw new Error(typeof providerError.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
