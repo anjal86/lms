@@ -10,15 +10,28 @@ if (typeof process.loadEnvFile === 'function') {
   }
 }
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.PUBLIC_SUPABASE_URL || 'http://localhost:8000';
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIstateIjoxNjAwMDAwMDAwLCJleHAiOjIwMDAwMDAwMDB9.s1e2r3v4i5c6e7_r8o9l0e1_k2e3y4_t5o6k7e8n9';
-
 function getArg(name) {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-const defaultPassword = getArg('password') || 'TravelLMS2026!';
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY;
+const seedPassword = getArg('password') || process.env.SEED_USER_PASSWORD;
+const confirmed = process.argv.includes('--confirm-demo-seed') || process.env.ALLOW_DEMO_SEED === 'true';
+
+if (!confirmed) {
+  console.error('Demo seeding is disabled by default. Re-run with --confirm-demo-seed or ALLOW_DEMO_SEED=true.');
+  process.exit(1);
+}
+if (!url || !serviceRoleKey) {
+  console.error('Set NEXT_PUBLIC_SUPABASE_URL/PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/SERVICE_ROLE_KEY before seeding.');
+  process.exit(1);
+}
+if (!seedPassword || seedPassword.length < 12) {
+  console.error('Provide a seed password of at least 12 characters with --password or SEED_USER_PASSWORD.');
+  process.exit(1);
+}
 
 const USERS = [
   {
@@ -109,72 +122,65 @@ const USERS = [
 ];
 
 console.log(`Connecting to Supabase at: ${url}`);
+console.log(`Creating/updating ${USERS.length} explicitly confirmed demo users.`);
+
 const supabase = createClient(url, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-console.log(`\nCreating ${USERS.length} system users with default password: "${defaultPassword}"\n`);
-
-for (const u of USERS) {
-  let userId = u.id;
-  
-  // Try to create auth user
+for (const user of USERS) {
+  let userId = user.id;
   const { data: created, error: createError } = await supabase.auth.admin.createUser({
-    id: u.id,
-    email: u.email,
-    password: defaultPassword,
+    id: user.id,
+    email: user.email,
+    password: seedPassword,
     email_confirm: true,
-    user_metadata: { full_name: u.fullName },
+    user_metadata: { full_name: user.fullName },
   });
 
   if (createError) {
     if (createError.message.includes('already exists') || createError.status === 422 || createError.status === 400) {
-      // Find existing user id
-      const { data: listData } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const existing = listData?.users?.find((item) => item.email?.toLowerCase() === u.email.toLowerCase());
-      if (existing) {
-        userId = existing.id;
-        // Update password to match
-        await supabase.auth.admin.updateUserById(userId, {
-          password: defaultPassword,
-          email_confirm: true,
-          user_metadata: { full_name: u.fullName },
-        });
-      }
+      const { data: listData, error: listError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      if (listError) throw listError;
+      const existing = listData?.users?.find((item) => item.email?.toLowerCase() === user.email.toLowerCase());
+      if (!existing) throw createError;
+      userId = existing.id;
+      const { error: updateError } = await supabase.auth.admin.updateUserById(userId, {
+        password: seedPassword,
+        email_confirm: true,
+        user_metadata: { full_name: user.fullName },
+      });
+      if (updateError) throw updateError;
     } else {
-      console.warn(`Warning creating auth user ${u.email}: ${createError.message}`);
+      throw createError;
     }
   } else if (created.user) {
     userId = created.user.id;
   }
 
-  // Upsert profile in DB
   const { error: profileError } = await supabase.from('profiles').upsert({
     id: userId,
-    email: u.email,
-    full_name: u.fullName,
-    role: u.role,
-    employee_code: u.employee_code,
-    phone: u.phone,
-    direct_extension: u.direct_extension,
-    avatar_url: u.avatar_url,
-    destination_tags: u.destination_tags,
-    max_capacity: u.max_capacity,
+    email: user.email,
+    full_name: user.fullName,
+    role: user.role,
+    employee_code: user.employee_code,
+    phone: user.phone,
+    direct_extension: user.direct_extension,
+    avatar_url: user.avatar_url,
+    destination_tags: user.destination_tags,
+    max_capacity: user.max_capacity,
     current_load: 0,
     status: 'available',
     is_active: true,
-    accepting_leads: u.accepting_leads,
-    bio: u.bio,
-    languages: u.languages,
-    office_location: u.office_location,
-    certifications: u.certifications,
+    accepting_leads: user.accepting_leads,
+    bio: user.bio,
+    languages: user.languages,
+    office_location: user.office_location,
+    certifications: user.certifications,
   });
 
-  if (profileError) {
-    console.error(`❌ Failed to upsert profile for ${u.email}: ${profileError.message}`);
-  } else {
-    console.log(`✅ [${u.role.toUpperCase()}] ${u.fullName} (${u.email}) - Ready! ID: ${userId}`);
-  }
+  if (profileError) throw profileError;
+  console.log(`[${user.role.toUpperCase()}] ${user.email} ready.`);
 }
 
-console.log('\n✨ All users created successfully!\n');
+console.log('Demo users seeded. Password was supplied externally and was not printed.');
