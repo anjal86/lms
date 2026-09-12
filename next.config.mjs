@@ -12,6 +12,7 @@ function configuredSupabase() {
   }
 }
 
+const isDev = process.env.NODE_ENV === 'development';
 const supabaseUrl = configuredSupabase();
 const supabaseOrigin = supabaseUrl?.origin || '';
 const supabaseWsOrigin = supabaseOrigin
@@ -60,13 +61,17 @@ const nextConfig = {
       supabaseWsOrigin,
     ].filter(Boolean);
 
+    // React/Turbopack use eval() for development-only debugging features.
+    // Keep unsafe-eval out of production CSP.
+    const scriptSources = ["'self'", "'unsafe-inline'", ...(isDev ? ["'unsafe-eval'"] : [])];
+
     const csp = [
       "default-src 'self'",
       "base-uri 'self'",
       "frame-ancestors 'none'",
       "form-action 'self'",
       "object-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
+      `script-src ${scriptSources.join(' ')}`,
       "style-src 'self' 'unsafe-inline'",
       `img-src ${[...new Set(imgSources)].join(' ')}`,
       "font-src 'self' data:",
