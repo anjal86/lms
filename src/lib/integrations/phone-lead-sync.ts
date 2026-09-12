@@ -16,6 +16,7 @@ type ScanScope = {
 
 type ConversationRow = {
   id: string;
+  lead_id: string | null;
   provider: Provider;
   connection_id: string | null;
   external_contact_id: string | null;
@@ -205,6 +206,23 @@ async function writeDetectedPhone(input: {
     .update(patch)
     .eq('id', input.conversation.id);
   if (error) throw error;
+
+  // If this conversation has already been converted, repair the actual CRM lead
+  // too, but never overwrite a real/manual phone number with a detected value.
+  if (input.conversation.lead_id) {
+    const { data: lead } = await admin
+      .from('leads')
+      .select('customer_phone')
+      .eq('id', input.conversation.lead_id)
+      .maybeSingle();
+    if (lead && isProviderSyntheticPhone(lead.customer_phone, input.conversation.provider)) {
+      const { error: leadError } = await admin
+        .from('leads')
+        .update({ customer_phone: input.phones[0] })
+        .eq('id', input.conversation.lead_id);
+      if (leadError) throw leadError;
+    }
+  }
 }
 
 async function markScanComplete(input: {
@@ -295,14 +313,15 @@ async function scanConversationForPhone(conversation: ConversationRow, maxPages:
         return { found: false, error: 'Meta conversation could not be resolved.' };
       }
 
-      const { data: fresh } = await createSupabaseAdminClient()
+      const admin = createSupabaseAdminClient();
+      const { data: freshMetadata } = await admin
         .from('lead_conversations')
         .select('metadata')
         .eq('id', conversation.id)
         .maybeSingle();
-      await createSupabaseAdminClient()
+      await admin
         .from('lead_conversations')
-        .update({ metadata: { ...record(fresh?.metadata), meta_conversation_id: metaConversationId } })
+        .update({ metadata: { ...record(freshMetadata?.metadata), meta_conversation_id: metaConversationId } })
         .eq('id', conversation.id);
     }
 
@@ -385,7 +404,7 @@ export async function scanPhoneLeadHistoryBatch(options?: {
 
   let query = admin
     .from('lead_conversations')
-    .select('id,provider,connection_id,external_contact_id,external_thread_id,customer_phone,metadata')
+    .select('id,lead_id,provider,connection_id,external_contact_id,external_thread_id,customer_phone,metadata')
     .in('provider', ['facebook', 'instagram'])
     .is('metadata->>detected_phone', null)
     .is('metadata->>phone_history_scanned_at', null)
