@@ -52,6 +52,8 @@ export async function POST(
     p_customer_name: parsed.data.customerName || null,
     p_customer_phone: parsed.data.customerPhone || null,
     p_customer_email: parsed.data.customerEmail || null,
+    p_customer_city: parsed.data.customerCity || null,
+    p_customer_country: parsed.data.customerCountry || null,
     p_destination: parsed.data.destination,
     p_travel_dates: parsed.data.travelDates || null,
     p_budget_range: parsed.data.budgetRange || null,
@@ -73,29 +75,10 @@ export async function POST(
   const result = (data || {}) as ConversionResult;
   if (!result.lead?.id) return NextResponse.json({ error: 'Conversion did not return a lead.' }, { status: 500 });
 
-  let leadRecord = result.lead;
-
-  if (parsed.data.customerCity || parsed.data.customerCountry) {
-    const patch: Record<string, string | null> = {};
-    if (parsed.data.customerCity) patch.customer_city = parsed.data.customerCity;
-    if (parsed.data.customerCountry) patch.customer_country = parsed.data.customerCountry;
-
-    const { data: updatedLead } = await actor.supabase
-      .from('leads')
-      .update(patch)
-      .eq('id', leadRecord.id)
-      .select('*')
-      .maybeSingle();
-
-    if (updatedLead) {
-      leadRecord = updatedLead;
-    }
-  }
-
   return NextResponse.json({
-    lead: leadRecord,
+    lead: result.lead,
     conversationId: result.conversation_id || conversationId,
-    workspaceUrl: `/leads/${leadRecord.id}/workspace`,
+    workspaceUrl: `/leads/${result.lead.id}/workspace`,
     alreadyConverted: Boolean(result.already_converted),
   }, { status: result.already_converted ? 200 : 201 });
 }
