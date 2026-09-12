@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/api/leads/webhook'];
+const PUBLIC_PATHS = ['/login', '/forgot-password', '/reset-password', '/auth/callback', '/api/leads/webhook'];
 const safeInternalPath = (value: string | null, fallback = '/leads') =>
   value && value.startsWith('/') && !value.startsWith('//') ? value : fallback;
 
