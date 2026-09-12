@@ -86,7 +86,7 @@ export default function ProfilePage() {
   const [kanbanDensity, setKanbanDensity] = useState<'compact' | 'expanded'>(
     currentUser.user_preferences?.kanban_density || 'expanded'
   );
-  const [defaultLanding, setDefaultLanding] = useState<'/leads' | '/follow-ups' | '/analytics' | '/team'>(
+  const [defaultLanding, setDefaultLanding] = useState<'/dashboard' | '/leads' | '/follow-ups' | '/analytics' | '/team'>(
     currentUser.user_preferences?.default_landing_page || '/leads'
   );
   const [idleAutoAway, setIdleAutoAway] = useState<number>(
@@ -772,6 +772,7 @@ export default function ProfilePage() {
                     aria-label="Default landing route"
                     className="w-full border border-zinc-200 rounded p-2 text-xs bg-white text-zinc-900 font-medium"
                   >
+                    <option value="/dashboard">Action Center (/dashboard)</option>
                     <option value="/leads">Pipeline Kanban (/leads)</option>
                     <option value="/follow-ups">Follow-Ups Agenda (/follow-ups)</option>
                     <option value="/analytics">Performance Analytics (/analytics)</option>

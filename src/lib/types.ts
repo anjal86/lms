@@ -80,6 +80,8 @@ export interface Lead {
   source: string;
   external_id?: string | null;
   duplicate_of?: string | null;
+  lead_score?: number;
+  lead_temperature?: 'cold' | 'warm' | 'hot';
   stage: LeadStage;
   priority: Priority;
   assigned_to: string | null;

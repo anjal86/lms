@@ -292,6 +292,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refreshData]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !currentUserId) return;
+
+    const supabase = getSupabaseBrowserClient();
+    const channel = supabase
+      .channel(`crm-notifications:${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${currentUserId}`,
+        },
+        (payload) => {
+          const incoming = payload.new as AppNotification;
+          setNotificationsList((prev) => [incoming, ...prev.filter((item) => item.id !== incoming.id)]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [currentUserId, isAuthenticated]);
+
   const profilesWithDynamicLoad = useMemo(() => profiles.map((profile) => ({
     ...profile,
     current_load: leadsList.filter((lead) => lead.assigned_to === profile.id && lead.stage !== 'won' && lead.stage !== 'lost').length,

@@ -28,6 +28,7 @@ import QuickLogModal from '@/components/leads/QuickLogModal';
 import WhatsAppModal from '@/components/leads/WhatsAppModal';
 import WinDealModal from '@/components/leads/WinDealModal';
 import LostDealModal from '@/components/leads/LostDealModal';
+import { getTravelDocumentUrl, removeTravelDocument, uploadTravelDocument } from '@/lib/document-storage';
 
 const QuoteBuilderModal = dynamic(() => import('@/components/leads/QuoteBuilderModal'), { ssr: false });
 const PaymentReceiptModal = dynamic(() => import('@/components/leads/PaymentReceiptModal'), { ssr: false });
@@ -155,7 +156,9 @@ export default function LeadDetailPage() {
   const [isAddDocOpen, setIsAddDocOpen] = useState(false);
   const [docTitle, setDocTitle] = useState('');
   const [docCategory, setDocCategory] = useState<'passport' | 'visa' | 'ticket' | 'hotel_voucher' | 'insurance' | 'other'>('passport');
-  const [docFileName, setDocFileName] = useState('');
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [isDocUploading, setIsDocUploading] = useState(false);
+  const [docUploadError, setDocUploadError] = useState('');
 
   // Supplier Form State
   const [isEditSupplierOpen, setIsEditSupplierOpen] = useState(false);
@@ -334,20 +337,48 @@ export default function LeadDetailPage() {
     setIsAddPassengerOpen(false);
   };
 
-  const handleAddDocumentSubmit = (e: React.FormEvent) => {
+  const handleAddDocumentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!docTitle.trim() || !docFileName.trim()) return;
+    if (!docTitle.trim() || !docFile || isDocUploading) return;
 
-    addDocument(lead.id, {
-      title: docTitle.trim(),
-      category: docCategory,
-      file_name: docFileName.trim(),
-      file_size: '1.2 MB',
-    });
+    setIsDocUploading(true);
+    setDocUploadError('');
+    try {
+      const uploaded = await uploadTravelDocument(lead.id, docFile);
+      addDocument(lead.id, {
+        title: docTitle.trim(),
+        category: docCategory,
+        file_name: uploaded.file_name,
+        file_size: uploaded.file_size,
+        storage_path: uploaded.storage_path,
+      });
+      setDocTitle('');
+      setDocFile(null);
+      setIsAddDocOpen(false);
+    } catch (error) {
+      setDocUploadError(error instanceof Error ? error.message : 'Unable to upload document.');
+    } finally {
+      setIsDocUploading(false);
+    }
+  };
 
-    setDocTitle('');
-    setDocFileName('');
-    setIsAddDocOpen(false);
+  const handleOpenDocument = async (doc: TravelerDocument) => {
+    if (!doc.storage_path) return;
+    try {
+      const url = await getTravelDocumentUrl(lead.id, doc.storage_path);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setDocUploadError(error instanceof Error ? error.message : 'Unable to open document.');
+    }
+  };
+
+  const handleDeleteDocument = async (doc: TravelerDocument) => {
+    try {
+      if (doc.storage_path) await removeTravelDocument(lead.id, doc.storage_path);
+      deleteDocument(lead.id, doc.id);
+    } catch (error) {
+      setDocUploadError(error instanceof Error ? error.message : 'Unable to delete document.');
+    }
   };
 
   // Tab 5: DMC Operations & Pre-Departure Handlers
@@ -1720,15 +1751,16 @@ export default function LeadDetailPage() {
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-medium text-zinc-600 block">File Name</label>
+                        <label className="text-[10px] font-medium text-zinc-600 block">Secure File</label>
                         <input
-                          type="text"
-                          value={docFileName}
-                          onChange={(e) => setDocFileName(e.target.value)}
-                          placeholder="e.g. e_ticket_singapore_airlines.pdf"
+                          type="file"
+                          accept="application/pdf,image/jpeg,image/png,image/webp"
+                          onChange={(e) => setDocFile(e.target.files?.[0] || null)}
                           className="w-full border border-zinc-200 rounded p-1.5 font-mono text-xs bg-white"
                           required
                         />
+                        <p className="mt-1 text-[9px] text-zinc-400">Private PDF/JPEG/PNG/WebP · max 10 MB</p>
+                        {docUploadError && <p className="mt-1 text-[10px] text-rose-600">{docUploadError}</p>}
                       </div>
                     </div>
 
@@ -1742,9 +1774,10 @@ export default function LeadDetailPage() {
                       </button>
                       <button
                         type="submit"
-                        className="px-3 py-1 bg-zinc-900 text-white rounded text-xs font-medium"
+                        disabled={isDocUploading || !docFile}
+                        className="px-3 py-1 bg-zinc-900 disabled:bg-zinc-400 text-white rounded text-xs font-medium"
                       >
-                        Attach Document
+                        {isDocUploading ? 'Uploading…' : 'Upload Securely'}
                       </button>
                     </div>
                   </form>
@@ -1769,9 +1802,19 @@ export default function LeadDetailPage() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {doc.storage_path && (
+                            <button
+                              type="button"
+                              onClick={() => void handleOpenDocument(doc)}
+                              aria-label={`Open ${doc.title}`}
+                              className="text-zinc-400 hover:text-blue-600 p-1"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => deleteDocument(lead.id, doc.id)}
+                            onClick={() => void handleDeleteDocument(doc)}
                             aria-label={`Delete ${doc.title}`}
                             className="text-zinc-400 hover:text-rose-600 p-1"
                           >

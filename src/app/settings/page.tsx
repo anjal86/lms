@@ -292,10 +292,11 @@ export default function SettingsPage() {
   };
 
   const handleResetDefaults = () => {
-    resetToFactoryDefaults();
     setShowResetConfirm(false);
-    setBackupStatus({ type: 'success', message: 'CRM restored to pristine initial demo dataset.' });
-    triggerSaveNotification('Factory Defaults Restored');
+    setBackupStatus({
+      type: 'error',
+      message: 'Factory reset is disabled. Use a controlled database backup/restore procedure instead.',
+    });
   };
 
   const tabs: { id: SettingsTab; label: string; icon: any; lock?: string }[] = [
@@ -1460,7 +1461,7 @@ export default function SettingsPage() {
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-md space-y-2 animate-in fade-in">
                 <div className="flex items-center gap-2 text-rose-900 font-medium text-xs">
                   <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-                  <span>Are you sure? This will wipe current browser storage and restore default demo data.</span>
+                  <span>Browser factory reset is disabled in production. Use a controlled database restore instead.</span>
                 </div>
                 <div className="flex items-center gap-2 pt-1">
                   <button
@@ -1469,7 +1470,7 @@ export default function SettingsPage() {
                     aria-label="Confirm factory reset"
                     className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-medium transition cursor-pointer shadow-2xs"
                   >
-                    Yes, Reset Everything
+                    Close
                   </button>
                   <button
                     type="button"
