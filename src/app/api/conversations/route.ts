@@ -8,6 +8,11 @@ function sanitizeSearchTerm(value: string) {
   return value.replace(/[,%()'"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
+function sanitizeAccountId(value: string | null) {
+  const trimmed = value?.trim() || '';
+  return /^[A-Za-z0-9:_-]{1,128}$/.test(trimmed) ? trimmed : '';
+}
+
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
@@ -16,6 +21,8 @@ export async function GET(request: Request) {
   const filter = url.searchParams.get('filter') || 'all';
   const provider = url.searchParams.get('provider') || 'all';
   const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
+  const accountId = sanitizeAccountId(url.searchParams.get('accountId'));
+  const accountProvider = url.searchParams.get('accountProvider');
   // The inbox is intentionally scroll-based today. The current production queue
   // already exceeds 300 conversations, so return 500 by default instead of
   // silently hiding older clients. Keep a hard cap until cursor pagination lands.
@@ -55,6 +62,14 @@ export async function GET(request: Request) {
 
   if (provider !== 'all') query = query.eq('provider', provider);
 
+  // Keep connected Meta Page / Instagram account inboxes isolated when requested.
+  // IDs are validated above before becoming part of the PostgREST filter.
+  if (accountId && accountProvider === 'facebook') {
+    query = query.eq('metadata->>meta_page_id', accountId);
+  } else if (accountId && accountProvider === 'instagram') {
+    query = query.eq('metadata->>instagram_business_account_id', accountId);
+  }
+
   if (search) {
     const pattern = `%${search}%`;
     query = query.or(`customer_name.ilike.${pattern},customer_phone.ilike.${pattern},customer_email.ilike.${pattern},last_message_preview.ilike.${pattern}`);
@@ -68,11 +83,42 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
-  // Metrics also use the actor's RLS-scoped client; agents cannot infer other agents' inbox volume.
+  // Metrics use the same Page/account scope as the visible inbox so the counters
+  // describe the inbox the agent is actually working, not all connected Pages.
+  let unconvertedCountQuery = actor.supabase
+    .from('lead_conversations')
+    .select('id', { count: 'exact', head: true })
+    .is('lead_id', null)
+    .eq('status', 'open');
+  let allOpenQuery = actor.supabase
+    .from('lead_conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'open');
+  let hasPhoneQuery = actor.supabase
+    .from('lead_conversations')
+    .select('id', { count: 'exact', head: true })
+    .not('metadata->detected_phone', 'is', null);
+
+  if (provider !== 'all') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
+    allOpenQuery = allOpenQuery.eq('provider', provider);
+    hasPhoneQuery = hasPhoneQuery.eq('provider', provider);
+  }
+
+  if (accountId && accountProvider === 'facebook') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>meta_page_id', accountId);
+    allOpenQuery = allOpenQuery.eq('metadata->>meta_page_id', accountId);
+    hasPhoneQuery = hasPhoneQuery.eq('metadata->>meta_page_id', accountId);
+  } else if (accountId && accountProvider === 'instagram') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>instagram_business_account_id', accountId);
+    allOpenQuery = allOpenQuery.eq('metadata->>instagram_business_account_id', accountId);
+    hasPhoneQuery = hasPhoneQuery.eq('metadata->>instagram_business_account_id', accountId);
+  }
+
   const [unconvertedCountRes, allOpenRes, hasPhoneRes] = await Promise.all([
-    actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).is('lead_id', null).eq('status', 'open'),
-    actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('status', 'open'),
-    actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).not('metadata->detected_phone', 'is', null),
+    unconvertedCountQuery,
+    allOpenQuery,
+    hasPhoneQuery,
   ]);
 
   return NextResponse.json({
