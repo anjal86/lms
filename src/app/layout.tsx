@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, Manrope } from 'next/font/google';
 import './globals.css';
+import './color-theme.css';
 import { AppProvider } from '@/lib/store';
 import AppShell from '@/components/layout/AppShell';
 import ToastContainer from '@/components/layout/ToastContainer';
