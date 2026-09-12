@@ -4,7 +4,7 @@ import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
-import { discoverSelectedMetaPageHistory } from '@/lib/integrations/meta-page-history';
+import { discoverSelectedMetaPageHistory, type SelectedPageHistoryResult } from '@/lib/integrations/meta-page-history';
 import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
 
 export const runtime = 'nodejs';
@@ -144,6 +144,28 @@ function phoneScanScope(scope: ProviderScope | null) {
     : null;
 }
 
+function noConversationDiscovery(): SelectedPageHistoryResult {
+  return {
+    conversationsDiscovered: 0,
+    conversationsScanned: 0,
+    previewMessagesInserted: 0,
+    historyComplete: true,
+    nextCursor: null,
+    errors: [],
+  };
+}
+
+async function discoverSelectedPageChunk(scope: ProviderScope | null, maxPages: number) {
+  if (!scope) return noConversationDiscovery();
+  return discoverSelectedMetaPageHistory({
+    provider: scope.provider,
+    accountId: scope.accountId,
+    connectionId: scope.connectionId,
+    pageId: scope.pageId,
+    maxPages,
+  });
+}
+
 export async function POST(request: Request) {
   const url = new URL(request.url);
   const liveMode = url.searchParams.get('mode') === 'live';
@@ -181,20 +203,33 @@ export async function POST(request: Request) {
 
     if (liveMode) {
       const result = await runLiveSync(requestedScope.scope);
-      const phoneScan = canRunHistoryMaintenance
-        ? await scanPhoneLeadHistoryBatch({
-            scope: phoneScanScope(requestedScope.scope),
-            batchSize: 1,
-            maxHistoryPages: 1,
-            timeBudgetMs: 3_500,
-            requestTimeoutMs: 3_000,
-          })
-        : { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] };
+
+      // Historical customer-chat discovery and phone extraction are distinct jobs.
+      // The former advances the Page's Meta conversation cursor; the latter scans
+      // message history for phones. Run small bounded chunks so the request stays responsive.
+      const [conversationDiscovery, phoneScan] = canRunHistoryMaintenance
+        ? await Promise.all([
+            discoverSelectedPageChunk(requestedScope.scope, 1),
+            scanPhoneLeadHistoryBatch({
+              scope: phoneScanScope(requestedScope.scope),
+              batchSize: 1,
+              maxHistoryPages: 1,
+              timeBudgetMs: 3_000,
+              requestTimeoutMs: 2_500,
+            }),
+          ])
+        : [
+            noConversationDiscovery(),
+            { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] },
+          ];
 
       return NextResponse.json({
         ...result,
+        conversationsCount: result.conversationsCount + conversationDiscovery.conversationsDiscovered,
+        messagesCount: result.messagesCount + conversationDiscovery.previewMessagesInserted,
+        conversationDiscovery,
         phoneScan,
-        maintenanceContinues: phoneScan.remaining > 0,
+        maintenanceContinues: !conversationDiscovery.historyComplete || phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
@@ -204,25 +239,17 @@ export async function POST(request: Request) {
       });
     }
 
-    // The visible Sync button is intentionally a quick foreground refresh. Deep
-    // maintenance continues in small resumable chunks through the existing live
-    // sync loop instead of holding one HTTP request open for minutes.
+    // Foreground Sync refreshes recent activity, then advances the selected Page's
+    // historical conversation cursor by a small bounded chunk. Repeated live cycles
+    // continue automatically from the saved cursor until all Page chats are discovered.
     const result = await syncMetaConversations({
       liveMode: true,
       connectionId: requestedScope.scope?.connectionId,
       pageId: requestedScope.scope?.pageId,
     });
 
-    // Discover a bounded slice of older conversations per click. This keeps the
-    // request responsive while still expanding the local Page inbox over time.
     const selectedHistory = requestedScope.scope
-      ? await discoverSelectedMetaPageHistory({
-          provider: requestedScope.scope.provider,
-          accountId: requestedScope.scope.accountId,
-          connectionId: requestedScope.scope.connectionId,
-          pageId: requestedScope.scope.pageId,
-          maxPages: 2,
-        })
+      ? await discoverSelectedPageChunk(requestedScope.scope, 2)
       : null;
 
     const history = requestedScope.scope
@@ -237,9 +264,11 @@ export async function POST(request: Request) {
       scope: phoneScanScope(requestedScope.scope),
       batchSize: 2,
       maxHistoryPages: 1,
-      timeBudgetMs: 5_000,
-      requestTimeoutMs: 3_000,
+      timeBudgetMs: 4_000,
+      requestTimeoutMs: 2_500,
     });
+
+    const conversationDiscovery = selectedHistory || noConversationDiscovery();
 
     return NextResponse.json(
       {
@@ -248,10 +277,11 @@ export async function POST(request: Request) {
         messagesCount: result.messagesCount + history.messagesInserted,
         olderConversationsDiscovered: history.conversationsDiscovered,
         historyPreviewMessagesInserted: history.messagesInserted,
-        historyConversationsScanned: selectedHistory?.conversationsScanned || 0,
+        historyConversationsScanned: conversationDiscovery.conversationsScanned,
         historyErrors: history.errors,
+        conversationDiscovery,
         phoneScan,
-        maintenanceContinues: phoneScan.remaining > 0,
+        maintenanceContinues: !conversationDiscovery.historyComplete || phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
