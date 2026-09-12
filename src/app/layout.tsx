@@ -8,7 +8,7 @@ import ToastContainer from '@/components/layout/ToastContainer';
 const manrope = Manrope({
   subsets: ['latin'],
   display: 'swap',
-  variable: '--font-app-sans',
+  variable: '--font-inter',
 });
 
 const jetBrainsMono = JetBrains_Mono({
