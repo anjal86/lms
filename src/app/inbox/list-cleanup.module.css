@@ -1,0 +1,309 @@
+.listScope :global(section[aria-label='Inbox conversations']) {
+  background: #fff;
+}
+
+/* A three-column workspace needs a compact list, not a mini dashboard. */
+@media (min-width: 1024px) {
+  .listScope :global(section[aria-label='Inbox conversations']) {
+    width: 316px !important;
+    flex-basis: 316px !important;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Top toolbar                                                                */
+/* -------------------------------------------------------------------------- */
+
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child) {
+  padding: 10px 11px 9px !important;
+  border-color: #e4e4e7 !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child > div:first-child) {
+  min-height: 30px;
+  gap: 8px !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child > div:first-child > div:first-child) {
+  gap: 7px !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] h1) {
+  display: block !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em !important;
+}
+
+/* New-count is a compact metric, not its own card. */
+.listScope :global(section[aria-label='Inbox conversations'] h1 + span) {
+  white-space: nowrap;
+  border-radius: 4px !important;
+  background: #f4f4f5 !important;
+  color: #52525b !important;
+  padding: 2px 5px !important;
+  font-size: 9.5px !important;
+  font-weight: 650 !important;
+}
+
+/* Phone Leads remains discoverable but becomes a compact utility action. */
+.listScope :global(a[href='/inbox/phone-leads']) {
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 30px !important;
+  padding: 0 !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  position: relative;
+  border-color: #d4d4d8 !important;
+  background: #fff !important;
+  color: #3f3f46 !important;
+}
+
+.listScope :global(a[href='/inbox/phone-leads'] > span:first-of-type) {
+  display: none !important;
+}
+
+.listScope :global(a[href='/inbox/phone-leads'] > span:last-child) {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+  border-radius: 999px !important;
+  padding: 0 3px !important;
+  background: #18181b !important;
+  color: #fff !important;
+  font-size: 8px !important;
+  line-height: 1 !important;
+}
+
+/* Manual Meta sync is icon-first here; the tooltip already explains it. */
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child > div:first-child > div:last-child > button) {
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 30px !important;
+  padding: 0 !important;
+  justify-content: center !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child > div:first-child > div:last-child > button span) {
+  display: none !important;
+}
+
+/* There is already live polling and a manual sync action; a second refresh icon adds noise. */
+.listScope :global(section[aria-label='Inbox conversations'] > div:first-child > div:first-child > div:last-child > button:last-child) {
+  display: none !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Search + primary filters                                                   */
+/* -------------------------------------------------------------------------- */
+
+.listScope :global(section[aria-label='Inbox conversations'] label) {
+  margin-top: 9px !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] input) {
+  height: 34px !important;
+  border-color: #e4e4e7 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] input:focus) {
+  border-color: #a1a1aa !important;
+  box-shadow: 0 0 0 3px rgba(161, 161, 170, 0.13) !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Inbox filters']) {
+  margin-top: 8px !important;
+  padding: 2px !important;
+  gap: 1px !important;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px !important;
+  background: #fafafa !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Inbox filters'] button) {
+  min-width: 0;
+  height: 28px;
+  padding: 0 5px !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  font-size: 10.5px !important;
+  font-weight: 550 !important;
+  color: #71717a !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Inbox filters'] button[aria-pressed='true']) {
+  background: #fff !important;
+  color: #18181b !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.07) !important;
+  font-weight: 700 !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Channel filter                                                             */
+/* -------------------------------------------------------------------------- */
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Channel filter']) {
+  gap: 4px !important;
+  padding: 7px 10px !important;
+  border-color: #e4e4e7 !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Channel filter']::-webkit-scrollbar) {
+  display: none !important;
+}
+
+.listScope :global(section[aria-label='Inbox conversations'] div[aria-label='Channel filter'] button) {
+  height: 28px;
+  padding: 0 8px !important;
+  gap: 5px !important;
+  border-radius: 5px !important;
+  font-size: 10.5px !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Conversation rows                                                          */
+/* -------------------------------------------------------------------------- */
+
+.listScope :global(button[data-conversation-item='true']) {
+  position: relative;
+  min-height: 68px !important;
+  padding: 9px 11px !important;
+  border-left-width: 2px !important;
+  background: #fff;
+}
+
+.listScope :global(button[data-conversation-item='true'][aria-current='true']) {
+  border-left-color: #18181b !important;
+  background: #fafafa !important;
+}
+
+.listScope :global(button[data-conversation-item='true']:hover) {
+  background: #fafafa !important;
+}
+
+.listScope :global(button[data-conversation-item='true'] > div) {
+  gap: 9px !important;
+}
+
+/* Avatar is identity support, not the dominant element. */
+.listScope :global(button[data-conversation-item='true'] > div > div:first-child > div:first-child) {
+  width: 34px !important;
+  height: 34px !important;
+  font-size: 11px !important;
+}
+
+.listScope :global(button[data-conversation-item='true'] > div > div:first-child > span) {
+  width: 14px !important;
+  height: 14px !important;
+  border-width: 1.5px !important;
+}
+
+/* Name + time establish the scan line. */
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:first-child > span:first-child) {
+  font-size: 12.5px !important;
+  line-height: 1.25 !important;
+  font-weight: 700 !important;
+  color: #18181b !important;
+}
+
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:first-child > span:last-child) {
+  font-size: 9.5px !important;
+  font-weight: 550 !important;
+  color: #71717a !important;
+}
+
+/* The list is for scanning. Full text belongs in the thread. */
+.listScope :global(button[data-conversation-item='true'] p) {
+  display: -webkit-box !important;
+  margin-top: 3px !important;
+  overflow: hidden !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 1 !important;
+  line-clamp: 1 !important;
+  font-size: 11.5px !important;
+  line-height: 1.35 !important;
+  font-weight: 500 !important;
+  color: #52525b !important;
+}
+
+/* Read rows recede. Unread rows keep stronger name/preview weight. */
+.listScope :global(button[data-conversation-item='true'][aria-label*=', 0 unread messages'] > div > div:last-child > div:first-child > span:first-child) {
+  font-weight: 600 !important;
+  color: #27272a !important;
+}
+
+.listScope :global(button[data-conversation-item='true'][aria-label*=', 0 unread messages'] p) {
+  font-weight: 450 !important;
+  color: #71717a !important;
+}
+
+/* Repeating NOT QUALIFIED on every row is redundant when the current filter already says New. */
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:last-child > div:first-child > span:first-child) {
+  display: none !important;
+}
+
+/* Collapse metadata space when there is no phone/location chip. */
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:last-child) {
+  margin-top: 4px !important;
+  min-height: 8px;
+}
+
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:last-child > div:first-child) {
+  gap: 4px !important;
+}
+
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:last-child > div:first-child > span:not(:first-child)) {
+  height: 18px;
+  max-width: 118px !important;
+  padding: 0 5px !important;
+  border-color: #e4e4e7 !important;
+  border-radius: 4px !important;
+  background: #fafafa !important;
+  color: #52525b !important;
+  font-size: 9px !important;
+}
+
+/* Unread dot is intentionally small: hierarchy comes from text weight first. */
+.listScope :global(button[data-conversation-item='true'] > div > div:last-child > div:last-child > span:last-child) {
+  width: 7px !important;
+  height: 7px !important;
+  background: #2563eb !important;
+  box-shadow: 0 0 0 2px #dbeafe !important;
+}
+
+@media (max-width: 1023px) {
+  .listScope :global(section[aria-label='Inbox conversations']) {
+    width: 320px !important;
+    flex-basis: 320px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .listScope :global(section[aria-label='Inbox conversations']) {
+    width: 100% !important;
+    flex-basis: 100% !important;
+  }
+
+  .listScope :global(button[data-conversation-item='true']) {
+    min-height: 66px !important;
+    padding: 9px 10px !important;
+  }
+
+  .listScope :global(section[aria-label='Inbox conversations'] > div:first-child) {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+}
