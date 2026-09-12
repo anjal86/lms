@@ -6,18 +6,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type Settings = {
-  frt_minutes?: number;
   overdue_grace_minutes?: number;
   escalate_to_manager?: boolean;
   auto_reassign_breached_leads?: boolean;
   auto_reassign_hours?: number;
-};
-
-type Agent = {
-  id: string;
-  destination_tags: string[] | null;
-  max_capacity: number;
-  current_load: number;
 };
 
 function secretsEqual(received: string, expected: string) {
@@ -29,36 +21,6 @@ function secretsEqual(received: string, expected: string) {
 function numberSetting(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
-}
-
-async function chooseReplacement(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  destination: string,
-  excludedAgentId: string | null
-) {
-  const { data, error } = await admin
-    .from('profiles')
-    .select('id,destination_tags,max_capacity,current_load')
-    .eq('role', 'agent')
-    .eq('is_active', true)
-    .eq('accepting_leads', true)
-    .eq('status', 'available');
-
-  if (error) throw error;
-
-  const eligible = ((data || []) as Agent[]).filter(
-    (agent) => agent.id !== excludedAgentId && agent.current_load < agent.max_capacity
-  );
-  const normalizedDestination = destination.toLowerCase();
-  const specialists = eligible.filter((agent) =>
-    (agent.destination_tags || []).some((tag) => {
-      const normalized = tag.toLowerCase();
-      return normalized === 'global' || normalizedDestination.includes(normalized) || normalized.includes(normalizedDestination);
-    })
-  );
-  const pool = specialists.length ? specialists : eligible;
-  pool.sort((a, b) => (a.current_load / a.max_capacity) - (b.current_load / b.max_capacity));
-  return pool[0]?.id ?? null;
 }
 
 export async function POST(req: NextRequest) {
@@ -90,7 +52,6 @@ export async function POST(req: NextRequest) {
   }
 
   const settings = (settingsRow?.settings || {}) as Settings;
-  const frtMinutes = numberSetting(settings.frt_minutes, 30, 1, 1440);
   const graceMinutes = numberSetting(settings.overdue_grace_minutes, 60, 0, 10080);
   const reassignHours = numberSetting(settings.auto_reassign_hours, 4, 0, 168);
   const escalate = settings.escalate_to_manager !== false;
@@ -171,7 +132,7 @@ export async function POST(req: NextRequest) {
       if (error) console.error(`SLA notification insert failed for ${lead.id}:`, error.message);
     }
 
-    await admin.from('activity_logs').insert({
+    const { error: activityError } = await admin.from('activity_logs').insert({
       lead_id: lead.id,
       agent_id: lead.assigned_to,
       activity_type: 'sla_alert',
@@ -179,55 +140,44 @@ export async function POST(req: NextRequest) {
       notes: 'Automatically detected by the server-side SLA worker.',
       metadata: { first_response_due_at: lead.first_response_due_at },
     });
+    if (activityError) console.error(`SLA activity insert failed for ${lead.id}:`, activityError.message);
 
     if (!autoReassign || !lead.assigned_to || !lead.first_response_due_at) continue;
     const dueAt = new Date(lead.first_response_due_at).getTime();
     if (!Number.isFinite(dueAt) || now.getTime() - dueAt < reassignHours * 60 * 60 * 1000) continue;
 
-    try {
-      const replacement = await chooseReplacement(admin, lead.destination, lead.assigned_to);
-      if (!replacement) continue;
-
-      const reassignedAt = new Date();
-      const responseDue = new Date(reassignedAt.getTime() + frtMinutes * 60 * 1000).toISOString();
-      const { data: moved, error: moveError } = await admin
-        .from('leads')
-        .update({
-          assigned_to: replacement,
-          assigned_at: reassignedAt.toISOString(),
-          first_response_due_at: responseDue,
-          is_first_response_breached: false,
-        })
-        .eq('id', lead.id)
-        .eq('assigned_to', lead.assigned_to)
-        .is('first_contacted_at', null)
-        .select('id')
-        .maybeSingle();
-
-      if (moveError) throw moveError;
-      if (!moved) continue;
-      reassigned += 1;
-
-      await Promise.all([
-        admin.from('activity_logs').insert({
-          lead_id: lead.id,
-          agent_id: replacement,
-          activity_type: 'reassignment',
-          title: 'Lead automatically reassigned after SLA breach',
-          notes: 'The previous owner exceeded the configured reassignment window.',
-          metadata: { previous_agent_id: lead.assigned_to, new_agent_id: replacement },
-        }),
-        admin.from('notifications').insert({
-          user_id: replacement,
-          title: 'SLA recovery lead assigned',
-          message: `${lead.lead_code || 'Lead'} · ${lead.customer_name} has been reassigned to you.`,
-          type: 'reassignment',
-          link: `/leads/${lead.id}`,
-        }),
-      ]);
-    } catch (error) {
-      console.error(`SLA reassignment failed for ${lead.id}:`, error);
+    const { data: replacement, error: routeError } = await admin.rpc('route_lead_atomic', {
+      p_lead_id: lead.id,
+      p_destination: lead.destination,
+      p_excluded_agent: lead.assigned_to,
+      p_force: true,
+    });
+    if (routeError) {
+      console.error(`SLA reassignment failed for ${lead.id}:`, routeError.message);
+      continue;
     }
+    if (!replacement) continue;
+    reassigned += 1;
+
+    const [activityResult, notificationResult] = await Promise.all([
+      admin.from('activity_logs').insert({
+        lead_id: lead.id,
+        agent_id: replacement,
+        activity_type: 'reassignment',
+        title: 'Lead automatically reassigned after SLA breach',
+        notes: 'The previous owner exceeded the configured reassignment window.',
+        metadata: { previous_agent_id: lead.assigned_to, new_agent_id: replacement },
+      }),
+      admin.from('notifications').insert({
+        user_id: replacement,
+        title: 'SLA recovery lead assigned',
+        message: `${lead.lead_code || 'Lead'} · ${lead.customer_name} has been reassigned to you.`,
+        type: 'reassignment',
+        link: `/leads/${lead.id}`,
+      }),
+    ]);
+    if (activityResult.error) console.error(`Reassignment activity failed for ${lead.id}:`, activityResult.error.message);
+    if (notificationResult.error) console.error(`Reassignment notification failed for ${lead.id}:`, notificationResult.error.message);
   }
 
   const followUpCutoff = new Date(now.getTime() - graceMinutes * 60 * 1000).toISOString();
