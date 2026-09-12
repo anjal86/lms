@@ -4,17 +4,8 @@ import { getApiActor } from '@/lib/auth/api-actor';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const FILTERS = new Set(['all', 'unconverted', 'mine', 'converted']);
-const PROVIDERS = new Set(['all', 'facebook', 'instagram', 'whatsapp', 'tiktok', 'email']);
-
-function safeSearchTerm(value: string | null) {
-  if (!value) return '';
-  return value
-    .trim()
-    .slice(0, 100)
-    .replace(/[,%()\\]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function sanitizeSearchTerm(value: string) {
+  return value.replace(/[,%()'"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
 export async function GET(request: Request) {
@@ -22,11 +13,9 @@ export async function GET(request: Request) {
   if ('error' in actor) return actor.error;
 
   const url = new URL(request.url);
-  const requestedFilter = url.searchParams.get('filter') || 'all';
-  const filter = FILTERS.has(requestedFilter) ? requestedFilter : 'all';
-  const requestedProvider = url.searchParams.get('provider') || 'all';
-  const provider = PROVIDERS.has(requestedProvider) ? requestedProvider : 'all';
-  const search = safeSearchTerm(url.searchParams.get('search'));
+  const filter = url.searchParams.get('filter') || 'all';
+  const provider = url.searchParams.get('provider') || 'all';
+  const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 40));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
@@ -63,18 +52,19 @@ export async function GET(request: Request) {
   if (provider !== 'all') query = query.eq('provider', provider);
 
   if (search) {
-    query = query.or(`customer_name.ilike.%${search}%,customer_phone.ilike.%${search}%,customer_email.ilike.%${search}%,last_message_preview.ilike.%${search}%`);
+    const pattern = `%${search}%`;
+    query = query.or(`customer_name.ilike.${pattern},customer_phone.ilike.${pattern},customer_email.ilike.${pattern},last_message_preview.ilike.${pattern}`);
   }
 
-  const { data, error, count } = await query
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .range(offset, offset + limit - 1);
+  query = query.order('last_message_at', { ascending: false, nullsFirst: false }).range(offset, offset + limit - 1);
 
+  const { data, error, count } = await query;
   if (error) {
     console.error('Conversation list failed:', error.message);
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
+  // Metrics also use the actor's RLS-scoped client; agents cannot infer other agents' inbox volume.
   const [unconvertedCountRes, allOpenRes] = await Promise.all([
     actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).is('lead_id', null).eq('status', 'open'),
     actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('status', 'open'),

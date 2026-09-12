@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedLead } from '@/lib/integrations/ingest';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
+import { metaFetchJson } from '@/lib/integrations/meta-http';
 
 export const runtime = 'nodejs';
 
@@ -28,11 +29,12 @@ function valueFor(fields: Array<{ name?: string; values?: string[] }> | undefine
 
 async function getConnections(provider: 'facebook' | 'instagram' | 'whatsapp') {
   const admin = createSupabaseAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from('integration_connections')
-    .select('id,provider,external_account_id,config')
+    .select('id,provider,external_account_id,config,status')
     .eq('provider', provider)
-    .eq('status', 'connected');
+    .in('status', ['connected', 'token_expiring']);
+  if (error) throw error;
   return data || [];
 }
 
@@ -58,25 +60,49 @@ async function findWhatsAppConnection(wabaId: string) {
       ? config.whatsapp_business_accounts as Array<Record<string, unknown>>
       : [];
     return wabas.some((waba) => String(waba.id || '') === wabaId);
-  }) || connections[0] || null;
+  }) || null;
 }
 
-async function pageToken(connectionId: string, pageId: string) {
+async function pageToken(connectionId: string, accountId: string) {
   const admin = createSupabaseAdminClient();
-  const { data } = await admin
-    .from('integration_secrets')
-    .select('secret_payload,access_token')
-    .eq('connection_id', connectionId)
-    .maybeSingle();
+  const [{ data: connection }, { data: secrets }] = await Promise.all([
+    admin.from('integration_connections').select('config').eq('id', connectionId).maybeSingle(),
+    admin.from('integration_secrets').select('secret_payload,access_token').eq('connection_id', connectionId).maybeSingle(),
+  ]);
 
-  const payload = decryptSecretPayload(data?.secret_payload || {}) as Record<string, unknown>;
+  const payload = decryptSecretPayload(secrets?.secret_payload || {}) as Record<string, unknown>;
   const pageTokens = Array.isArray(payload.page_access_tokens)
     ? payload.page_access_tokens as Array<Record<string, unknown>>
     : [];
+  const config = (connection?.config || {}) as Record<string, unknown>;
+  const pages = Array.isArray(config.pages) ? config.pages as Array<Record<string, unknown>> : [];
+  const owningPage = pages.find((page) => {
+    if (String(page.id || '') === accountId) return true;
+    const instagram = page.instagram_business_account as Record<string, unknown> | undefined;
+    return String(instagram?.id || '') === accountId;
+  });
+  const pageId = String(owningPage?.id || accountId);
   const page = pageTokens.find((item) => String(item.id || '') === pageId);
   const storedPageToken = typeof page?.access_token === 'string' ? page.access_token : null;
-  if (storedPageToken) return storedPageToken;
-  return decryptIntegrationSecret(data?.access_token) || '';
+  return storedPageToken || decryptIntegrationSecret(secrets?.access_token) || '';
+}
+
+async function updateDelivery(provider: string, externalMessageId: string, status: string, timestamp?: string | number, error?: Record<string, unknown>) {
+  const normalized = ['sent', 'delivered', 'read', 'failed'].includes(status) ? status : null;
+  if (!normalized || !externalMessageId) return;
+  const eventAt = timestamp
+    ? new Date(typeof timestamp === 'string' && /^\d+$/.test(timestamp) ? Number(timestamp) * 1000 : timestamp).toISOString()
+    : new Date().toISOString();
+  const admin = createSupabaseAdminClient();
+  const { error: rpcError } = await admin.rpc('update_message_delivery', {
+    p_provider: provider,
+    p_external_message_id: externalMessageId,
+    p_status: normalized,
+    p_event_at: eventAt,
+    p_failure_code: error?.code ? String(error.code) : null,
+    p_failure_message: error?.message ? String(error.message).slice(0, 1000) : null,
+  });
+  if (rpcError) throw rpcError;
 }
 
 async function processLeadgen(pageId: string, value: Record<string, unknown>) {
@@ -91,9 +117,11 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
   const url = new URL(`https://graph.facebook.com/${version}/${leadgenId}`);
   url.searchParams.set('fields', 'id,created_time,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,field_data');
   url.searchParams.set('access_token', token);
-  const response = await fetch(url, { cache: 'no-store' });
-  const lead = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(lead?.error?.message || 'Unable to fetch Facebook lead details.');
+  const { response, data: lead } = await metaFetchJson<Record<string, unknown>>(url);
+  if (!response.ok) {
+    const providerError = lead.error as Record<string, unknown> | undefined;
+    throw new Error(typeof providerError?.message === 'string' ? providerError.message : 'Unable to fetch Facebook lead details.');
+  }
 
   const fields = lead.field_data as Array<{ name?: string; values?: string[] }> | undefined;
   const firstName = valueFor(fields, ['first_name', 'first name']);
@@ -130,14 +158,18 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
 }
 
 async function processMetaMessage(provider: 'facebook' | 'instagram', accountId: string, messaging: Record<string, unknown>) {
+  const delivery = messaging.delivery as Record<string, unknown> | undefined;
+  if (delivery) {
+    const mids = Array.isArray(delivery.mids) ? delivery.mids : [];
+    for (const mid of mids) await updateDelivery(provider, String(mid), 'delivered', delivery.watermark as string | number | undefined);
+  }
+
   const sender = messaging.sender as Record<string, unknown> | undefined;
   const recipient = messaging.recipient as Record<string, unknown> | undefined;
   const message = messaging.message as Record<string, unknown> | undefined;
   if (!message?.mid) return;
 
   const isEcho = message.is_echo === true;
-  // If echo, the message was sent from Meta Business Suite (page is sender, customer is recipient)
-  // If not echo, the customer sent the message to the page
   const customerId = isEcho ? String(recipient?.id || '') : String(sender?.id || '');
   if (!customerId) return;
 
@@ -148,30 +180,29 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   const text = typeof message.text === 'string' ? message.text : null;
   const threadId = `${accountId}:${customerId}`;
 
-  // Attempt to fetch traveler's profile name & photo from Meta Graph API
   let customerName: string | null = null;
   let customerAvatarUrl: string | null = null;
   try {
     const token = await pageToken(connection.id, accountId);
     if (token) {
       const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
-      const profRes = await fetch(
-        `https://graph.facebook.com/${version}/${customerId}?fields=first_name,last_name,name,profile_pic&access_token=${token}`,
-        { cache: 'no-store' }
-      );
-      if (profRes.ok) {
-        const prof = await profRes.json();
-        customerName = prof.name || [prof.first_name, prof.last_name].filter(Boolean).join(' ') || null;
-        customerAvatarUrl = prof.profile_pic || null;
+      const profileUrl = new URL(`https://graph.facebook.com/${version}/${customerId}`);
+      profileUrl.searchParams.set('fields', 'first_name,last_name,name,profile_pic');
+      profileUrl.searchParams.set('access_token', token);
+      const { response, data: profile } = await metaFetchJson<Record<string, unknown>>(profileUrl, {}, { retries: 1 });
+      if (response.ok) {
+        customerName = typeof profile.name === 'string'
+          ? profile.name
+          : [profile.first_name, profile.last_name].filter((item) => typeof item === 'string').join(' ') || null;
+        customerAvatarUrl = typeof profile.profile_pic === 'string' ? profile.profile_pic : null;
       }
     }
   } catch {
-    // Non-fatal if user profile permissions are restricted
+    // Profile lookup is optional and must never block message ingestion.
   }
 
-  // Parse rich attachments (photos, voice notes, files)
   const attachments = Array.isArray(message.attachments)
-    ? (message.attachments as Array<Record<string, unknown>>)
+    ? message.attachments as Array<Record<string, unknown>>
     : [];
   let messageType: 'text' | 'image' | 'audio' | 'video' | 'file' | 'media' = text ? 'text' : 'media';
   let attachmentUrl: string | null = null;
@@ -181,27 +212,14 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   if (attachments.length > 0) {
     const firstAttach = attachments[0];
     const attachType = String(firstAttach.type || '');
-    const payload = (firstAttach.payload || {}) as Record<string, unknown>;
-    attachmentUrl = typeof payload.url === 'string' ? payload.url : null;
+    const attachmentPayload = (firstAttach.payload || {}) as Record<string, unknown>;
+    attachmentUrl = typeof attachmentPayload.url === 'string' ? attachmentPayload.url : null;
     previewUrl = attachmentUrl;
-    fileName = typeof payload.title === 'string' ? payload.title : null;
-
-    if (attachType === 'image') {
-      messageType = 'image';
-      if (!isEcho && attachmentUrl && !customerAvatarUrl) {
-        customerAvatarUrl = attachmentUrl;
-      }
-    } else if (attachType === 'audio') {
-      messageType = 'audio';
-    } else if (attachType === 'video') {
-      messageType = 'video';
-    } else if (attachType === 'file') {
-      messageType = 'file';
-    }
-  }
-
-  if (!customerAvatarUrl && customerName) {
-    customerAvatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(customerName)}&backgroundColor=0f172a,1e293b,1e1b4b,172554,064e3b&textColor=ffffff&fontWeight=600`;
+    fileName = typeof attachmentPayload.title === 'string' ? attachmentPayload.title : null;
+    if (attachType === 'image') messageType = 'image';
+    else if (attachType === 'audio') messageType = 'audio';
+    else if (attachType === 'video') messageType = 'video';
+    else if (attachType === 'file') messageType = 'file';
   }
 
   await ingestNormalizedLead({
@@ -209,16 +227,13 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     connectionId: connection.id,
     externalEventId: `${provider}:message:${String(message.mid)}`,
     eventType: 'message',
-    externalLeadId: null,
     externalThreadId: threadId,
     externalContactId: customerId,
     customerName: customerName || `${provider === 'instagram' ? 'Instagram' : 'Messenger'} User`,
     customerPhone: `${provider}:${customerId}`,
     destination: 'Not specified',
     sourceLabel: provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger',
-    notes: isEcho
-      ? 'Outbound message sent via Meta Business Suite.'
-      : 'Conversation started automatically from an inbound social message.',
+    notes: isEcho ? 'Outbound message sent through Meta.' : 'Conversation started from an inbound social message.',
     message: {
       externalMessageId: String(message.mid),
       direction: isEcho ? 'outbound' : 'inbound',
@@ -255,6 +270,18 @@ async function processWhatsApp(entry: Record<string, unknown>) {
 
   for (const change of changes) {
     const value = (change.value || {}) as Record<string, unknown>;
+    const statuses = Array.isArray(value.statuses) ? value.statuses as Array<Record<string, unknown>> : [];
+    for (const status of statuses) {
+      const errors = Array.isArray(status.errors) ? status.errors as Array<Record<string, unknown>> : [];
+      await updateDelivery(
+        'whatsapp',
+        String(status.id || ''),
+        String(status.status || ''),
+        status.timestamp as string | number | undefined,
+        errors[0]
+      );
+    }
+
     const messages = Array.isArray(value.messages) ? value.messages as Array<Record<string, unknown>> : [];
     const contacts = Array.isArray(value.contacts) ? value.contacts as Array<Record<string, unknown>> : [];
     for (const message of messages) {
@@ -294,7 +321,10 @@ async function processWhatsApp(entry: Record<string, unknown>) {
           sentAt,
           metadata: { message, contact, metadata: value.metadata || null },
         },
-        metadata: { waba_id: wabaId, phone_number_id: (value.metadata as Record<string, unknown> | undefined)?.phone_number_id || null },
+        metadata: {
+          waba_id: wabaId,
+          phone_number_id: (value.metadata as Record<string, unknown> | undefined)?.phone_number_id || null,
+        },
       });
     }
   }
@@ -344,7 +374,9 @@ export async function POST(request: Request) {
     }
   } catch (error) {
     console.error('Meta webhook processing failed:', error);
-    return NextResponse.json({ received: true, processed: false });
+    // A non-2xx response is intentional: Meta should retry. Processed event IDs remain
+    // idempotent, while failed event IDs can be reclaimed by the ingestion state machine.
+    return NextResponse.json({ received: true, processed: false, retry: true }, { status: 500 });
   }
 
   return NextResponse.json({ received: true, processed: true });

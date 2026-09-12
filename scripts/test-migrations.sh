@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="${MIGRATION_TEST_IMAGE:-supabase/postgres:15.8.1.085}"
+IMAGE="${MIGRATION_TEST_IMAGE:-postgres:15-alpine}"
 CONTAINER="lms-migration-test-${GITHUB_RUN_ID:-local}-$$"
 PASSWORD="migration-test-password"
 
@@ -10,7 +10,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Starting disposable Supabase Postgres..."
+echo "==> Starting disposable PostgreSQL..."
 docker run -d --name "$CONTAINER" \
   -e POSTGRES_PASSWORD="$PASSWORD" \
   -e POSTGRES_DB=postgres \
@@ -25,6 +25,56 @@ done
 
 docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null
 
+# The application migrations depend on Supabase auth/storage roles and auth.uid()/auth.role().
+# Bootstrap only the public contracts the migrations/RLS tests need instead of depending on
+# Supabase's internal realtime/storage container initialization and ownership rules.
+echo "==> Bootstrapping Supabase-compatible roles and auth schema..."
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
+  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
+END
+$$;
+
+CREATE SCHEMA IF NOT EXISTS auth;
+CREATE SCHEMA IF NOT EXISTS storage;
+
+CREATE TABLE IF NOT EXISTS auth.users (
+  id uuid PRIMARY KEY,
+  email text,
+  raw_user_meta_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION auth.uid()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid;
+$$;
+
+CREATE OR REPLACE FUNCTION auth.role()
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true)::jsonb ->> 'role', ''), current_user);
+$$;
+
+CREATE TABLE IF NOT EXISTS storage.buckets (
+  id text PRIMARY KEY,
+  name text UNIQUE NOT NULL,
+  public boolean NOT NULL DEFAULT false,
+  file_size_limit bigint,
+  allowed_mime_types text[]
+);
+SQL
+
 echo "==> Applying application migrations..."
 for sql in supabase/migrations/*.sql; do
   echo "    $(basename "$sql")"
@@ -35,10 +85,11 @@ done
 echo "==> Granting API role privileges..."
 docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
   psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE ON SCHEMA public, auth TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT ON auth.users TO authenticated, service_role;
 SQL
 
 echo "==> Seeding RLS fixtures..."
@@ -48,18 +99,26 @@ insert into auth.users(id,email,raw_user_meta_data,created_at,updated_at)
 values
   ('11111111-1111-1111-1111-111111111111','admin@test.local','{"full_name":"Admin"}'::jsonb,now(),now()),
   ('22222222-2222-2222-2222-222222222222','agent@test.local','{"full_name":"Agent"}'::jsonb,now(),now()),
-  ('33333333-3333-3333-3333-333333333333','disabled@test.local','{"full_name":"Disabled"}'::jsonb,now(),now())
+  ('33333333-3333-3333-3333-333333333333','disabled@test.local','{"full_name":"Disabled"}'::jsonb,now(),now()),
+  ('44444444-4444-4444-4444-444444444444','other@test.local','{"full_name":"Other Agent"}'::jsonb,now(),now())
 on conflict (id) do nothing;
 
 update public.profiles set role='admin', is_active=true where id='11111111-1111-1111-1111-111111111111';
 update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
 update public.profiles set role='agent', is_active=false where id='33333333-3333-3333-3333-333333333333';
+update public.profiles set role='agent', is_active=true where id='44444444-4444-4444-4444-444444444444';
 
 insert into public.leads(id,customer_name,customer_phone,destination,assigned_to,stage)
 values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','Agent Lead','+10000000001','Japan','22222222-2222-2222-2222-222222222222','new'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2','Admin Lead','+10000000002','Nepal','11111111-1111-1111-1111-111111111111','new'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3','Shared Lead','+10000000003','Bhutan',null,'new')
+on conflict (id) do nothing;
+
+insert into public.lead_conversations(id,provider,external_thread_id,customer_name,assigned_to,status,last_message_at)
+values
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1','facebook','page:agent','Agent Chat','22222222-2222-2222-2222-222222222222','open',now()),
+  ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2','facebook','page:other','Other Chat','44444444-4444-4444-4444-444444444444','open',now())
 on conflict (id) do nothing;
 SQL
 
@@ -75,10 +134,14 @@ agent_count="$(query_as '22222222-2222-2222-2222-222222222222' 'select count(*) 
 admin_count="$(query_as '11111111-1111-1111-1111-111111111111' 'select count(*) from public.leads;')"
 disabled_count="$(query_as '33333333-3333-3333-3333-333333333333' 'select count(*) from public.leads;')"
 disabled_profiles="$(query_as '33333333-3333-3333-3333-333333333333' 'select count(*) from public.profiles;')"
+agent_chat_access="$(query_as '22222222-2222-2222-2222-222222222222' "select public.can_access_conversation('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1');")"
+other_chat_access="$(query_as '22222222-2222-2222-2222-222222222222' "select public.can_access_conversation('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2');")"
 
 [[ "$agent_count" == "2" ]] || { echo "Expected active agent to see assigned + shared leads, got $agent_count"; exit 1; }
 [[ "$admin_count" == "3" ]] || { echo "Expected admin to see all 3 leads, got $admin_count"; exit 1; }
 [[ "$disabled_count" == "0" ]] || { echo "Expected disabled user to see 0 leads, got $disabled_count"; exit 1; }
 [[ "$disabled_profiles" == "0" ]] || { echo "Expected disabled user to see 0 profiles, got $disabled_profiles"; exit 1; }
+[[ "$agent_chat_access" == "t" ]] || { echo "Expected agent to access assigned conversation"; exit 1; }
+[[ "$other_chat_access" == "f" ]] || { echo "Agent unexpectedly accessed another agent's conversation"; exit 1; }
 
 echo "==> Migration chain and RLS smoke tests passed."
