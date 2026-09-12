@@ -11,7 +11,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
     volumes:
       - db-data:/var/lib/postgresql/data
-      - ../supabase/migrations/202609120001_initial.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../supabase/migrations:/docker-entrypoint-initdb.d:ro
     networks:
       default:
         aliases: [db, supabase-db]
