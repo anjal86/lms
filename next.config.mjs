@@ -1,17 +1,65 @@
 /** @type {import('next').NextConfig} */
+
+function configuredSupabase() {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+const supabaseUrl = configuredSupabase();
+const supabaseOrigin = supabaseUrl?.origin || '';
+const supabaseWsOrigin = supabaseOrigin
+  ? supabaseOrigin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+  : '';
+
+const remotePatterns = [
+  { protocol: 'https', hostname: 'images.unsplash.com' },
+  { protocol: 'https', hostname: 'api.dicebear.com' },
+  { protocol: 'https', hostname: 'ui-avatars.com' },
+  { protocol: 'https', hostname: '**.supabase.co' },
+];
+
+if (supabaseUrl && !supabaseUrl.hostname.endsWith('.supabase.co')) {
+  remotePatterns.push({
+    protocol: supabaseUrl.protocol.slice(0, -1),
+    hostname: supabaseUrl.hostname,
+    ...(supabaseUrl.port ? { port: supabaseUrl.port } : {}),
+  });
+}
+
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   poweredByHeader: false,
-  images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: 'images.unsplash.com' },
-      { protocol: 'https', hostname: 'api.dicebear.com' },
-      { protocol: 'https', hostname: 'ui-avatars.com' },
-      { protocol: 'https', hostname: '**.supabase.co' },
-    ],
-  },
+  images: { remotePatterns },
   async headers() {
+    const imgSources = [
+      "'self'",
+      'data:',
+      'blob:',
+      'https://images.unsplash.com',
+      'https://api.dicebear.com',
+      'https://ui-avatars.com',
+      'https://*.supabase.co',
+      supabaseOrigin,
+    ].filter(Boolean);
+    const connectSources = [
+      "'self'",
+      'https://*.supabase.co',
+      'wss://*.supabase.co',
+      'http://localhost:8000',
+      'ws://localhost:8000',
+      supabaseOrigin,
+      supabaseWsOrigin,
+    ].filter(Boolean);
+
     const csp = [
       "default-src 'self'",
       "base-uri 'self'",
@@ -20,9 +68,9 @@ const nextConfig = {
       "object-src 'none'",
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://images.unsplash.com https://api.dicebear.com https://ui-avatars.com https://*.supabase.co",
+      `img-src ${[...new Set(imgSources)].join(' ')}`,
       "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co http://localhost:8000 ws://localhost:8000",
+      `connect-src ${[...new Set(connectSources)].join(' ')}`,
       "media-src 'self' blob:",
     ].join('; ');
 
