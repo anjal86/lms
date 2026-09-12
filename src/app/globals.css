@@ -88,6 +88,42 @@
   }
 }
 
+header.sticky {
+  height: 4rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+header.sticky button,
+header.sticky a {
+  min-height: 2.25rem;
+}
+
+#main-content table {
+  font-size: 0.8125rem;
+}
+
+#main-content table th {
+  padding-top: 0.7rem;
+  padding-bottom: 0.7rem;
+  letter-spacing: 0.025em;
+}
+
+#main-content table td {
+  padding-top: 0.7rem;
+  padding-bottom: 0.7rem;
+}
+
+#main-content table tbody tr {
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+#main-content input:not([type='checkbox']):not([type='radio']),
+#main-content select,
+#main-content textarea {
+  min-height: 2.25rem;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -136,6 +172,12 @@ textarea:focus-visible {
 }
 
 @media (max-width: 767px) {
+  header.sticky {
+    height: 3.75rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
   button,
   [role="button"],
   select,
