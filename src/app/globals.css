@@ -4,28 +4,93 @@
 
 @layer base {
   :root {
-    --background: #fafafa;
+    --background: #f6f7f9;
     --surface: #ffffff;
-    --surface-subtle: #f4f4f5;
+    --surface-subtle: #f8fafc;
     --border: #e4e4e7;
     --border-hover: #d4d4d8;
-    --foreground: #09090b;
+    --foreground: #18181b;
     --muted: #71717a;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+  }
+
+  html {
+    background: var(--background);
   }
 
   body {
+    min-height: 100vh;
     background-color: var(--background);
     color: var(--foreground);
+    font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-variation-settings: normal;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  input,
+  select,
+  textarea {
+    color: #18181b;
+  }
+
+  ::selection {
+    background: #dbeafe;
+    color: #172554;
   }
 }
 
-/* Hairline scrollbar */
+@layer components {
+  .workspace-page {
+    @apply mx-auto w-full max-w-[1440px] space-y-6;
+  }
+
+  .workspace-header {
+    @apply flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between;
+  }
+
+  .workspace-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.14em] text-blue-600;
+  }
+
+  .workspace-title {
+    @apply text-2xl font-semibold tracking-[-0.025em] text-zinc-950 sm:text-[1.75rem];
+  }
+
+  .workspace-description {
+    @apply mt-1.5 max-w-2xl text-sm leading-6 text-zinc-500;
+  }
+
+  .panel {
+    @apply rounded-xl border border-zinc-200/90 bg-white shadow-panel;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm text-zinc-950 shadow-2xs outline-none transition placeholder:text-zinc-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10;
+  }
+
+  .button-primary {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 py-2 text-sm font-semibold text-white shadow-2xs transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .button-secondary {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-2xs transition hover:border-zinc-400 hover:bg-zinc-50 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+}
+
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -34,37 +99,51 @@
 
 ::-webkit-scrollbar-thumb {
   background: #d4d4d8;
-  border-radius: 4px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a1a1aa;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
-/* Interactive element resets & Touch Feedback */
-button, [role="button"], select, a {
+button,
+[role="button"],
+select,
+a {
   cursor: pointer;
   touch-action: manipulation;
 }
 
-button:disabled, [aria-disabled="true"] {
+button:disabled,
+[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-/* Subtle focus ring (WCAG 2.2 AA compliant) */
 *:focus-visible {
-  outline: 2px solid #18181b;
-  outline-offset: 1px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-input:focus-visible, select:focus-visible, textarea:focus-visible {
-  outline: 2px solid #18181b;
-  outline-offset: 0;
-  border-color: #18181b;
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
 }
 
-/* Accessible Reduced Motion */
+@media (max-width: 767px) {
+  button,
+  [role="button"],
+  select,
+  a {
+    min-height: 40px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,
