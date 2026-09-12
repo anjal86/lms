@@ -77,6 +77,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unable to accept webhook.' }, { status: 500 });
   }
 
+  let leadPersisted = false;
   try {
     const payload = {
       customer_name: data.customer_name,
@@ -103,22 +104,38 @@ export async function POST(req: NextRequest) {
       .insert(payload)
       .select('*')
       .single();
-    if (insertError) throw insertError;
 
-    const { data: assignedTo, error: routingError } = await admin.rpc('route_lead_atomic', {
+    if (insertError) {
+      if (insertError.code === '23505') {
+        return NextResponse.json({ success: true, duplicate: true }, { status: 200 });
+      }
+      throw insertError;
+    }
+    leadPersisted = true;
+
+    let assignedTo: string | null = null;
+    const { data: routedAgent, error: routingError } = await admin.rpc('route_lead_atomic', {
       p_lead_id: insertedLead.id,
       p_destination: data.destination,
       p_excluded_agent: null,
       p_force: false,
     });
-    if (routingError) throw routingError;
+    if (routingError) {
+      // A routing outage must not make an already-persisted lead disappear or become retry-duplicated.
+      console.error('Lead persisted but automatic routing failed:', routingError.message);
+    } else {
+      assignedTo = routedAgent || null;
+    }
 
-    const { data: lead, error: reloadError } = await admin
+    const { data: reloadedLead, error: reloadError } = await admin
       .from('leads')
       .select('*')
       .eq('id', insertedLead.id)
       .single();
-    if (reloadError) throw reloadError;
+    if (reloadError) {
+      console.error('Lead persisted but reload failed:', reloadError.message);
+    }
+    const lead = reloadedLead || insertedLead;
 
     if (assignedTo) {
       const { error: notificationError } = await admin.from('notifications').insert({
@@ -133,10 +150,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, lead }, { status: 201 });
+    return NextResponse.json({ success: true, lead, routed: Boolean(assignedTo) }, { status: 201 });
   } catch (error) {
     console.error('Webhook ingestion failed:', error);
-    await admin.from('webhook_events').delete().eq('idempotency_key', idempotencyKey);
+    if (!leadPersisted) {
+      await admin.from('webhook_events').delete().eq('idempotency_key', idempotencyKey);
+    }
     return NextResponse.json({ error: 'Unable to persist lead.' }, { status: 500 });
   }
 }
