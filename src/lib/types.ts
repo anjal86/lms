@@ -4,7 +4,7 @@ export type AgentStatus = 'available' | 'in_call' | 'on_break' | 'offline';
 
 export interface UserPreferences {
   idle_auto_away_minutes: number;
-  default_landing_page: '/leads' | '/follow-ups' | '/analytics' | '/team';
+  default_landing_page: '/dashboard' | '/leads' | '/follow-ups' | '/analytics' | '/team';
   kanban_density: 'compact' | 'expanded';
   instant_whatsapp_direct: boolean;
   default_country_code: string;
@@ -79,6 +79,7 @@ export interface Lead {
   special_notes?: string;
   source: string;
   external_id?: string | null;
+  duplicate_of?: string | null;
   stage: LeadStage;
   priority: Priority;
   assigned_to: string | null;
@@ -150,6 +151,15 @@ export interface LeadQuotation {
   exclusions?: string[];
   validity_days: number;
   status: 'draft' | 'sent' | 'accepted' | 'declined';
+  created_at: string;
+}
+
+export interface QuoteVersion {
+  id: string;
+  lead_id: string;
+  version_number: number;
+  quote: LeadQuotation;
+  created_by?: string | null;
   created_at: string;
 }
 
@@ -393,6 +403,7 @@ export interface TravelerDocument {
   category: 'passport' | 'visa' | 'ticket' | 'hotel_voucher' | 'insurance' | 'other';
   file_name: string;
   file_size?: string;
+  storage_path?: string;
   uploaded_at: string;
 }
 
