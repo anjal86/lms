@@ -17,29 +17,24 @@ docker run -d --name "$CONTAINER" \
   "$IMAGE" >/dev/null
 
 for _ in $(seq 1 60); do
-  if docker exec "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+  if docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
-docker exec "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null
-
-echo "==> Preparing Supabase roles..."
-docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U supabase_admin -d postgres <<'SQL'
-ALTER ROLE postgres SUPERUSER;
-GRANT ALL ON SCHEMA auth TO postgres, supabase_auth_admin;
-GRANT ALL ON SCHEMA storage TO postgres, supabase_storage_admin;
-SQL
+docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null
 
 echo "==> Applying application migrations..."
 for sql in supabase/migrations/*.sql; do
   echo "    $(basename "$sql")"
-  docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U supabase_admin -d postgres < "$sql"
+  docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
+    psql -v ON_ERROR_STOP=1 -U postgres -d postgres < "$sql"
 done
 
 echo "==> Granting API role privileges..."
-docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U supabase_admin -d postgres <<'SQL'
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
+  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
@@ -47,7 +42,8 @@ GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
 SQL
 
 echo "==> Seeding RLS fixtures..."
-docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
+  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
 insert into auth.users(id,email,raw_user_meta_data,created_at,updated_at)
 values
   ('11111111-1111-1111-1111-111111111111','admin@test.local','{"full_name":"Admin"}'::jsonb,now(),now()),
@@ -70,7 +66,8 @@ SQL
 query_as() {
   local uid="$1"
   local sql="$2"
-  docker exec -i "$CONTAINER" psql -U postgres -d postgres -Atqc \
+  docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
+    psql -U postgres -d postgres -Atqc \
     "set role authenticated; set request.jwt.claims = '{\"sub\":\"${uid}\",\"role\":\"authenticated\"}'; ${sql}"
 }
 
