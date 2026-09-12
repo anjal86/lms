@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { refreshMetaConversationProfiles, syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
+import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,11 @@ export async function POST(request: Request) {
       });
     }
 
+    // First sync the recent delta, then scan deeper through provider conversation
+    // pagination so older clients that have not appeared in the CRM yet are created.
+    // Their full message history is filled lazily when the conversation is opened.
     const result = await syncMetaConversations({ liveMode: false });
+    const history = await discoverMetaConversationHistory({ maxPages: 12 });
     const avatarRefresh = internalSync
       ? null
       : await refreshMetaConversationProfiles({ limit: 50 });
@@ -74,6 +79,11 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ...result,
+        conversationsCount: result.conversationsCount + history.conversationsDiscovered,
+        messagesCount: result.messagesCount + history.messagesInserted,
+        olderConversationsDiscovered: history.conversationsDiscovered,
+        historyPreviewMessagesInserted: history.messagesInserted,
+        historyErrors: history.errors,
         avatarsRefreshed: avatarRefresh?.updated || 0,
         avatarProfilesAttempted: avatarRefresh?.attempted || 0,
         avatarProfilesUnavailable: avatarRefresh?.unavailable || 0,
