@@ -26,6 +26,9 @@ export async function GET(
   if ('error' in actor) return actor.error;
 
   const { id } = await context.params;
+  const url = new URL(request.url);
+  const messageLimit = Math.min(2000, Math.max(50, Number(url.searchParams.get('messageLimit')) || 1000));
+
   const { data: conversation, error: convError } = await actor.supabase
     .from('lead_conversations')
     .select(`
@@ -58,7 +61,9 @@ export async function GET(
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
 
-  const { data: messages, error: msgError } = await actor.supabase
+  // Fetch newest-first so a long conversation never drops the newest messages,
+  // then reverse before returning because the chat UI renders oldest -> newest.
+  const { data: messageRows, error: msgError, count: messageTotal } = await actor.supabase
     .from('lead_messages')
     .select(`
       id,
@@ -75,17 +80,24 @@ export async function GET(
       created_by,
       created_at,
       author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
-    `)
+    `, { count: 'exact' })
     .eq('conversation_id', id)
-    .order('sent_at', { ascending: true })
-    .limit(300);
+    .order('sent_at', { ascending: false })
+    .limit(messageLimit);
 
   if (msgError) {
     console.error('Failed to load conversation messages:', msgError.message);
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
   }
 
-  return NextResponse.json({ conversation, messages: messages || [] }, { headers: { 'Cache-Control': 'no-store' } });
+  const messages = [...(messageRows || [])].reverse();
+
+  return NextResponse.json({
+    conversation,
+    messages,
+    messageTotal: messageTotal || 0,
+    hasOlderMessages: (messageTotal || 0) > messages.length,
+  }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function PATCH(
