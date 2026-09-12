@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.agents
+.gemini
+npm-debug.log*
+.env*.local
+.vscode
+Dockerfile
+.dockerignore
