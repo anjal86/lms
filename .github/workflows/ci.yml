@@ -37,6 +37,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Validate Docker Compose
         run: docker compose -f docker/docker-compose.yml config --quiet
+      - name: Validate database migrations and RLS
+        run: bash scripts/test-migrations.sh
       - name: Lint
         run: npm run lint
       - name: Typecheck application
