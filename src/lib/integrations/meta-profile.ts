@@ -31,6 +31,23 @@ function cleanAvatarUrl(value: unknown) {
   }
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function shouldRetryWithBasicFields(response: Response, data: Record<string, unknown>) {
+  if (![400, 403].includes(response.status)) return false;
+  const providerError = record(data.error);
+  const code = Number(providerError.code);
+  const subcode = Number(providerError.error_subcode);
+  const message = typeof providerError.message === 'string' ? providerError.message.toLowerCase() : '';
+  return [10, 100, 200].includes(code)
+    || subcode === 33
+    || /permission|field|unsupported|get unsupported/.test(message);
+}
+
 export async function fetchMetaCustomerProfile(input: {
   provider: MetaProfileProvider;
   customerId: string;
@@ -51,8 +68,10 @@ export async function fetchMetaCustomerProfile(input: {
 
   let { response, data } = await metaFetchJson<Record<string, unknown>>(url, {}, { retries: 1, timeoutMs: 8_000 });
 
-  // If extended fields fail (e.g. subcode 33 permissions), fallback to basic fields
-  if (!response.ok && input.provider === 'facebook') {
+  // Extended Facebook fields are not available for every app/customer. Downgrade only
+  // for field/permission failures; rate limits and provider outages should not trigger
+  // an immediate duplicate Graph request.
+  if (!response.ok && input.provider === 'facebook' && shouldRetryWithBasicFields(response, data)) {
     url.searchParams.set('fields', 'id,first_name,last_name,name,profile_pic');
     const fallback = await metaFetchJson<Record<string, unknown>>(url, {}, { retries: 1, timeoutMs: 8_000 });
     if (fallback.response.ok) {
@@ -74,8 +93,8 @@ export async function fetchMetaCustomerProfile(input: {
     : [firstName, lastName].filter(Boolean).join(' ') || username;
 
   const locale = typeof data.locale === 'string' ? data.locale : null;
-  const timezone = typeof data.timezone === 'number' ? data.timezone : null;
-  const gender = typeof data.gender === 'string' ? data.gender : null;
+  const timezone = typeof data.timezone === 'number' && Number.isFinite(data.timezone) ? data.timezone : null;
+  const gender = typeof data.gender === 'string' && data.gender.trim() ? data.gender.trim() : null;
 
   let demographics: CustomerDemographics | null = null;
   if (locale || timezone !== null || gender) {
@@ -92,6 +111,7 @@ export async function fetchMetaCustomerProfile(input: {
       timezoneOffset: timezone,
       timezoneLabel,
       gender,
+      ...(country ? { locationSource: 'meta_profile' as const } : {}),
     };
   }
 
