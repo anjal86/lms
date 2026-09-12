@@ -24,9 +24,9 @@ export const PROVIDERS: ProviderDefinition[] = [
     id: 'facebook',
     name: 'Facebook Lead Ads',
     shortName: 'Facebook',
-    description: 'Pull Instant Form leads into the CRM and route them immediately.',
+    description: 'Pull Instant Form leads and Messenger inquiries into the CRM and route them immediately.',
     group: 'Meta',
-    capabilities: ['Lead Ads', 'Forms', 'Campaign source', 'Automatic routing'],
+    capabilities: ['Lead Ads', 'Messenger', 'Forms', 'Campaign source', 'Automatic routing'],
     envKeys: ['META_APP_ID', 'META_APP_SECRET'],
     connectMode: 'meta_oauth',
     color: 'blue',
@@ -112,10 +112,10 @@ export function metaScopes(provider: IntegrationProvider) {
   if (configured) return configured;
 
   if (provider === 'facebook') {
-    return 'pages_show_list,pages_read_engagement,leads_retrieval,business_management';
+    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging,leads_retrieval,business_management';
   }
   if (provider === 'instagram') {
-    return 'pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_messages,business_management';
+    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management';
   }
   if (provider === 'whatsapp') {
     return 'business_management,whatsapp_business_management,whatsapp_business_messaging';
