@@ -50,45 +50,58 @@ function cleanQueueTitle(title: string) {
     .replace(' has had no contact for 48+ hours', ' needs a follow-up');
 }
 
-function PriorityMetric({ title, value, hint, href, icon: Icon, tone }: {
+function managerLeadHref(href: string) {
+  return /^\/leads\/[^/?#]+$/.test(href) ? `${href}/workspace` : href;
+}
+
+function PriorityMetric({ title, value, hint, href, icon: Icon, urgent = false }: {
   title: string;
   value: number;
   hint: string;
   href: string;
   icon: typeof AlertTriangle;
-  tone: 'red' | 'amber' | 'blue';
+  urgent?: boolean;
 }) {
-  const toneClasses = {
-    red: 'bg-red-50 text-red-700 border-red-100',
-    amber: 'bg-amber-50 text-amber-700 border-amber-100',
-    blue: 'bg-blue-50 text-blue-700 border-blue-100',
-  }[tone];
-
   return (
-    <Link href={href} className="group panel flex min-h-36 flex-col justify-between p-5 transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
+    <Link href={href} className="metric group block transition-colors hover:bg-surface-hover">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-zinc-900">{title}</p>
-          <p className="mt-1 text-sm leading-5 text-zinc-500">{hint}</p>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`status-dot ${urgent ? 'status-dot-danger' : 'status-dot-info'}`} />
+            <p className="text-xs font-semibold text-zinc-800">{title}</p>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-zinc-500">{hint}</p>
         </div>
-        <span className={`flex h-9 w-9 items-center justify-center rounded-xl border ${toneClasses}`}><Icon className="h-4 w-4" /></span>
+        <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
       </div>
-      <div className="mt-5 flex items-end justify-between gap-3">
-        <span className="text-4xl font-semibold tracking-[-0.04em] text-zinc-950">{value}</span>
-        <span className="mb-1 inline-flex items-center gap-1 text-xs font-semibold text-zinc-400 transition group-hover:text-zinc-800">Open <ArrowRight className="h-3.5 w-3.5" /></span>
+      <div className="mt-4 flex items-end justify-between gap-3">
+        <span className="font-mono text-2xl font-semibold tracking-tight text-zinc-950">{value}</span>
+        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-400 group-hover:text-zinc-700">Open <ArrowRight className="h-3 w-3" /></span>
       </div>
     </Link>
   );
 }
 
-function SecondaryMetric({ title, value, hint, href, icon: Icon }: { title: string; value: number; hint: string; href: string; icon: typeof AlertTriangle }) {
+function SecondaryMetric({ title, value, hint, href, icon: Icon }: {
+  title: string;
+  value: number;
+  hint: string;
+  href: string;
+  icon: typeof AlertTriangle;
+}) {
   return (
-    <Link href={href} className="group flex items-center justify-between gap-4 border-b border-zinc-100 px-5 py-4 last:border-b-0 hover:bg-zinc-50/70">
+    <Link href={href} className="group flex items-center justify-between gap-4 border-b border-line px-4 py-3 last:border-b-0 hover:bg-surface-hover">
       <div className="flex min-w-0 items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-600"><Icon className="h-4 w-4" /></span>
-        <div className="min-w-0"><p className="text-sm font-semibold text-zinc-900">{title}</p><p className="mt-0.5 truncate text-xs text-zinc-500">{hint}</p></div>
+        <Icon className="h-4 w-4 shrink-0 text-zinc-400" />
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-zinc-800">{title}</p>
+          <p className="mt-0.5 truncate text-[11px] text-zinc-500">{hint}</p>
+        </div>
       </div>
-      <div className="flex items-center gap-3"><span className="text-2xl font-semibold tracking-tight text-zinc-950">{value}</span><ArrowRight className="h-3.5 w-3.5 text-zinc-300 transition group-hover:text-zinc-700" /></div>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-lg font-semibold text-zinc-900">{value}</span>
+        <ArrowRight className="h-3.5 w-3.5 text-zinc-300 group-hover:text-zinc-600" />
+      </div>
     </Link>
   );
 }
@@ -128,61 +141,87 @@ export default function DashboardPage() {
 
   useEffect(() => {
     document.title = 'Today — Wanderlust';
-    void loadSummary();
+    const initial = window.setTimeout(() => void loadSummary(), 0);
     const handleMutation = () => void loadSummary();
     window.addEventListener('crm:data-mutated', handleMutation);
-    return () => window.removeEventListener('crm:data-mutated', handleMutation);
+    return () => {
+      window.clearTimeout(initial);
+      window.removeEventListener('crm:data-mutated', handleMutation);
+    };
   }, [loadSummary]);
 
   const urgentTotal = summary.sla_breaches + summary.overdue_followups + (isAgent ? 0 : summary.unassigned_leads);
 
   return (
-    <div className="workspace-page">
-      <div className="workspace-header">
+    <div className="app-page">
+      <header className="page-header">
         <div>
-          <p className="workspace-eyebrow">Today</p>
-          <h1 className="workspace-title">{isAgent ? `Hi ${currentUser.full_name.split(' ')[0]}, here’s what needs attention` : 'What needs attention today'}</h1>
-          <p className="workspace-description">{isAgent ? 'Start with replies and follow-ups. Everything else can wait.' : 'The most important items for the team, in one place.'}</p>
+          <p className="page-eyebrow">Today</p>
+          <h1 className="page-title">{isAgent ? `Hi ${currentUser.full_name.split(' ')[0]}, here’s what needs attention` : 'What needs attention today'}</h1>
+          <p className="page-description">{isAgent ? 'Start with replies and follow-ups. Everything else can wait.' : 'The most important team work, ordered by urgency.'}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href={isAgent ? '/my-work' : '/leads'} className="button-primary">{isAgent ? 'Open My Work' : 'Open all leads'}</Link>
-          <button type="button" onClick={() => void loadSummary()} disabled={loading} className="button-secondary px-3" aria-label="Refresh">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}</button>
+        <div className="page-actions">
+          <Link href={isAgent ? '/my-work' : '/leads'} className="button-primary">{isAgent ? 'Open my work' : 'Open leads'}</Link>
+          <button type="button" onClick={() => void loadSummary()} disabled={loading} className="button-secondary px-3" aria-label="Refresh Today">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+          </button>
         </div>
-      </div>
+      </header>
 
-      {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+      {error && (
+        <div role="alert" className="surface-flat flex items-start justify-between gap-4 p-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-danger"><AlertTriangle className="h-4 w-4" /> Today could not be refreshed</div>
+            <p className="mt-1 text-xs text-zinc-500">{error}</p>
+          </div>
+          <button type="button" onClick={() => void loadSummary()} className="button-secondary button-sm">Try again</button>
+        </div>
+      )}
 
       <section>
-        <div className="mb-3"><h2 className="text-sm font-semibold text-zinc-950">Start here</h2><p className="mt-0.5 text-xs text-zinc-500">{urgentTotal} item{urgentTotal === 1 ? '' : 's'} need attention</p></div>
-        <div className="grid gap-3 lg:grid-cols-3">
-          <PriorityMetric title="Replies needed" value={summary.sla_breaches} hint="Travelers who have waited too long" href={isAgent ? '/my-work' : '/leads?tab=sla_pending'} icon={ShieldAlert} tone="red" />
-          <PriorityMetric title="Follow-ups due" value={summary.overdue_followups} hint="People you need to contact again" href={isAgent ? '/my-follow-ups' : '/follow-ups'} icon={CalendarClock} tone="amber" />
+        <div className="mb-3">
+          <h2 className="section-heading">Start here</h2>
+          <p className="section-description">{urgentTotal} item{urgentTotal === 1 ? '' : 's'} need attention.</p>
+        </div>
+        <div className="grid gap-2 lg:grid-cols-3">
+          <PriorityMetric title="Replies needed" value={summary.sla_breaches} hint="Travelers still waiting for first contact." href={isAgent ? '/my-work' : '/leads?tab=sla_pending'} icon={ShieldAlert} urgent={summary.sla_breaches > 0} />
+          <PriorityMetric title="Follow-ups due" value={summary.overdue_followups} hint="People the team needs to contact again." href={isAgent ? '/my-follow-ups' : '/follow-ups'} icon={CalendarClock} urgent={summary.overdue_followups > 0} />
           {isAgent ? (
-            <PriorityMetric title="My active leads" value={currentUser.current_load} hint="All leads currently assigned to you" href="/my-work" icon={ListChecks} tone="blue" />
+            <PriorityMetric title="My active leads" value={currentUser.current_load} hint="Travelers currently assigned to you." href="/my-work" icon={ListChecks} />
           ) : (
-            <PriorityMetric title="Leads without an owner" value={summary.unassigned_leads} hint="New leads waiting for someone to take them" href="/leads" icon={Inbox} tone="blue" />
+            <PriorityMetric title="Without an owner" value={summary.unassigned_leads} hint="New leads waiting for assignment." href="/leads" icon={Inbox} urgent={summary.unassigned_leads > 0} />
           )}
         </div>
       </section>
 
-      <div className={`grid gap-4 ${isManagement ? 'xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]' : ''}`}>
-        <section className="panel overflow-hidden">
-          <div className="flex items-start justify-between gap-4 border-b border-zinc-100 px-5 py-4">
-            <div><h2 className="text-sm font-semibold text-zinc-950">What to do next</h2><p className="mt-1 text-xs text-zinc-500">Work from top to bottom. The most urgent items are first.</p></div>
-            <Link href={isAgent ? '/my-work' : '/leads'} className="text-xs font-semibold text-blue-600 hover:text-blue-700">See all</Link>
+      <div className={`grid gap-4 ${isManagement ? 'xl:grid-cols-[minmax(0,1.55fr)_minmax(18rem,0.75fr)]' : ''}`}>
+        <section className="surface-flat overflow-hidden">
+          <div className="panel-header">
+            <div>
+              <h2 className="section-heading">Do next</h2>
+              <p className="section-description">The most urgent work is first.</p>
+            </div>
+            <Link href={isAgent ? '/my-work' : '/leads'} className="button-ghost button-sm">See all</Link>
           </div>
 
           {loading && summary.intervention_queue.length === 0 ? (
-            <div className="px-5 py-14 text-center text-sm text-zinc-500"><Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin text-zinc-400" />Loading…</div>
+            <div className="empty-state" role="status"><Loader2 className="h-5 w-5 animate-spin text-zinc-400" /><p className="empty-state-description mt-3">Loading today’s work…</p></div>
           ) : summary.intervention_queue.length === 0 ? (
-            <div className="px-5 py-14 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">✓</div><p className="mt-3 text-sm font-semibold text-zinc-900">You’re caught up</p><p className="mt-1 text-xs text-zinc-500">There’s nothing urgent right now.</p></div>
+            <div className="empty-state"><CheckCircle2 className="h-5 w-5 text-success" /><p className="empty-state-title mt-3">You’re caught up</p><p className="empty-state-description">There’s nothing urgent right now.</p></div>
           ) : (
-            <div className="divide-y divide-zinc-100">
+            <div className="divide-y divide-line">
               {summary.intervention_queue.map((item, index) => (
-                <Link key={item.key} href={isAgent ? '/my-work' : item.href} className="group flex items-center gap-4 px-5 py-4 transition hover:bg-zinc-50/70">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-semibold text-zinc-500">{index + 1}</span>
-                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-zinc-900">{cleanQueueTitle(item.title)}</p><p className="mt-0.5 truncate text-xs text-zinc-500">{item.detail}</p></div>
-                  <ArrowRight className="h-4 w-4 shrink-0 text-zinc-300 transition group-hover:translate-x-0.5 group-hover:text-zinc-700" />
+                <Link
+                  key={item.key}
+                  href={isAgent ? '/my-work' : managerLeadHref(item.href)}
+                  className="group flex items-center gap-3 px-4 py-3 hover:bg-surface-hover"
+                >
+                  <span className="w-5 shrink-0 font-mono text-[10px] font-semibold text-zinc-400">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-semibold text-zinc-800">{cleanQueueTitle(item.title)}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-zinc-500">{item.detail}</p>
+                  </div>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-zinc-300 group-hover:text-zinc-600" />
                 </Link>
               ))}
             </div>
@@ -190,8 +229,8 @@ export default function DashboardPage() {
         </section>
 
         {isManagement && (
-          <section className="panel overflow-hidden">
-            <div className="border-b border-zinc-100 px-5 py-4"><h2 className="text-sm font-semibold text-zinc-950">Also check</h2><p className="mt-1 text-xs text-zinc-500">Important items that may need attention soon.</p></div>
+          <section className="surface-flat overflow-hidden">
+            <div className="panel-header"><div><h2 className="section-heading">Also check</h2><p className="section-description">Important, but not first in line.</p></div></div>
             <SecondaryMetric title="No contact for 2+ days" value={summary.stale_leads} hint="Leads that may be going cold" href="/leads" icon={UserRoundSearch} />
             <SecondaryMetric title="Payments due" value={summary.payments_due} hint="Payments due now or earlier" href="/leads" icon={CircleDollarSign} />
             <SecondaryMetric title="Passport expiry" value={summary.passport_risks} hint="Passports expiring within 6 months" href="/leads" icon={AlertTriangle} />
