@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarClock,
+  CheckCircle2,
   CircleDollarSign,
   Inbox,
   ListChecks,
