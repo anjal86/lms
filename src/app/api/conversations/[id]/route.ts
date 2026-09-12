@@ -1,9 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { backfillMetaConversationMessages } from '@/lib/integrations/meta-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const HISTORY_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
+const historyBackfillAt = new Map<string, number>();
+const historyBackfillPromises = new Map<string, Promise<void>>();
 
 const PatchConversationSchema = z.object({
   status: z.enum(['open', 'closed', 'archived']).optional(),
@@ -17,6 +22,39 @@ type LocationUpdateResult = {
   conversation?: Record<string, unknown>;
   lead_id?: string | null;
 };
+
+async function maybeBackfillHistory(input: {
+  conversationId: string;
+  provider: string;
+  expectedMessageCount: number | null;
+  localMessageCount: number;
+}) {
+  if (!['facebook', 'instagram'].includes(input.provider)) return;
+  if (input.expectedMessageCount !== null && input.localMessageCount >= input.expectedMessageCount) return;
+
+  const lastAttempt = historyBackfillAt.get(input.conversationId) || 0;
+  if (Date.now() - lastAttempt < HISTORY_BACKFILL_INTERVAL_MS) return;
+
+  let promise = historyBackfillPromises.get(input.conversationId);
+  if (!promise) {
+    promise = backfillMetaConversationMessages(input.conversationId, { maxPages: 20 })
+      .then((result) => {
+        if (result.errors.length) {
+          console.warn(`Meta history backfill for ${input.conversationId} completed with warnings:`, result.errors[0]);
+        }
+      })
+      .catch((error) => {
+        console.warn(`Meta history backfill failed for ${input.conversationId}:`, error);
+      })
+      .finally(() => {
+        historyBackfillAt.set(input.conversationId, Date.now());
+        historyBackfillPromises.delete(input.conversationId);
+      });
+    historyBackfillPromises.set(input.conversationId, promise);
+  }
+
+  await promise;
+}
 
 export async function GET(
   request: Request,
@@ -60,6 +98,22 @@ export async function GET(
   if (convError || !conversation) {
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
+
+  const { count: beforeBackfillCount } = await actor.supabase
+    .from('lead_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', id);
+
+  const metadata = (conversation.metadata || {}) as Record<string, unknown>;
+  const rawExpectedCount = Number(metadata.message_count);
+  const expectedMessageCount = Number.isFinite(rawExpectedCount) && rawExpectedCount > 0 ? rawExpectedCount : null;
+
+  await maybeBackfillHistory({
+    conversationId: id,
+    provider: conversation.provider,
+    expectedMessageCount,
+    localMessageCount: beforeBackfillCount || 0,
+  });
 
   // Fetch newest-first so a long conversation never drops the newest messages,
   // then reverse before returning because the chat UI renders oldest -> newest.
