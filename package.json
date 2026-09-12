@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "doctor:local": "node scripts/doctor-local.mjs",
+    "db:migrate:local": "node scripts/apply-local-migrations.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "seed:users": "node scripts/seed-users.mjs"
   },
