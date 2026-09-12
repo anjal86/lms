@@ -14,6 +14,7 @@ import {
   Users,
   MessageSquareQuote,
   Settings,
+  History,
   Lock,
   LogOut,
 } from 'lucide-react';
@@ -83,15 +84,23 @@ export default function Sidebar() {
       alert: null,
     },
     ...(canViewSettings
-      ? [{
-          label: 'SLA Rules',
-          href: '/settings',
-          icon: Settings,
-          badge: null,
-          alert: null,
-        }]
-      : []
-    ),
+      ? [
+          {
+            label: 'Security Audit',
+            href: '/audit',
+            icon: History,
+            badge: null,
+            alert: null,
+          },
+          {
+            label: 'SLA Rules',
+            href: '/settings',
+            icon: Settings,
+            badge: null,
+            alert: null,
+          },
+        ]
+      : []),
   ];
 
   return (
