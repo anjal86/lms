@@ -54,7 +54,7 @@ export default function Header() {
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         { label: 'My Work', href: '/my-work', icon: ListChecks },
-        { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
+        { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock },
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
       ]
     : [
@@ -115,7 +115,7 @@ export default function Header() {
       if (lastKey === 'g' && now - lastKeyTime < 1500) {
         const key = event.key.toLowerCase();
         if (key === 'l') router.push(isAgent ? '/my-work' : '/leads');
-        else if (key === 'f') router.push('/follow-ups');
+        else if (key === 'f') router.push(isAgent ? '/my-follow-ups' : '/follow-ups');
         else if (key === 't' && canManage) router.push('/team');
         lastKey = '';
       }
@@ -161,37 +161,21 @@ export default function Header() {
     <>
       <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-zinc-200/80 bg-white/95 px-3 backdrop-blur md:px-5">
         <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsMobileNavOpen(true)}
-            aria-label="Open menu"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 md:hidden"
-          >
+          <button type="button" onClick={() => setIsMobileNavOpen(true)} aria-label="Open menu" className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 md:hidden">
             <Menu className="h-4 w-4" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setIsLeadModalOpen(true)}
-            className="button-primary whitespace-nowrap"
-          >
-            <Plus className="h-4 w-4" />
-            Add lead
+          <button type="button" onClick={() => setIsLeadModalOpen(true)} className="button-primary whitespace-nowrap">
+            <Plus className="h-4 w-4" /> Add lead
           </button>
 
           {canManage && (
             <button type="button" onClick={() => setIsCsvModalOpen(true)} className="button-secondary hidden sm:inline-flex">
-              <FileSpreadsheet className="h-4 w-4" />
-              Import
+              <FileSpreadsheet className="h-4 w-4" /> Import
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setIsCommandPaletteOpen(true)}
-            aria-label="Search leads"
-            className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64"
-          >
+          <button type="button" onClick={() => setIsCommandPaletteOpen(true)} aria-label="Search leads" className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64">
             <Search className="h-4 w-4 shrink-0" />
             <span className="truncate">Search leads</span>
             <kbd className="ml-auto hidden rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 lg:inline">⌘K</kbd>
@@ -200,12 +184,7 @@ export default function Header() {
 
         <div className="flex items-center gap-2">
           <div className="relative" data-header-dropdown="true">
-            <button
-              type="button"
-              onClick={() => setIsNotifOpen((value) => !value)}
-              aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
-              className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-            >
+            <button type="button" onClick={() => setIsNotifOpen((value) => !value)} aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`} className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900">
               <Bell className="h-4 w-4" />
               {unreadCount > 0 && <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />}
             </button>
@@ -214,9 +193,7 @@ export default function Header() {
               <div className="absolute right-0 mt-2 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl">
                 <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
                   <span className="text-sm font-semibold text-zinc-900">Notifications</span>
-                  {unreadCount > 0 && (
-                    <button onClick={markAllNotificationsAsRead} className="text-xs font-medium text-zinc-500 hover:text-zinc-900">Mark all read</button>
-                  )}
+                  {unreadCount > 0 && <button onClick={markAllNotificationsAsRead} className="text-xs font-medium text-zinc-500 hover:text-zinc-900">Mark all read</button>}
                 </div>
                 <div className="max-h-80 overflow-y-auto divide-y divide-zinc-100">
                   {notifications.length === 0 ? (
@@ -234,9 +211,7 @@ export default function Header() {
                       }}
                       className={`flex w-full items-start gap-3 p-4 text-left hover:bg-zinc-50 ${!notification.is_read ? 'bg-blue-50/35' : ''}`}
                     >
-                      {notification.type === 'sla_breach'
-                        ? <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                        : <Clock className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />}
+                      {notification.type === 'sla_breach' ? <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-500" /> : <Clock className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" />}
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium text-zinc-900">{notification.title}</span>
                         <span className="mt-1 block text-xs leading-5 text-zinc-500">{notification.message}</span>
@@ -249,12 +224,7 @@ export default function Header() {
           </div>
 
           <div className="relative" data-header-dropdown="true">
-            <button
-              type="button"
-              onClick={() => setIsProfileOpen((value) => !value)}
-              aria-label="Open profile menu"
-              className="flex h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-white pl-1.5 pr-2.5 hover:bg-zinc-50"
-            >
+            <button type="button" onClick={() => setIsProfileOpen((value) => !value)} aria-label="Open profile menu" className="flex h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-white pl-1.5 pr-2.5 hover:bg-zinc-50">
               <img src={currentUser.avatar_url} alt="" className="h-7 w-7 rounded-full object-cover" />
               <span className="hidden max-w-24 truncate text-sm font-medium text-zinc-800 sm:block">{currentUser.full_name.split(' ')[0]}</span>
               <ChevronDown className="h-3.5 w-3.5 text-zinc-400" />
@@ -295,15 +265,7 @@ export default function Header() {
                 </div>
 
                 <div className="border-t border-zinc-100 p-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      logout();
-                      setIsProfileOpen(false);
-                      router.push('/login');
-                    }}
-                    className="flex min-h-10 w-full items-center gap-2.5 rounded-lg px-3 text-sm text-red-600 hover:bg-red-50"
-                  >
+                  <button type="button" onClick={() => { logout(); setIsProfileOpen(false); router.push('/login'); }} className="flex min-h-10 w-full items-center gap-2.5 rounded-lg px-3 text-sm text-red-600 hover:bg-red-50">
                     <LogOut className="h-4 w-4" /> Sign out
                   </button>
                 </div>
@@ -320,14 +282,9 @@ export default function Header() {
             <div className="mb-4 flex items-center justify-between border-b border-zinc-800 pb-4">
               <Link href="/dashboard" onClick={() => setIsMobileNavOpen(false)} className="flex items-center gap-2.5">
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-xs font-bold text-zinc-950">W</span>
-                <span>
-                  <span className="block text-sm font-semibold text-white">Wanderlust</span>
-                  <span className="block text-[10px] text-zinc-500">Travel Workspace</span>
-                </span>
+                <span><span className="block text-sm font-semibold text-white">Wanderlust</span><span className="block text-[10px] text-zinc-500">Travel Workspace</span></span>
               </Link>
-              <button type="button" onClick={() => setIsMobileNavOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-900 hover:text-white" aria-label="Close menu">
-                <X className="h-5 w-5" />
-              </button>
+              <button type="button" onClick={() => setIsMobileNavOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-900 hover:text-white" aria-label="Close menu"><X className="h-5 w-5" /></button>
             </div>
 
             <nav className="flex-1 space-y-1">
@@ -335,14 +292,8 @@ export default function Header() {
                 const Icon = item.icon;
                 const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
                 return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setIsMobileNavOpen(false)}
-                    className={`flex min-h-12 items-center gap-3 rounded-lg px-3 text-sm font-medium ${isActive ? 'bg-white/10 text-white' : 'text-zinc-400 hover:bg-white/[0.05] hover:text-white'}`}
-                  >
-                    <Icon className={`h-4 w-4 ${isActive ? 'text-blue-400' : 'text-zinc-500'}`} />
-                    {item.label}
+                  <Link key={item.href} href={item.href} onClick={() => setIsMobileNavOpen(false)} className={`flex min-h-12 items-center gap-3 rounded-lg px-3 text-sm font-medium ${isActive ? 'bg-white/10 text-white' : 'text-zinc-400 hover:bg-white/[0.05] hover:text-white'}`}>
+                    <Icon className={`h-4 w-4 ${isActive ? 'text-blue-400' : 'text-zinc-500'}`} /> {item.label}
                   </Link>
                 );
               })}
@@ -350,10 +301,7 @@ export default function Header() {
 
             <Link href="/profile" onClick={() => setIsMobileNavOpen(false)} className="flex items-center gap-3 border-t border-zinc-800 pt-4">
               <img src={currentUser.avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" />
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-zinc-100">{currentUser.full_name}</span>
-                <span className="block text-xs capitalize text-zinc-500">{currentUser.role}</span>
-              </span>
+              <span className="min-w-0"><span className="block truncate text-sm font-semibold text-zinc-100">{currentUser.full_name}</span><span className="block text-xs capitalize text-zinc-500">{currentUser.role}</span></span>
             </Link>
           </div>
         </div>
@@ -362,12 +310,7 @@ export default function Header() {
       <LeadModal isOpen={isLeadModalOpen} onClose={() => setIsLeadModalOpen(false)} />
       {canManage && <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} />}
       <KeyboardShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
-      <CommandPalette
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-        onOpenNewLead={() => setIsLeadModalOpen(true)}
-        onOpenCsv={() => canManage && setIsCsvModalOpen(true)}
-      />
+      <CommandPalette isOpen={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} onOpenNewLead={() => setIsLeadModalOpen(true)} onOpenCsv={() => canManage && setIsCsvModalOpen(true)} />
     </>
   );
 }
