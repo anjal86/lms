@@ -1,5 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
+if (typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile('.env.local');
+  } catch {
+    try {
+      process.loadEnvFile('.env');
+    } catch {}
+  }
+}
+
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.PUBLIC_SUPABASE_URL || 'http://localhost:8000';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIstateIjoxNjAwMDAwMDAwLCJleHAiOjIwMDAwMDAwMDB9.s1e2r3v4i5c6e7_r8o9l0e1_k2e3y4_t5o6k7e8n9';
 

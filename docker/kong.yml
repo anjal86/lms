@@ -9,6 +9,26 @@ consumers:
     keyauth_credentials:
       - key: ${SUPABASE_SERVICE_KEY}
 
+plugins:
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - HEAD
+        - PUT
+        - PATCH
+        - POST
+        - DELETE
+        - OPTIONS
+      headers:
+        - "*"
+      exposed_headers:
+        - "*"
+      credentials: true
+      max_age: 3600
+
 services:
   - name: auth-v1
     url: http://supabase-auth:9999/

@@ -1,5 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
+if (typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile('.env.local');
+  } catch {
+    try {
+      process.loadEnvFile('.env');
+    } catch {}
+  }
+}
+
 function getArg(name) {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : undefined;
