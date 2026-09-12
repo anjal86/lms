@@ -11,18 +11,19 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Starting disposable PostgreSQL ($IMAGE)..."
-run_output="$(docker run -d --name "$CONTAINER" \
+if ! container_id="$(docker run -d --name "$CONTAINER" \
   -e POSTGRES_PASSWORD="$PASSWORD" \
   -e POSTGRES_DB=postgres \
-  "$IMAGE" 2>&1)" || {
-    echo "$run_output"
-    exit 1
-  }
-echo "    container: ${run_output:0:12}"
+  "$IMAGE")"; then
+  echo "Failed to start PostgreSQL container."
+  exit 1
+fi
+echo "    container: ${container_id:0:12}"
 
 ready=false
 for _ in $(seq 1 60); do
-  if docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+  if docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" \
+    pg_isready -h 127.0.0.1 -U postgres -d postgres >/dev/null 2>&1; then
     ready=true
     break
   fi
@@ -40,9 +41,12 @@ if [[ "$ready" != "true" ]]; then
   exit 1
 fi
 
+# Use TCP explicitly throughout the test. This avoids Unix-socket path/startup races on
+# hosted Docker runners while still executing psql inside the disposable container.
+PSQL=(psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U postgres -d postgres)
+
 echo "==> Bootstrapping Supabase-compatible roles and auth schema..."
-docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
-  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
@@ -90,13 +94,11 @@ SQL
 echo "==> Applying application migrations..."
 for sql in supabase/migrations/*.sql; do
   echo "    $(basename "$sql")"
-  docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
-    psql -v ON_ERROR_STOP=1 -U postgres -d postgres < "$sql"
+  docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" < "$sql"
 done
 
 echo "==> Granting API role privileges..."
-docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
-  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
 GRANT USAGE ON SCHEMA public, auth TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
@@ -105,8 +107,7 @@ GRANT SELECT ON auth.users TO authenticated, service_role;
 SQL
 
 echo "==> Seeding RLS fixtures..."
-docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
-  psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
 insert into auth.users(id,email,raw_user_meta_data,created_at,updated_at)
 values
   ('11111111-1111-1111-1111-111111111111','admin@test.local','{"full_name":"Admin"}'::jsonb,now(),now()),
@@ -115,8 +116,6 @@ values
   ('44444444-4444-4444-4444-444444444444','other@test.local','{"full_name":"Other Agent"}'::jsonb,now(),now())
 on conflict (id) do nothing;
 
--- Profile protection deliberately preserves privileged fields for ordinary users.
--- Seed test fixtures through the service role so roles/statuses match production admin behavior.
 set role service_role;
 update public.profiles set role='admin', is_active=true where id='11111111-1111-1111-1111-111111111111';
 update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
@@ -142,7 +141,7 @@ query_as() {
   local uid="$1"
   local sql="$2"
   docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
-    psql -U postgres -d postgres -Atqc \
+    psql -h 127.0.0.1 -U postgres -d postgres -Atqc \
     "set role authenticated; set request.jwt.claims = '{\"sub\":\"${uid}\",\"role\":\"authenticated\"}'; ${sql}"
 }
 
