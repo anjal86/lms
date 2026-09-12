@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Facebook, Instagram, Layers3, Loader2 } from 'lucide-react';
 
 type PageOption = {
@@ -23,12 +24,22 @@ function readCookie(name: string) {
   return row ? decodeURIComponent(row.slice(prefix.length)) : '';
 }
 
+function clearPageCookie() {
+  document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
 export default function PageInboxSelector() {
+  const pathname = usePathname();
   const [pages, setPages] = useState<PageOption[]>([]);
   const [selected, setSelected] = useState('all');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (pathname !== '/inbox') {
+      setLoading(false);
+      return;
+    }
+
     setSelected(readCookie(COOKIE_NAME) || 'all');
     let cancelled = false;
     void fetch('/api/conversations/pages', { cache: 'no-store' })
@@ -44,19 +55,29 @@ export default function PageInboxSelector() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [pathname]);
 
   const selectedPage = useMemo(
     () => pages.find((page) => page.key === selected) || null,
     [pages, selected]
   );
 
+  useEffect(() => {
+    if (pathname !== '/inbox' || loading || selected === 'all') return;
+    if (!pages.some((page) => page.key === selected)) {
+      clearPageCookie();
+      setSelected('all');
+      window.location.reload();
+    }
+  }, [loading, pages, pathname, selected]);
+
+  if (pathname !== '/inbox') return null;
   if (!loading && pages.length <= 1) return null;
 
   const handleChange = (value: string) => {
     setSelected(value);
     if (value === 'all') {
-      document.cookie = `${COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+      clearPageCookie();
     } else {
       document.cookie = `${COOKIE_NAME}=${encodeURIComponent(value)}; Path=/; Max-Age=2592000; SameSite=Lax`;
     }
