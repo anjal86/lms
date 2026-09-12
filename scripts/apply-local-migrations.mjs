@@ -89,8 +89,12 @@ const migrations = [
     applied: () => exists("select to_regclass('public.idx_lead_messages_provider_ext_msg_full') is not null"),
   },
   {
-    file: '202609120016_add_converted_at_to_conversations.sql',
-    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='converted_at')"),
+    file: '202609120016_inbox_security_and_integrity.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='delivery_status') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='converted_at')"),
+  },
+  {
+    file: '202609120017_omnichannel_delivery_and_retry.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='provider_message_id')"),
   },
 ];
 
