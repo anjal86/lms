@@ -1,618 +1,281 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  CalendarClock,
+  Check,
+  Download,
+  Filter,
+  MessageSquare,
+  Phone,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react';
 import { useApp } from '@/lib/store';
-import { FollowUp, Lead, FollowUpChannel } from '@/lib/types';
+import type { FollowUpChannel, Lead } from '@/lib/types';
 import QuickLogModal from '@/components/leads/QuickLogModal';
 import WhatsAppModal from '@/components/leads/WhatsAppModal';
 import ScheduleFollowUpModal from '@/components/followups/ScheduleFollowUpModal';
-import FollowUpDispositionModal from '@/components/followups/FollowUpDispositionModal';
-import {
-  CalendarClock,
-  Phone,
-  MessageSquare,
-  Mail,
-  Check,
-  MapPin,
-  Clock,
-  CheckCircle2,
-  Plus,
-  Download,
-  LayoutGrid,
-  List,
-  AlertTriangle,
-  RefreshCw,
-  Search,
-  Sun,
-  Sunset,
-  Sunrise,
-  SlidersHorizontal,
-} from 'lucide-react';
+
+type FollowUpView = 'overdue' | 'today' | 'upcoming' | 'done';
+
+const CHANNEL_LABELS: Record<FollowUpChannel, string> = {
+  call: 'Call',
+  whatsapp: 'WhatsApp',
+  email: 'Email',
+  meeting: 'Meeting',
+};
+
+function sameLocalDay(value: string, now: number) {
+  const date = new Date(value);
+  const today = new Date(now);
+  return date.getFullYear() === today.getFullYear()
+    && date.getMonth() === today.getMonth()
+    && date.getDate() === today.getDate();
+}
+
+function dueLabel(value: string, now: number) {
+  const due = new Date(value).getTime();
+  const diffMinutes = Math.round((due - now) / 60_000);
+  if (diffMinutes < 0) {
+    const overdue = Math.abs(diffMinutes);
+    return overdue >= 60 ? `${Math.round(overdue / 60)}h overdue` : `${overdue}m overdue`;
+  }
+  if (diffMinutes < 60) return `in ${diffMinutes}m`;
+  if (diffMinutes < 1_440) return `in ${Math.round(diffMinutes / 60)}h`;
+  return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
 
 export default function FollowUpsPage() {
-  useEffect(() => {
-    document.title = 'Follow-Up Agenda & SLA — Wanderlust CRM';
-  }, []);
-
   const {
     followUps,
     allLeads,
     allProfiles,
     currentUser,
     completeFollowUp,
-    createFollowUp,
-    rebalanceOverdueFollowUps,
     exportFollowUpsIcal,
-    formatAppDate,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'overdue' | 'today' | 'upcoming' | 'completed'>('today');
-  const [selectedChannel, setSelectedChannel] = useState<'all' | FollowUpChannel>('all');
-  const [viewMode, setViewMode] = useState<'agenda' | 'timeblocks'>('agenda');
-
+  const [view, setView] = useState<FollowUpView>('today');
+  const [query, setQuery] = useState('');
+  const [owner, setOwner] = useState('ALL');
+  const [channel, setChannel] = useState<'all' | FollowUpChannel>('all');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [activeLogLead, setActiveLogLead] = useState<Lead | null>(null);
   const [activeWaLead, setActiveWaLead] = useState<Lead | null>(null);
-  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [activeDispositionTask, setActiveDispositionTask] = useState<FollowUp | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState('ALL');
-  const [rebalanceFeedback, setRebalanceFeedback] = useState<string | null>(null);
+  const [now, setNow] = useState<number | null>(null);
 
-  const handleResetFilters = () => {
-    setSearchQuery('');
-    setSelectedChannel('all');
-    setSelectedAgent('ALL');
-    setActiveTab('today');
-  };
+  useEffect(() => {
+    document.title = 'Follow-ups — Wanderlust CRM';
+    const update = () => setNow(Date.now());
+    const initial = window.setTimeout(update, 0);
+    const timer = window.setInterval(update, 60_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, []);
 
-  const now = Date.now();
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999);
+  const visibleTasks = useMemo(() => {
+    if (currentUser.role === 'admin' || currentUser.role === 'manager') return followUps;
+    return followUps.filter((item) => item.assigned_to === currentUser.id || item.agent_id === currentUser.id);
+  }, [currentUser.id, currentUser.role, followUps]);
 
-  const visibleTasks = followUps.filter((fu) => {
-    if (currentUser.role === 'admin' || currentUser.role === 'manager') return true;
-    return fu.assigned_to === currentUser.id;
-  });
+  const counts = useMemo(() => {
+    if (now === null) return { overdue: 0, today: 0, upcoming: 0, done: 0 };
+    return visibleTasks.reduce((result, item) => {
+      if (item.status === 'completed') {
+        result.done += 1;
+        return result;
+      }
+      const due = new Date(item.scheduled_at).getTime();
+      if (due < now) result.overdue += 1;
+      else if (sameLocalDay(item.scheduled_at, now)) result.today += 1;
+      else result.upcoming += 1;
+      return result;
+    }, { overdue: 0, today: 0, upcoming: 0, done: 0 });
+  }, [now, visibleTasks]);
 
-  const overdueTasks = visibleTasks.filter((fu) => {
-    return fu.status !== 'completed' && new Date(fu.scheduled_at).getTime() < now;
-  });
+  const filtered = useMemo(() => {
+    if (now === null) return [];
+    const term = query.trim().toLowerCase();
+    return visibleTasks
+      .filter((item) => {
+        const lead = allLeads.find((candidate) => candidate.id === item.lead_id);
+        const due = new Date(item.scheduled_at).getTime();
+        const isDone = item.status === 'completed';
+        if (view === 'done' && !isDone) return false;
+        if (view !== 'done' && isDone) return false;
+        if (view === 'overdue' && due >= now) return false;
+        if (view === 'today' && (due < now || !sameLocalDay(item.scheduled_at, now))) return false;
+        if (view === 'upcoming' && (due < now || sameLocalDay(item.scheduled_at, now))) return false;
+        if (owner !== 'ALL' && (item.assigned_to || item.agent_id) !== owner) return false;
+        if (channel !== 'all' && item.channel !== channel) return false;
+        if (term) {
+          const haystack = `${item.title} ${item.notes || ''} ${lead?.customer_name || ''} ${lead?.customer_phone || ''} ${lead?.destination || ''}`.toLowerCase();
+          if (!haystack.includes(term)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
+  }, [allLeads, channel, now, owner, query, view, visibleTasks]);
 
-  const todayTasks = visibleTasks.filter((fu) => {
-    const time = new Date(fu.scheduled_at).getTime();
-    return fu.status !== 'completed' && time >= startOfToday.getTime() && time <= endOfToday.getTime();
-  });
-
-  const upcomingTasks = visibleTasks.filter((fu) => {
-    const time = new Date(fu.scheduled_at).getTime();
-    return fu.status !== 'completed' && time > endOfToday.getTime();
-  });
-
-  const completedTasks = visibleTasks.filter((fu) => fu.status === 'completed');
-
-  // Critical Overdue (>24 hours) for Escalation Radar
-  const criticalOverdueTasks = overdueTasks.filter(
-    (fu) => now - new Date(fu.scheduled_at).getTime() > 24 * 3600000
-  );
-
-  const currentTabList =
-    activeTab === 'overdue'
-      ? overdueTasks
-      : activeTab === 'today'
-      ? todayTasks
-      : activeTab === 'upcoming'
-      ? upcomingTasks
-      : completedTasks;
-
-  const displayedList = currentTabList.filter((fu) => {
-    if (selectedChannel !== 'all' && fu.channel !== selectedChannel) return false;
-    return true;
-  });
-
-  const handleAutoRebalance = () => {
-    const count = rebalanceOverdueFollowUps(currentUser.id);
-    if (count > 0) {
-      setRebalanceFeedback(`Successfully rebalanced ${count} overdue inquiries to available agents with capacity.`);
-    } else {
-      setRebalanceFeedback('All current follow-ups are within healthy thresholds.');
-    }
-    setTimeout(() => setRebalanceFeedback(null), 5000);
-  };
-
-  const handleQuickReschedule = (fu: FollowUp, days: number) => {
-    const nextDate = new Date(Date.now() + days * 86400000).toISOString();
-    createFollowUp({
-      lead_id: fu.lead_id,
-      assigned_to: fu.assigned_to,
-      title: fu.title,
-      scheduled_at: nextDate,
-      channel: fu.channel,
-      notes: fu.notes,
-    });
-    completeFollowUp(fu.id, `Rescheduled by ${days} days`);
-  };
-
-  // Grouping for Time-Blocked View
-  const timeBlocks = {
-    morning: displayedList.filter((fu) => {
-      const hour = new Date(fu.scheduled_at).getHours();
-      return hour < 12;
-    }),
-    afternoon: displayedList.filter((fu) => {
-      const hour = new Date(fu.scheduled_at).getHours();
-      return hour >= 12 && hour < 16;
-    }),
-    evening: displayedList.filter((fu) => {
-      const hour = new Date(fu.scheduled_at).getHours();
-      return hour >= 16;
-    }),
-  };
+  const activeFilterCount = Number(owner !== 'ALL') + Number(channel !== 'all');
+  const managersCanFilterOwner = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   return (
-    <div className="space-y-4 max-w-5xl mx-auto text-xs">
-      {/* Title & Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-lg border border-zinc-200 shadow-2xs">
+    <div className="app-page">
+      <header className="page-header">
         <div>
-          <h1 className="text-base font-semibold text-zinc-900 tracking-tight flex items-center gap-2">
-            <CalendarClock className="w-4 h-4 text-zinc-500" />
-            <span>Follow-Up Agenda & Cadence Engine</span>
-          </h1>
-          <p className="text-xs text-zinc-500 mt-0.5">
-            Structured client callbacks, call dispositions, automated retries, and calendar sync
-          </p>
+          <p className="page-eyebrow">Work</p>
+          <h1 className="page-title">Follow-ups</h1>
+          <p className="page-description">See who needs a response, finish the contact, and move on.</p>
         </div>
-
-        <div className="flex items-center gap-2">
-          {/* Export iCal */}
-          <button
-            type="button"
-            onClick={() => exportFollowUpsIcal(displayedList)}
-            aria-label="Export agenda to iCalendar"
-            title="Download iCal (.ics) file for Google Calendar or Outlook"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-50 hover:bg-zinc-100 border border-zinc-200 rounded-md text-zinc-700 font-medium transition"
-          >
-            <Download className="w-3.5 h-3.5 text-zinc-500" />
-            <span>Export .ics</span>
+        <div className="page-actions">
+          <button type="button" onClick={() => exportFollowUpsIcal(filtered)} className="button-secondary" disabled={filtered.length === 0}>
+            <Download className="h-4 w-4" /> Calendar
           </button>
-
-          {/* View Mode Toggle */}
-          <div className="flex bg-zinc-100 p-0.5 rounded-md border border-zinc-200">
-            <button
-              type="button"
-              onClick={() => setViewMode('agenda')}
-              aria-label="Switch to Table / List view"
-              className={`p-1.5 rounded transition ${
-                viewMode === 'agenda' ? 'bg-white text-zinc-900 shadow-2xs' : 'text-zinc-500 hover:text-zinc-900'
-              }`}
-              title="Table Agenda"
-            >
-              <List className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('timeblocks')}
-              aria-label="Switch to Time-Blocked Grid view"
-              className={`p-1.5 rounded transition ${
-                viewMode === 'timeblocks' ? 'bg-white text-zinc-900 shadow-2xs' : 'text-zinc-500 hover:text-zinc-900'
-              }`}
-              title="Time-Blocked Grid"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsScheduleModalOpen(true)}
-            aria-label="Schedule new task"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-50 rounded-md font-medium shadow-2xs transition"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Schedule Task</span>
+          <button type="button" onClick={() => setScheduleOpen(true)} className="button-primary">
+            <Plus className="h-4 w-4" /> Add follow-up
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Overdue Escalation Radar Banner (Linear-style warning) */}
-      {criticalOverdueTasks.length > 0 && (
-        <div className="p-3 bg-red-50/80 border border-red-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-950">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-            <div>
-              <div className="font-semibold text-xs flex items-center gap-2">
-                <span>Overdue Escalation Radar</span>
-                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-red-200 text-red-800 font-bold">
-                  {criticalOverdueTasks.length} CRITICAL (&gt;24h)
-                </span>
-              </div>
-              <p className="text-[11px] text-red-800 mt-0.5">
-                These callbacks are severely past due. Rebalancing to active agents prevents lead cold-off and recovers SLA metrics.
-              </p>
-            </div>
+      <section className="metric-grid" aria-label="Follow-up summary">
+        <button type="button" onClick={() => setView('overdue')} className={`metric text-left ${view === 'overdue' ? 'border-zinc-400' : ''}`}>
+          <div className="metric-label">Overdue</div>
+          <div className="metric-value">{counts.overdue}</div>
+          <div className="metric-hint">Already past due</div>
+        </button>
+        <button type="button" onClick={() => setView('today')} className={`metric text-left ${view === 'today' ? 'border-zinc-400' : ''}`}>
+          <div className="metric-label">Today</div>
+          <div className="metric-value">{counts.today}</div>
+          <div className="metric-hint">Still due today</div>
+        </button>
+        <button type="button" onClick={() => setView('upcoming')} className={`metric text-left ${view === 'upcoming' ? 'border-zinc-400' : ''}`}>
+          <div className="metric-label">Upcoming</div>
+          <div className="metric-value">{counts.upcoming}</div>
+          <div className="metric-hint">Scheduled later</div>
+        </button>
+        <button type="button" onClick={() => setView('done')} className={`metric text-left ${view === 'done' ? 'border-zinc-400' : ''}`}>
+          <div className="metric-label">Done</div>
+          <div className="metric-value">{counts.done}</div>
+          <div className="metric-hint">Completed follow-ups</div>
+        </button>
+      </section>
+
+      <section className="surface-flat overflow-visible">
+        <div className="flex flex-col gap-2 border-b border-line p-3 sm:flex-row sm:items-center sm:p-4">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="field pl-9"
+              placeholder="Search traveler, phone, destination or task"
+              aria-label="Search follow-ups"
+            />
           </div>
-
-          {(currentUser.role === 'admin' || currentUser.role === 'manager') && (
-            <button
-              type="button"
-              onClick={handleAutoRebalance}
-              className="px-3 py-1.5 rounded-md bg-red-900 hover:bg-red-950 text-white font-medium text-xs shadow-2xs transition shrink-0 self-start sm:self-auto flex items-center gap-1.5"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Auto-Rebalance Leads</span>
+          <div className="relative">
+            <button type="button" onClick={() => setFiltersOpen((open) => !open)} className="button-secondary w-full sm:w-auto" aria-expanded={filtersOpen}>
+              <Filter className="h-4 w-4" /> Filters
+              {activeFilterCount > 0 && <span className="font-mono text-[10px] text-zinc-500">{activeFilterCount}</span>}
             </button>
-          )}
-        </div>
-      )}
-
-      {rebalanceFeedback && (
-        <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-md text-emerald-800 text-xs flex items-center gap-2">
-          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-          <span>{rebalanceFeedback}</span>
-        </div>
-      )}
-
-      {/* Segmented Filter Bar & Channel Pills */}
-      <div className="bg-white p-2 rounded-lg border border-zinc-200 shadow-2xs space-y-2">
-        {/* Status Tabs */}
-        <div className="flex items-center justify-between gap-2 overflow-x-auto pb-1 sm:pb-0">
-          <div className="flex items-center gap-1">
-            {[
-              { id: 'overdue', label: 'Overdue', count: overdueTasks.length, alert: overdueTasks.length > 0 },
-              { id: 'today', label: 'Due Today', count: todayTasks.length },
-              { id: 'upcoming', label: 'Upcoming', count: upcomingTasks.length },
-              { id: 'completed', label: 'Completed', count: completedTasks.length },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`px-3 py-1.5 rounded-md font-medium transition flex items-center gap-1.5 ${
-                  activeTab === tab.id
-                    ? 'bg-zinc-900 text-zinc-50 shadow-2xs'
-                    : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                }`}
-              >
-                <span>{tab.label}</span>
-                <span
-                  suppressHydrationWarning
-                  className={`font-mono text-[10px] px-1 py-0.2 rounded ${
-                    activeTab === tab.id
-                      ? 'bg-zinc-800 text-zinc-200'
-                      : tab.alert
-                      ? 'bg-red-100 text-red-700 font-bold'
-                      : 'bg-zinc-100 text-zinc-500'
-                  }`}
-                >
-                  {tab.count}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          {/* Channel Filters */}
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-zinc-400 text-[10px] uppercase font-mono mr-1">Channel:</span>
-            {(['all', 'call', 'whatsapp', 'email', 'meeting'] as const).map((ch) => (
-              <button
-                key={ch}
-                onClick={() => setSelectedChannel(ch)}
-                className={`px-2 py-0.5 rounded text-[11px] transition capitalize ${
-                  selectedChannel === ch
-                    ? 'bg-zinc-200 text-zinc-900 font-medium'
-                    : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50'
-                }`}
-              >
-                {ch === 'all' ? 'All' : ch}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area: Agenda vs Time-Blocked */}
-      {viewMode === 'agenda' ? (
-        /* Agenda Table / List View */
-        <div className="bg-white rounded-lg border border-zinc-200 shadow-2xs overflow-hidden">
-          <div className="divide-y divide-zinc-100">
-            {displayedList.length === 0 ? (
-              <div className="p-10 text-center text-zinc-400 flex flex-col items-center justify-center space-y-2">
-                <Search className="w-5 h-5 text-zinc-300 stroke-[1.5]" />
-                <div className="text-xs font-semibold text-zinc-700">No follow-up tasks match this view</div>
-                <p className="text-[11px] text-zinc-400 max-w-xs">
-                  Try adjusting your channel, tab, or agent filter, or reset everything to view today's tasks.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleResetFilters}
-                  className="mt-1 px-3 py-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-xs transition shadow-2xs"
-                >
-                  Clear all filters & view today
-                </button>
+            {filtersOpen && (
+              <div className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-app border border-line bg-surface p-4 shadow-panel">
+                <div className="mb-3 flex items-center justify-between">
+                  <div><div className="section-heading">Filter follow-ups</div><div className="section-description">Keep only what you need to see.</div></div>
+                  <button type="button" onClick={() => setFiltersOpen(false)} className="button-ghost button-sm" aria-label="Close filters"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="space-y-3">
+                  {managersCanFilterOwner && (
+                    <label className="block text-xs font-semibold text-zinc-700">
+                      Owner
+                      <select value={owner} onChange={(event) => setOwner(event.target.value)} className="select-field mt-1.5">
+                        <option value="ALL">All owners</option>
+                        {allProfiles.filter((profile) => profile.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <label className="block text-xs font-semibold text-zinc-700">
+                    Contact type
+                    <select value={channel} onChange={(event) => setChannel(event.target.value as 'all' | FollowUpChannel)} className="select-field mt-1.5">
+                      <option value="all">All types</option>
+                      <option value="call">Call</option>
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="email">Email</option>
+                      <option value="meeting">Meeting</option>
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => { setOwner('ALL'); setChannel('all'); }} className="button-secondary w-full" disabled={activeFilterCount === 0}>Clear filters</button>
+                </div>
               </div>
-            ) : (
-              displayedList.map((fu) => {
-                const lead = allLeads.find((l) => l.id === fu.lead_id);
-                const isPast = new Date(fu.scheduled_at).getTime() < now;
-                const retryCount = fu.retry_count || 0;
-
-                return (
-                  <div
-                    key={fu.id}
-                    className="p-3 flex items-center justify-between gap-4 hover:bg-zinc-50/70 transition"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className={`w-7 h-7 rounded flex items-center justify-center flex-shrink-0 border ${
-                          fu.channel === 'call'
-                            ? 'bg-zinc-100 border-zinc-200 text-zinc-700'
-                            : fu.channel === 'whatsapp'
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                            : 'bg-zinc-100 border-zinc-200 text-zinc-700'
-                        }`}
-                      >
-                        {fu.channel === 'call' ? (
-                          <Phone className="w-3.5 h-3.5" />
-                        ) : fu.channel === 'whatsapp' ? (
-                          <MessageSquare className="w-3.5 h-3.5" />
-                        ) : (
-                          <Mail className="w-3.5 h-3.5" />
-                        )}
-                      </div>
-
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-zinc-900 truncate">{fu.title}</span>
-                          {isPast && fu.status !== 'completed' && (
-                            <span className="text-[10px] font-mono px-1 py-0.2 rounded border border-red-200 bg-red-50 text-red-700 font-medium">
-                              OVERDUE
-                            </span>
-                          )}
-                          {retryCount > 0 && (
-                            <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
-                              Retry #{retryCount}
-                            </span>
-                          )}
-                        </div>
-
-                        {lead && (
-                          <div className="flex items-center gap-2 text-[11px] text-zinc-500 mt-0.5">
-                            <Link href={`/leads/${lead.id}`} className="hover:text-zinc-900 font-medium">
-                              {lead.customer_name} ({lead.lead_code})
-                            </Link>
-                            <span>•</span>
-                            <span>{lead.destination}</span>
-                            <span>•</span>
-                            <span className="font-mono text-zinc-600">{lead.customer_phone}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <span suppressHydrationWarning className="text-[11px] font-mono text-zinc-400 mr-2">
-                        {new Date(fu.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-
-                      {lead && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setActiveWaLead(lead)}
-                            aria-label={`Send WhatsApp to ${lead.customer_name}`}
-                            title="WhatsApp"
-                            className="p-1 rounded text-zinc-400 hover:text-emerald-700 hover:bg-emerald-50 transition min-h-[28px] min-w-[28px] inline-flex items-center justify-center"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setActiveLogLead(lead)}
-                            aria-label={`Call ${lead.customer_name}`}
-                            title="Call"
-                            className="p-1 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition min-h-[28px] min-w-[28px] inline-flex items-center justify-center"
-                          >
-                            <Phone className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
-
-                      {fu.status !== 'completed' ? (
-                        <>
-                          {/* Log Disposition Trigger */}
-                          <button
-                            type="button"
-                            onClick={() => setActiveDispositionTask(fu)}
-                            aria-label={`Log disposition for ${lead?.customer_name || 'task'}`}
-                            className="flex items-center gap-1 px-2.5 py-1 bg-zinc-900 hover:bg-black text-white rounded text-xs font-medium shadow-2xs transition"
-                          >
-                            <Check className="w-3 h-3" />
-                            <span>Disposition</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleQuickReschedule(fu, 1)}
-                            aria-label={`Reschedule follow-up for ${lead ? lead.customer_name : 'task'} by +1 day`}
-                            className="px-1.5 py-1 text-[10px] font-mono text-zinc-600 border border-zinc-200 rounded hover:bg-zinc-100 transition"
-                          >
-                            +1d
-                          </button>
-                        </>
-                      ) : (
-                        <span className="text-[11px] text-zinc-400 flex items-center gap-1 font-mono">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> done
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
             )}
           </div>
         </div>
-      ) : (
-        /* Time-Blocked Grid View (Morning, Afternoon, Evening) */
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* Morning Block */}
-          <div className="bg-white rounded-lg border border-zinc-200 shadow-2xs overflow-hidden flex flex-col">
-            <div className="px-3 py-2 border-b border-zinc-100 bg-amber-50/40 flex items-center justify-between">
-              <span className="font-semibold text-zinc-900 flex items-center gap-1.5">
-                <Sunrise className="w-3.5 h-3.5 text-amber-600" />
-                Morning (09:00 - 12:00)
-              </span>
-              <span className="font-mono text-[10px] text-zinc-500 bg-white px-1.5 py-0.2 rounded border border-zinc-200">
-                {timeBlocks.morning.length}
-              </span>
-            </div>
-            <div className="p-2.5 space-y-2 flex-1 overflow-y-auto max-h-[500px]">
-              {timeBlocks.morning.length === 0 ? (
-                <div className="py-8 text-center text-zinc-400 font-mono text-[11px]">No morning tasks</div>
-              ) : (
-                timeBlocks.morning.map((fu) => {
-                  const lead = allLeads.find((l) => l.id === fu.lead_id);
-                  return (
-                    <div
-                      key={fu.id}
-                      onClick={() => setActiveDispositionTask(fu)}
-                      className="p-2.5 rounded-md border border-zinc-200 hover:border-zinc-400 bg-zinc-50/50 hover:bg-white transition cursor-pointer space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-zinc-900 truncate">{lead?.customer_name || 'Traveler'}</span>
-                        <span suppressHydrationWarning className="text-[10px] font-mono text-zinc-500">
-                          {new Date(fu.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-zinc-600 line-clamp-1">{fu.title}</div>
-                      <div className="flex items-center justify-between pt-1 border-t border-zinc-100 text-[10px] text-zinc-400 font-mono">
-                        <span>{lead?.destination}</span>
-                        <span className="text-zinc-700 capitalize">● {fu.channel}</span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+
+        {now === null ? (
+          <div className="space-y-2 p-4" role="status" aria-label="Loading follow-ups">
+            {Array.from({ length: 7 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-md bg-zinc-100" />)}
           </div>
-
-          {/* Afternoon Block */}
-          <div className="bg-white rounded-lg border border-zinc-200 shadow-2xs overflow-hidden flex flex-col">
-            <div className="px-3 py-2 border-b border-zinc-100 bg-blue-50/40 flex items-center justify-between">
-              <span className="font-semibold text-zinc-900 flex items-center gap-1.5">
-                <Sun className="w-3.5 h-3.5 text-blue-600" />
-                Afternoon (12:00 - 16:00)
-              </span>
-              <span className="font-mono text-[10px] text-zinc-500 bg-white px-1.5 py-0.2 rounded border border-zinc-200">
-                {timeBlocks.afternoon.length}
-              </span>
-            </div>
-            <div className="p-2.5 space-y-2 flex-1 overflow-y-auto max-h-[500px]">
-              {timeBlocks.afternoon.length === 0 ? (
-                <div className="py-8 text-center text-zinc-400 font-mono text-[11px]">No afternoon tasks</div>
-              ) : (
-                timeBlocks.afternoon.map((fu) => {
-                  const lead = allLeads.find((l) => l.id === fu.lead_id);
-                  return (
-                    <div
-                      key={fu.id}
-                      onClick={() => setActiveDispositionTask(fu)}
-                      className="p-2.5 rounded-md border border-zinc-200 hover:border-zinc-400 bg-zinc-50/50 hover:bg-white transition cursor-pointer space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-zinc-900 truncate">{lead?.customer_name || 'Traveler'}</span>
-                        <span suppressHydrationWarning className="text-[10px] font-mono text-zinc-500">
-                          {new Date(fu.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-zinc-600 line-clamp-1">{fu.title}</div>
-                      <div className="flex items-center justify-between pt-1 border-t border-zinc-100 text-[10px] text-zinc-400 font-mono">
-                        <span>{lead?.destination}</span>
-                        <span className="text-zinc-700 capitalize">● {fu.channel}</span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <CalendarClock className="h-5 w-5 text-zinc-300" />
+            <h2 className="empty-state-title mt-3">Nothing here</h2>
+            <p className="empty-state-description">There are no follow-ups matching this view and filter combination.</p>
+            <button type="button" className="button-secondary mt-4" onClick={() => { setQuery(''); setOwner('ALL'); setChannel('all'); setView('today'); }}>Reset view</button>
           </div>
-
-          {/* Evening Block */}
-          <div className="bg-white rounded-lg border border-zinc-200 shadow-2xs overflow-hidden flex flex-col">
-            <div className="px-3 py-2 border-b border-zinc-100 bg-indigo-50/40 flex items-center justify-between">
-              <span className="font-semibold text-zinc-900 flex items-center gap-1.5">
-                <Sunset className="w-3.5 h-3.5 text-indigo-600" />
-                Evening (16:00 - 19:00+)
-              </span>
-              <span className="font-mono text-[10px] text-zinc-500 bg-white px-1.5 py-0.2 rounded border border-zinc-200">
-                {timeBlocks.evening.length}
-              </span>
-            </div>
-            <div className="p-2.5 space-y-2 flex-1 overflow-y-auto max-h-[500px]">
-              {timeBlocks.evening.length === 0 ? (
-                <div className="py-8 text-center text-zinc-400 font-mono text-[11px]">No evening tasks</div>
-              ) : (
-                timeBlocks.evening.map((fu) => {
-                  const lead = allLeads.find((l) => l.id === fu.lead_id);
-                  return (
-                    <div
-                      key={fu.id}
-                      onClick={() => setActiveDispositionTask(fu)}
-                      className="p-2.5 rounded-md border border-zinc-200 hover:border-zinc-400 bg-zinc-50/50 hover:bg-white transition cursor-pointer space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-zinc-900 truncate">{lead?.customer_name || 'Traveler'}</span>
-                        <span suppressHydrationWarning className="text-[10px] font-mono text-zinc-500">
-                          {new Date(fu.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-zinc-600 line-clamp-1">{fu.title}</div>
-                      <div className="flex items-center justify-between pt-1 border-t border-zinc-100 text-[10px] text-zinc-400 font-mono">
-                        <span>{lead?.destination}</span>
-                        <span className="text-zinc-700 capitalize">● {fu.channel}</span>
-                      </div>
+        ) : (
+          <div className="divide-y divide-line">
+            {filtered.map((item) => {
+              const lead = allLeads.find((candidate) => candidate.id === item.lead_id);
+              const assigned = allProfiles.find((profile) => profile.id === (item.assigned_to || item.agent_id));
+              const overdue = item.status !== 'completed' && new Date(item.scheduled_at).getTime() < now;
+              return (
+                <article key={item.id} className="grid gap-3 p-4 hover:bg-surface-hover md:grid-cols-[minmax(0,1fr)_9rem_10rem_auto] md:items-center">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`status-dot ${item.status === 'completed' ? 'status-dot-success' : overdue ? 'status-dot-danger' : 'status-dot-info'}`} />
+                      <h2 className="truncate text-xs font-semibold text-zinc-900">{lead?.customer_name || item.title}</h2>
+                      <span className="text-[10px] font-medium text-zinc-400">{CHANNEL_LABELS[item.channel]}</span>
                     </div>
-                  );
-                })
-              )}
-            </div>
+                    <p className="mt-1 truncate text-xs text-zinc-500">{item.title}{lead?.destination ? ` · ${lead.destination}` : ''}</p>
+                    {item.notes && <p className="mt-1 line-clamp-1 text-[11px] text-zinc-400">{item.notes}</p>}
+                  </div>
+
+                  <div>
+                    <div className={`font-mono text-[11px] font-semibold ${overdue ? 'text-danger' : 'text-zinc-700'}`}>{item.status === 'completed' ? 'Done' : dueLabel(item.scheduled_at, now)}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-zinc-400">{new Date(item.scheduled_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                  </div>
+
+                  <div className="text-xs text-zinc-600">{assigned?.full_name || 'Unassigned'}</div>
+
+                  <div className="flex flex-wrap gap-1.5 md:justify-end">
+                    {lead && item.status !== 'completed' && (
+                      <>
+                        <button type="button" onClick={() => setActiveLogLead(lead)} className="button-secondary button-sm"><Phone className="h-3.5 w-3.5" /> Call</button>
+                        <button type="button" onClick={() => setActiveWaLead(lead)} className="button-secondary button-sm"><MessageSquare className="h-3.5 w-3.5" /> Message</button>
+                      </>
+                    )}
+                    {lead && <Link href={`/leads/${lead.id}/workspace`} className="button-ghost button-sm">Open lead</Link>}
+                    {item.status !== 'completed' && (
+                      <button type="button" onClick={() => completeFollowUp(item.id)} className="button-primary button-sm"><Check className="h-3.5 w-3.5" /> Done</button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
-        </div>
-      )}
+        )}
+      </section>
 
-      {/* Modals */}
-      {activeDispositionTask && (
-        <FollowUpDispositionModal
-          followUp={activeDispositionTask}
-          lead={allLeads.find((l) => l.id === activeDispositionTask.lead_id)}
-          isOpen={!!activeDispositionTask}
-          onClose={() => setActiveDispositionTask(null)}
-        />
-      )}
-
-      {activeLogLead && (
-        <QuickLogModal
-          lead={activeLogLead}
-          isOpen={!!activeLogLead}
-          onClose={() => setActiveLogLead(null)}
-        />
-      )}
-
-      {activeWaLead && (
-        <WhatsAppModal
-          lead={activeWaLead}
-          isOpen={!!activeWaLead}
-          onClose={() => setActiveWaLead(null)}
-        />
-      )}
-
-      {isScheduleModalOpen && (
-        <ScheduleFollowUpModal
-          isOpen={isScheduleModalOpen}
-          onClose={() => setIsScheduleModalOpen(false)}
-        />
-      )}
+      {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => setScheduleOpen(false)} />}
+      {activeLogLead && <QuickLogModal lead={activeLogLead} isOpen onClose={() => setActiveLogLead(null)} />}
+      {activeWaLead && <WhatsAppModal lead={activeWaLead} isOpen onClose={() => setActiveWaLead(null)} />}
     </div>
   );
 }
