@@ -41,6 +41,7 @@ export function usePaginatedLeads(input: {
   q: string;
   dest: string;
   trip: string;
+  channel?: string;
 }) {
   const [data, setData] = useState<LeadPageResponse>({
     items: [],
@@ -63,8 +64,9 @@ export function usePaginatedLeads(input: {
     if (input.q.trim()) query.set('q', input.q.trim());
     if (input.dest && input.dest !== 'ALL') query.set('dest', input.dest);
     if (input.trip && input.trip !== 'ALL') query.set('trip', input.trip);
+    if (input.channel && input.channel !== 'ALL') query.set('channel', input.channel);
     return query.toString();
-  }, [input.page, input.pageSize, input.tab, input.q, input.dest, input.trip]);
+  }, [input.page, input.pageSize, input.tab, input.q, input.dest, input.trip, input.channel]);
 
   const refresh = useCallback(() => setRefreshToken((value) => value + 1), []);
 
