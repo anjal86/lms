@@ -1,113 +1,86 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Lead } from '@/lib/types';
-import { Clock, AlertTriangle, Check } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { Lead } from '@/lib/types';
 
 interface SlaBadgeProps {
   lead: Lead;
   detailed?: boolean;
 }
 
-export default function SlaBadge({ lead }: SlaBadgeProps) {
-  const [mounted, setMounted] = useState(false);
-  const [, setTick] = useState(0);
+function Status({ tone, children }: { tone: 'neutral' | 'info' | 'warning' | 'danger' | 'success'; children: React.ReactNode }) {
+  const dotClass = {
+    neutral: '',
+    info: 'status-dot-info',
+    warning: 'status-dot-warning',
+    danger: 'status-dot-danger',
+    success: 'status-dot-success',
+  }[tone];
+
+  return (
+    <span className="status-line font-mono tracking-tight" suppressHydrationWarning>
+      <span className={`status-dot ${dotClass}`} />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+export default function SlaBadge({ lead, detailed = false }: SlaBadgeProps) {
+  const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    setMounted(true);
-    const timer = setInterval(() => setTick((t) => t + 1), 15000);
-    return () => clearInterval(timer);
+    const update = () => setNow(Date.now());
+    const initial = window.setTimeout(update, 0);
+    const timer = window.setInterval(update, 15_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, []);
 
-  const now = Date.now();
+  if (now === null) {
+    return <Status tone="neutral">Checking next action…</Status>;
+  }
 
-  // Scenario 1: First Response SLA (uncontacted lead)
   if (!lead.first_contacted_at) {
     if (!lead.first_response_due_at) {
-      return (
-        <span suppressHydrationWarning className="inline-flex items-center gap-1.5 text-xs text-zinc-500 font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-zinc-300" />
-          <span>unassigned</span>
-        </span>
-      );
+      return <Status tone="neutral">Waiting for owner</Status>;
     }
 
     const dueTime = new Date(lead.first_response_due_at).getTime();
-    const diffMinutes = Math.round((dueTime - now) / 60000);
+    const diffMinutes = Math.round((dueTime - now) / 60_000);
 
     if (diffMinutes <= 0 || lead.is_first_response_breached) {
-      const overdueMins = Math.abs(diffMinutes);
-      return (
-        <span suppressHydrationWarning className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700 text-[11px] font-mono font-medium">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
-          <span>SLA BREACH {overdueMins > 0 ? `+${overdueMins}m` : ''}</span>
-        </span>
-      );
+      const overdue = Math.abs(diffMinutes);
+      return <Status tone="danger">{detailed ? 'Reply overdue' : 'Overdue'}{overdue > 0 ? ` · ${overdue}m` : ''}</Status>;
     }
 
     if (diffMinutes <= 10) {
-      return (
-        <span suppressHydrationWarning className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[11px] font-mono font-medium">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
-          <span>FRT: {diffMinutes}m</span>
-        </span>
-      );
+      return <Status tone="warning">{detailed ? 'Reply soon' : 'Reply'} · {diffMinutes}m</Status>;
     }
 
-    return (
-      <span suppressHydrationWarning className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-zinc-200 bg-zinc-50 text-zinc-700 text-[11px] font-mono">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-        <span>FRT: {diffMinutes}m</span>
-      </span>
-    );
+    return <Status tone="info">{detailed ? 'First reply due' : 'Reply'} · {diffMinutes}m</Status>;
   }
 
-  // Scenario 2: Contacted, checking Next Follow-up
-  if (lead.next_follow_up_at && lead.stage !== 'won' && lead.stage !== 'lost') {
-    const fuTime = new Date(lead.next_follow_up_at).getTime();
-    const diffMinutes = Math.round((fuTime - now) / 60000);
+  if (lead.next_follow_up_at && !['won', 'lost', 'junk'].includes(lead.stage)) {
+    const followUpTime = new Date(lead.next_follow_up_at).getTime();
+    const diffMinutes = Math.round((followUpTime - now) / 60_000);
 
     if (diffMinutes < 0) {
-      const hours = Math.abs(Math.round(diffMinutes / 60));
-      return (
-        <span suppressHydrationWarning className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-red-200 bg-red-50 text-red-700 text-[11px] font-mono font-medium">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-600" />
-          <span>OVERDUE {hours > 0 ? `${hours}h` : `${Math.abs(diffMinutes)}m`}</span>
-        </span>
-      );
+      const overdueMinutes = Math.abs(diffMinutes);
+      const value = overdueMinutes >= 60 ? `${Math.round(overdueMinutes / 60)}h` : `${overdueMinutes}m`;
+      return <Status tone="danger">{detailed ? 'Follow-up overdue' : 'Overdue'} · {value}</Status>;
     }
 
     if (diffMinutes < 120) {
-      return (
-        <span suppressHydrationWarning className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[11px] font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-          <span>due in {diffMinutes}m</span>
-        </span>
-      );
+      return <Status tone="warning">{detailed ? 'Follow-up due' : 'Due'} · {diffMinutes}m</Status>;
     }
 
     const hours = Math.round(diffMinutes / 60);
-    return (
-      <span suppressHydrationWarning className="inline-flex items-center gap-1.5 text-xs text-zinc-600 font-mono">
-        <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
-        <span>in {hours}h</span>
-      </span>
-    );
+    return <Status tone="neutral">{detailed ? 'Next follow-up' : 'Next'} · {hours}h</Status>;
   }
 
-  if (lead.stage === 'won') {
-    return (
-      <span suppressHydrationWarning className="inline-flex items-center gap-1.5 text-xs text-emerald-700 font-medium font-mono">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-        <span>won</span>
-      </span>
-    );
-  }
-
-  return (
-    <span suppressHydrationWarning className="inline-flex items-center gap-1.5 text-xs text-zinc-500 font-mono">
-      <span className="w-1.5 h-1.5 rounded-full bg-zinc-300" />
-      <span>contacted</span>
-    </span>
-  );
+  if (lead.stage === 'won') return <Status tone="success">Won</Status>;
+  if (lead.stage === 'lost' || lead.stage === 'junk') return <Status tone="neutral">Closed</Status>;
+  return <Status tone="neutral">No follow-up set</Status>;
 }
