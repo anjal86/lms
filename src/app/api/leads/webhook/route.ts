@@ -128,7 +128,6 @@ export async function POST(req: NextRequest) {
       p_force: false,
     });
     if (routingError) {
-      // A routing outage must not make an already-persisted lead disappear or become retry-duplicated.
       console.error('Lead persisted but automatic routing failed:', routingError.message);
     } else {
       assignedTo = routedAgent || null;
@@ -152,9 +151,7 @@ export async function POST(req: NextRequest) {
         notes: 'Matched a recent lead by normalized phone number and/or email address.',
         metadata: { duplicate_of: duplicateOf },
       });
-      if (duplicateLogError) {
-        console.error('Duplicate activity log failed:', duplicateLogError.message);
-      }
+      if (duplicateLogError) console.error('Duplicate activity log failed:', duplicateLogError.message);
     }
 
     if (assignedTo) {
@@ -165,11 +162,9 @@ export async function POST(req: NextRequest) {
           ? `${lead.customer_name} (${lead.destination}) was routed to you and may duplicate a recent lead.`
           : `${lead.customer_name} (${lead.destination}) has been routed to you.`,
         type: 'lead_assigned',
-        link: `/leads/${lead.id}`,
+        link: `/leads/${lead.id}/workspace`,
       });
-      if (notificationError) {
-        console.error('Lead assignment notification failed:', notificationError.message);
-      }
+      if (notificationError) console.error('Lead assignment notification failed:', notificationError.message);
     }
 
     return NextResponse.json(
@@ -184,9 +179,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (error) {
     console.error('Webhook ingestion failed:', error);
-    if (!leadPersisted) {
-      await admin.from('webhook_events').delete().eq('idempotency_key', idempotencyKey);
-    }
+    if (!leadPersisted) await admin.from('webhook_events').delete().eq('idempotency_key', idempotencyKey);
     return NextResponse.json({ error: 'Unable to persist lead.' }, { status: 500 });
   }
 }
