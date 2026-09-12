@@ -1,14 +1,20 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { JetBrains_Mono, Manrope } from 'next/font/google';
 import './globals.css';
 import { AppProvider } from '@/lib/store';
 import AppShell from '@/components/layout/AppShell';
 import ToastContainer from '@/components/layout/ToastContainer';
 
-const inter = Inter({
+const manrope = Manrope({
   subsets: ['latin'],
   display: 'swap',
-  variable: '--font-inter',
+  variable: '--font-app-sans',
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-app-mono',
 });
 
 export const metadata: Metadata = {
@@ -30,7 +36,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} bg-zinc-50 text-zinc-950 antialiased`} suppressHydrationWarning>
+      <body
+        className={`${manrope.variable} ${jetBrainsMono.variable} bg-zinc-50 text-zinc-950 antialiased`}
+        suppressHydrationWarning
+      >
         <AppProvider>
           <a
             href="#main-content"
