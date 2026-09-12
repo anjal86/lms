@@ -5,6 +5,7 @@ import { metaFetchJson } from '@/lib/integrations/meta-http';
 
 export type MetaSyncProvider = 'facebook' | 'instagram';
 
+type MetaRecord = Record<string, unknown>;
 type SyncThread = {
   provider: MetaSyncProvider;
   connectionId: string;
@@ -37,12 +38,21 @@ export type MetaSyncResult = {
   errors: string[];
 };
 
-function asArray(value: unknown) {
-  return Array.isArray(value) ? value as Array<Record<string, any>> : [];
+function record(value: unknown): MetaRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as MetaRecord : {};
 }
 
-function attachmentDetails(message: Record<string, any>) {
-  const attachList = asArray(message.attachments?.data);
+function asArray(value: unknown): MetaRecord[] {
+  return Array.isArray(value) ? value.filter((item): item is MetaRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function nested(value: unknown, key: string): unknown {
+  return record(value)[key];
+}
+
+function attachmentDetails(message: MetaRecord) {
+  const attachmentsRecord = record(message.attachments);
+  const attachList = asArray(attachmentsRecord.data);
   const first = attachList[0];
   let messageType = 'text';
   let body = typeof message.message === 'string' ? message.message.trim() : '';
@@ -53,29 +63,29 @@ function attachmentDetails(message: Record<string, any>) {
   let mimeType: string | null = null;
 
   if (first) {
-    const imageData = first.image_data as Record<string, unknown> | undefined;
-    const videoData = first.video_data as Record<string, unknown> | undefined;
+    const imageData = record(first.image_data);
+    const videoData = record(first.video_data);
     mimeType = typeof first.mime_type === 'string' ? first.mime_type : null;
     fileName = typeof first.name === 'string' ? first.name : null;
     fileSize = typeof first.size === 'number' ? first.size : null;
-    if (imageData?.url) {
+    if (typeof imageData.url === 'string') {
       messageType = 'image';
-      attachmentUrl = String(imageData.url);
-      previewUrl = String(imageData.preview_url || imageData.url);
+      attachmentUrl = imageData.url;
+      previewUrl = typeof imageData.preview_url === 'string' ? imageData.preview_url : imageData.url;
       if (!body) body = '[Photo]';
-    } else if (videoData?.url || mimeType?.startsWith('video/')) {
+    } else if (typeof videoData.url === 'string' || mimeType?.startsWith('video/')) {
       messageType = 'video';
-      attachmentUrl = String(videoData?.url || first.file_url || '');
+      attachmentUrl = typeof videoData.url === 'string' ? videoData.url : typeof first.file_url === 'string' ? first.file_url : '';
       previewUrl = attachmentUrl;
       if (!body) body = '[Video]';
     } else if (mimeType?.startsWith('audio/') || fileName?.includes('audioclip')) {
       messageType = 'audio';
-      attachmentUrl = String(first.file_url || '');
+      attachmentUrl = typeof first.file_url === 'string' ? first.file_url : '';
       previewUrl = attachmentUrl;
       if (!body) body = '[Voice message]';
-    } else if (first.file_url) {
+    } else if (typeof first.file_url === 'string') {
       messageType = 'file';
-      attachmentUrl = String(first.file_url);
+      attachmentUrl = first.file_url;
       if (!body) body = `[File: ${fileName || 'Attachment'}]`;
     } else {
       messageType = 'media';
@@ -83,13 +93,14 @@ function attachmentDetails(message: Record<string, any>) {
     }
   }
 
+  const tagsRecord = record(message.tags);
   return {
     body: body || null,
     messageType,
     metadata: {
       from: message.from,
       to: message.to,
-      tags: asArray(message.tags?.data).map((tag) => tag.name).filter(Boolean),
+      tags: asArray(tagsRecord.data).map((tag) => tag.name).filter((name): name is string => typeof name === 'string'),
       attachments: message.attachments,
       attachment_url: attachmentUrl,
       preview_url: previewUrl,
@@ -102,16 +113,19 @@ function attachmentDetails(message: Record<string, any>) {
 }
 
 async function pagedGraph(url: URL, maxPages = 8) {
-  const items: Array<Record<string, any>> = [];
+  const items: MetaRecord[] = [];
   let next: string | null = url.toString();
   for (let page = 0; page < maxPages && next; page += 1) {
-    const { response, data } = await metaFetchJson<Record<string, any>>(next);
+    const graphResult: { response: Response; data: MetaRecord } = await metaFetchJson<MetaRecord>(next);
+    const response = graphResult.response;
+    const payload = graphResult.data;
     if (!response.ok) {
-      const providerError = data.error as Record<string, unknown> | undefined;
-      throw new Error(typeof providerError?.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
+      const providerError = record(payload.error);
+      throw new Error(typeof providerError.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
     }
-    items.push(...asArray(data.data));
-    next = typeof data.paging?.next === 'string' ? data.paging.next : null;
+    items.push(...asArray(payload.data));
+    const paging = record(payload.paging);
+    next = typeof paging.next === 'string' ? paging.next : null;
   }
   return items;
 }
@@ -132,26 +146,27 @@ async function facebookThreads(input: {
   const conversations = await pagedGraph(url);
 
   return conversations.flatMap((conversation) => {
-    const participants = asArray(conversation.participants?.data);
-    const customer = participants.find((p) => String(p.id || '') !== input.pageId) || participants[0];
+    const participants = asArray(record(conversation.participants).data);
+    const customer = participants.find((participant) => String(participant.id || '') !== input.pageId) || participants[0];
     const customerId = customer?.id ? String(customer.id) : '';
     if (!customerId) return [];
-    const messages = asArray(conversation.messages?.data);
+    const messages = asArray(record(conversation.messages).data);
     const mapped = messages.filter((message) => message.id).map((message) => {
       const details = attachmentDetails(message);
+      const senderId = String(record(message.from).id || '');
       return {
         id: String(message.id),
-        direction: String(message.from?.id || '') === input.pageId ? 'outbound' as const : 'inbound' as const,
-        sentAt: message.created_time ? new Date(message.created_time).toISOString() : new Date().toISOString(),
+        direction: senderId === input.pageId ? 'outbound' as const : 'inbound' as const,
+        sentAt: typeof message.created_time === 'string' ? new Date(message.created_time).toISOString() : new Date().toISOString(),
         body: details.body,
         messageType: details.messageType,
         metadata: {
           ...details.metadata,
-          sent_via: String(message.from?.id || '') === input.pageId ? 'meta_business_suite' : 'customer',
+          sent_via: senderId === input.pageId ? 'meta_business_suite' : 'customer',
         },
       };
     });
-    const updatedAt = conversation.updated_time ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
+    const updatedAt = typeof conversation.updated_time === 'string' ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
     return [{
       provider: 'facebook' as const,
       connectionId: input.connectionId,
@@ -168,7 +183,7 @@ async function facebookThreads(input: {
       metadata: {
         meta_page_id: input.pageId,
         meta_page_name: input.pageName,
-        meta_link: conversation.link ? `https://business.facebook.com${conversation.link}` : null,
+        meta_link: typeof conversation.link === 'string' ? `https://business.facebook.com${conversation.link}` : null,
         can_reply: conversation.can_reply ?? true,
         is_subscribed: conversation.is_subscribed ?? true,
         message_count: conversation.message_count ?? mapped.length,
@@ -198,24 +213,24 @@ async function instagramThreads(input: {
   const conversations = await pagedGraph(url);
 
   return conversations.flatMap((conversation) => {
-    const participants = asArray(conversation.participants?.data);
-    const customer = participants.find((p) => String(p.id || '') !== input.instagramId) || participants[0];
+    const participants = asArray(record(conversation.participants).data);
+    const customer = participants.find((participant) => String(participant.id || '') !== input.instagramId) || participants[0];
     const customerId = customer?.id ? String(customer.id) : '';
     if (!customerId) return [];
-    const messages = asArray(conversation.messages?.data);
+    const messages = asArray(record(conversation.messages).data);
     const mapped = messages.filter((message) => message.id).map((message) => {
       const details = attachmentDetails(message);
-      const outbound = String(message.from?.id || '') === input.instagramId;
+      const outbound = String(record(message.from).id || '') === input.instagramId;
       return {
         id: String(message.id),
         direction: outbound ? 'outbound' as const : 'inbound' as const,
-        sentAt: message.created_time ? new Date(message.created_time).toISOString() : new Date().toISOString(),
+        sentAt: typeof message.created_time === 'string' ? new Date(message.created_time).toISOString() : new Date().toISOString(),
         body: details.body,
         messageType: details.messageType,
         metadata: { ...details.metadata, sent_via: outbound ? 'meta_business_suite' : 'customer' },
       };
     });
-    const updatedAt = conversation.updated_time ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
+    const updatedAt = typeof conversation.updated_time === 'string' ? new Date(conversation.updated_time).toISOString() : new Date().toISOString();
     return [{
       provider: 'instagram' as const,
       connectionId: input.connectionId,
@@ -286,12 +301,7 @@ async function persistThread(thread: SyncThread) {
     if (result.message_inserted === true) inserted += 1;
   }
 
-  // Provider unread values are authoritative during history synchronization.
-  await admin
-    .from('lead_conversations')
-    .update({ unread_count: thread.unreadCount })
-    .eq('id', conversation.id);
-
+  await admin.from('lead_conversations').update({ unread_count: thread.unreadCount }).eq('id', conversation.id);
   return { inserted };
 }
 
@@ -329,7 +339,7 @@ export async function syncMetaConversations(options?: { connectionId?: string; p
         ? payload.page_access_tokens as Array<Record<string, unknown>>
         : [];
       const config = (connection.config || {}) as Record<string, unknown>;
-      const pages = Array.isArray(config.pages) ? config.pages as Array<Record<string, any>> : [];
+      const pages = asArray(config.pages);
       let newestTimestamp = connection.last_external_timestamp as string | null;
 
       for (const page of pages) {
@@ -341,12 +351,13 @@ export async function syncMetaConversations(options?: { connectionId?: string; p
 
         let threads: SyncThread[] = [];
         if (connection.provider === 'instagram') {
-          const instagramId = String(page.instagram_business_account?.id || '');
+          const instagramAccount = record(page.instagram_business_account);
+          const instagramId = String(instagramAccount.id || '');
           if (!instagramId) continue;
           threads = await instagramThreads({
             connectionId: connection.id,
             instagramId,
-            accountName: String(page.instagram_business_account?.username || page.name || connection.display_name || 'Instagram'),
+            accountName: String(instagramAccount.username || page.name || connection.display_name || 'Instagram'),
             token,
             version,
             since: connection.last_external_timestamp,
@@ -390,11 +401,5 @@ export async function syncMetaConversations(options?: { connectionId?: string; p
     }
   }
 
-  return {
-    success: errors.length === 0,
-    pagesCount,
-    conversationsCount,
-    messagesCount,
-    errors,
-  };
+  return { success: errors.length === 0, pagesCount, conversationsCount, messagesCount, errors };
 }
