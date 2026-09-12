@@ -5,6 +5,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { refreshMetaConversationProfiles, syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { discoverSelectedMetaPageHistory } from '@/lib/integrations/meta-page-history';
+import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -133,6 +134,16 @@ async function runLiveSync(scope: ProviderScope | null) {
   return { ...result, skipped: false };
 }
 
+function phoneScanScope(scope: ProviderScope | null) {
+  return scope
+    ? {
+        provider: scope.provider,
+        accountId: scope.accountId,
+        connectionId: scope.connectionId,
+      }
+    : null;
+}
+
 export async function POST(request: Request) {
   const url = new URL(request.url);
   const liveMode = url.searchParams.get('mode') === 'live';
@@ -140,11 +151,13 @@ export async function POST(request: Request) {
     request.headers.get('x-integration-sync-secret'),
     process.env.INTEGRATION_SYNC_SECRET?.trim()
   );
+  let canRunHistoryMaintenance = internalSync;
 
   if (!internalSync) {
     const actor = await getApiActor(request);
     if ('error' in actor) return actor.error;
-    if (!liveMode && !isManagement(actor.profile)) {
+    canRunHistoryMaintenance = isManagement(actor.profile);
+    if (!liveMode && !canRunHistoryMaintenance) {
       return NextResponse.json({ error: 'Only managers can run provider history sync.' }, { status: 403 });
     }
   }
@@ -168,8 +181,21 @@ export async function POST(request: Request) {
 
     if (liveMode) {
       const result = await runLiveSync(requestedScope.scope);
+
+      // Managers automatically index one previously-unscanned customer history on
+      // each live-sync cycle. This steadily covers the entire Page without opening
+      // individual chats or making one enormous provider request.
+      const phoneScan = canRunHistoryMaintenance
+        ? await scanPhoneLeadHistoryBatch({
+            scope: phoneScanScope(requestedScope.scope),
+            batchSize: 1,
+            maxHistoryPages: 20,
+          })
+        : { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] };
+
       return NextResponse.json({
         ...result,
+        phoneScan,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
@@ -186,8 +212,7 @@ export async function POST(request: Request) {
     });
 
     // When a Page is selected, walk that Page deeply enough to discover its full
-    // conversation list, but store only one preview message per customer. The
-    // customer's complete history is still fetched lazily when that chat opens.
+    // conversation list, but store only one preview message per customer.
     const selectedHistory = requestedScope.scope
       ? await discoverSelectedMetaPageHistory({
           provider: requestedScope.scope.provider,
@@ -206,6 +231,14 @@ export async function POST(request: Request) {
         }
       : await discoverMetaConversationHistory({ maxPages: 12 });
 
+    // Manual Sync accelerates the automatic phone pass by scanning a larger batch.
+    // Future live-sync cycles continue from the next unscanned conversation.
+    const phoneScan = await scanPhoneLeadHistoryBatch({
+      scope: phoneScanScope(requestedScope.scope),
+      batchSize: 8,
+      maxHistoryPages: 20,
+    });
+
     const avatarRefresh = internalSync || requestedScope.scope
       ? null
       : await refreshMetaConversationProfiles({ limit: 50 });
@@ -219,6 +252,7 @@ export async function POST(request: Request) {
         historyPreviewMessagesInserted: history.messagesInserted,
         historyConversationsScanned: selectedHistory?.conversationsScanned || 0,
         historyErrors: history.errors,
+        phoneScan,
         avatarsRefreshed: avatarRefresh?.updated || 0,
         avatarProfilesAttempted: avatarRefresh?.attempted || 0,
         avatarProfilesUnavailable: avatarRefresh?.unavailable || 0,
