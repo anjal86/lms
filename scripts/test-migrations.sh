@@ -123,7 +123,9 @@ update public.profiles set role='admin', is_active=true where id='11111111-1111-
 update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
 update public.profiles set role='agent', is_active=false where id='33333333-3333-3333-3333-333333333333';
 update public.profiles set role='agent', is_active=true where id='44444444-4444-4444-4444-444444444444';
-reset request.jwt.claims;
+-- Custom PostgreSQL GUCs reset to an empty string, which is not valid JSON. Keep the
+-- emulated Supabase claim value syntactically valid before returning to the owner role.
+set request.jwt.claims = '{}';
 reset role;
 
 insert into public.leads(id,customer_name,customer_phone,destination,assigned_to,stage)
@@ -148,8 +150,8 @@ query_as() {
     "set role authenticated; set request.jwt.claims = '{\"sub\":\"${uid}\",\"role\":\"authenticated\"}'; ${sql}"
 }
 
-agent_role="$(query_as '22222222-2222-2222-2222-222222222222' 'select coalesce(public.current_user_role(),'''');')"
-admin_role="$(query_as '11111111-1111-1111-1111-111111111111' 'select coalesce(public.current_user_role(),'''');')"
+agent_role="$(query_as '22222222-2222-2222-2222-222222222222' 'select public.current_user_role();')"
+admin_role="$(query_as '11111111-1111-1111-1111-111111111111' 'select public.current_user_role();')"
 admin_management="$(query_as '11111111-1111-1111-1111-111111111111' 'select public.is_management();')"
 agent_count="$(query_as '22222222-2222-2222-2222-222222222222' 'select count(*) from public.leads;')"
 admin_count="$(query_as '11111111-1111-1111-1111-111111111111' 'select count(*) from public.leads;')"
@@ -157,6 +159,7 @@ disabled_count="$(query_as '33333333-3333-3333-3333-333333333333' 'select count(
 disabled_profiles="$(query_as '33333333-3333-3333-3333-333333333333' 'select count(*) from public.profiles;')"
 agent_chat_access="$(query_as '22222222-2222-2222-2222-222222222222' "select public.can_access_conversation('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1');")"
 other_chat_access="$(query_as '22222222-2222-2222-2222-222222222222' "select public.can_access_conversation('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2');")"
+agent_load="$(query_as '11111111-1111-1111-1111-111111111111' "select current_load from public.profiles where id='22222222-2222-2222-2222-222222222222';")"
 
 [[ "$agent_role" == "agent" ]] || { echo "Expected agent fixture role=agent, got '$agent_role'"; exit 1; }
 [[ "$admin_role" == "admin" ]] || { echo "Expected admin fixture role=admin, got '$admin_role'"; exit 1; }
@@ -167,5 +170,6 @@ other_chat_access="$(query_as '22222222-2222-2222-2222-222222222222' "select pub
 [[ "$disabled_profiles" == "0" ]] || { echo "Expected disabled user to see 0 profiles, got $disabled_profiles"; exit 1; }
 [[ "$agent_chat_access" == "t" ]] || { echo "Expected agent to access assigned conversation"; exit 1; }
 [[ "$other_chat_access" == "f" ]] || { echo "Agent unexpectedly accessed another agent's conversation"; exit 1; }
+[[ "$agent_load" == "1" ]] || { echo "Expected database-maintained current_load=1 for agent, got '$agent_load'"; exit 1; }
 
 echo "==> Migration chain and RLS smoke tests passed."
