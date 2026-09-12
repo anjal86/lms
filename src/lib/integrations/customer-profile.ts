@@ -52,7 +52,6 @@ function localeParts(locale: string): { language: string | null; region: string 
       region: parsed.region?.toUpperCase() || null,
     };
   } catch {
-    // Conservative fallback for runtimes with stricter Intl.Locale parsing.
     const parts = normalized.split('-').filter(Boolean);
     const language = /^[A-Za-z]{2,3}$/.test(parts[0] || '') ? parts[0].toLowerCase() : null;
     const regionPart = parts.find((part, index) => index > 0 && /^[A-Za-z]{2}$/.test(part));
@@ -60,7 +59,6 @@ function localeParts(locale: string): { language: string | null; region: string 
   }
 }
 
-/** Convert ISO 3166-1 alpha-2 country code to emoji flag. */
 export function countryCodeToFlag(countryCode: string | null | undefined): string | null {
   if (!countryCode || typeof countryCode !== 'string') return null;
   const upper = countryCode.trim().toUpperCase();
@@ -71,7 +69,6 @@ export function countryCodeToFlag(countryCode: string | null | undefined): strin
   return String.fromCodePoint(first + 127397, second + 127397);
 }
 
-/** Parse country name and flag from a Meta/BCP-47 locale string. */
 export function parseCountryFromLocale(locale: string | null | undefined): {
   country: string | null;
   countryCode: string | null;
@@ -84,7 +81,6 @@ export function parseCountryFromLocale(locale: string | null | undefined): {
   try {
     const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
     const country = regionNames.of(code);
-    // Intl implementations may return the code unchanged for an unknown region.
     if (!country || country === code) return emptyCountryResult();
     return { country, countryCode: code, countryFlag: countryCodeToFlag(code) };
   } catch {
@@ -92,7 +88,6 @@ export function parseCountryFromLocale(locale: string | null | undefined): {
   }
 }
 
-/** Parse language name from a Meta/BCP-47 locale string. */
 export function parseLanguageFromLocale(locale: string | null | undefined): string | null {
   if (!locale || typeof locale !== 'string') return null;
   const { language } = localeParts(locale);
@@ -110,7 +105,6 @@ function isValidTimezoneOffset(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= -14 && value <= 14;
 }
 
-/** Format a fixed UTC offset. Region labels are intentionally approximate. */
 export function formatTimezoneOffset(tzOffsetHours: number | null | undefined): {
   label: string | null;
   approximateRegion: string | null;
@@ -150,7 +144,6 @@ export function formatTimezoneOffset(tzOffsetHours: number | null | undefined): 
   };
 }
 
-/** Calculate traveler local time from a fixed UTC offset without depending on server/browser timezone. */
 export function calculateTravelerLocalTime(
   tzOffsetHours: number | null | undefined,
   now: Date = new Date()
@@ -171,7 +164,6 @@ export function calculateTravelerLocalTime(
 
 type LeadFormField = { name?: unknown; values?: unknown };
 
-/** Normalize Facebook Lead Ads Instant Form field names to common customer demographics. */
 export function extractLeadFormDemographics(fields: LeadFormField[] | null | undefined): CustomerDemographics {
   const result: CustomerDemographics = { formFields: [] };
   if (!Array.isArray(fields) || fields.length === 0) return result;
@@ -255,10 +247,6 @@ function cleanDetectedPlace(raw: string) {
   return raw.trim().replace(/\s+/g, ' ').replace(/[.,!?;:]+$/g, '').trim();
 }
 
-/**
- * Conservative chat-location extraction. Only explicit origin/residence phrases qualify;
- * mentioning a destination city by itself is intentionally ignored.
- */
 export function detectLocationFromText(text: string | null | undefined): {
   city: string | null;
   country: string | null;
@@ -267,7 +255,7 @@ export function detectLocationFromText(text: string | null | undefined): {
   if (!text || typeof text !== 'string') return { city: null, country: null, formattedLocation: null };
 
   const place = String.raw`([\p{L}\p{M}][\p{L}\p{M}\s.'’-]{1,49}?)`;
-  const end = String.raw`(?=[.,!?;:]|\s+(?:and|but|now|currently|looking|want|would|planning|interested|need|travel|travelling|traveling)\b|$)`;
+  const end = String.raw`(?=[.,!?;:]|\s+(?:right\s+now|at\s+the\s+moment|and|but|now|currently|looking|want|would|planning|interested|need|travel|travelling|traveling)\b|$)`;
   const patterns = [
     new RegExp(String.raw`\b(?:i\s+am|i'm|im|we\s+are|we're)\s+from\s+${place}${end}`, 'iu'),
     new RegExp(String.raw`\b(?:i\s+live|we\s+live|living|based|located|staying|residing)\s+(?:in|at)\s+${place}${end}`, 'iu'),
