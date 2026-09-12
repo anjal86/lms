@@ -29,8 +29,9 @@ export interface Profile {
   languages?: string[];
   office_location?: string;
   certifications?: string[];
-  user_preferences?: UserPreferences;
+  user_preferences?: Partial<UserPreferences>;
   created_at: string;
+  updated_at?: string;
 }
 
 export type LeadStage =
@@ -77,10 +78,12 @@ export interface Lead {
   visa_required: boolean;
   special_notes?: string;
   source: string;
+  external_id?: string | null;
   stage: LeadStage;
   priority: Priority;
   assigned_to: string | null;
   assigned_at?: string;
+  assigned_by?: string | null;
   first_response_due_at?: string;
   first_contacted_at?: string;
   first_response_time_seconds?: number | null;
@@ -88,16 +91,16 @@ export interface Lead {
   next_follow_up_at?: string | null;
   last_contacted_at?: string | null;
   last_activity_type?: string | null;
-  
+
   // Financial, Profit & Incentive metrics
-  won_deal_value?: number | null;          // Total revenue from traveler
-  package_sale_price?: number | null;      // Total sale price
-  vendor_net_cost?: number | null;         // Direct costs (flights, hotel, transfers)
-  gross_profit?: number | null;            // package_sale_price - vendor_net_cost
-  profit_margin_pct?: number | null;       // (gross_profit / sale_price) * 100
-  agent_commission_earned?: number | null; // Incentive earned by consultant
-  commission_status?: CommissionStatus;    // 'accrued' | 'approved' | 'paid'
-  
+  won_deal_value?: number | null;
+  package_sale_price?: number | null;
+  vendor_net_cost?: number | null;
+  gross_profit?: number | null;
+  profit_margin_pct?: number | null;
+  agent_commission_earned?: number | null;
+  commission_status?: CommissionStatus;
+
   lost_reason?: string | null;
   lost_notes?: string | null;
   closed_at?: string | null;
@@ -152,12 +155,12 @@ export interface LeadQuotation {
 
 export interface IncentiveTier {
   id: string;
-  name: string;                   // 'Bronze' | 'Silver' | 'Gold' | 'Platinum'
-  min_sales: number;              // Monthly sales lower threshold
-  max_sales: number | null;       // Monthly sales upper threshold (null = unlimited)
-  commission_pct_profit: number;  // % commission on gross profit (e.g. 6%, 9%, 13%, 18%)
-  milestone_bonus: number;        // Flat cash bonus when reaching tier ($0, $150, $350, $750)
-  min_margin_threshold: number;   // Minimum gross profit margin % required (e.g. 10%)
+  name: string;
+  min_sales: number;
+  max_sales: number | null;
+  commission_pct_profit: number;
+  milestone_bonus: number;
+  min_margin_threshold: number;
   perk_description?: string;
 }
 
@@ -200,18 +203,19 @@ export interface FollowUp {
   retry_count?: number;
   rescheduled_from_id?: string;
   created_at: string;
+  updated_at?: string;
   lead?: Lead;
   agent?: Profile;
 }
 
 export interface EmployeeHealthScore {
   agent_id: string;
-  overall_score: number; // 0 - 100 Index
+  overall_score: number;
   grade: 'elite' | 'healthy' | 'attention_needed' | 'burnout_risk';
-  sla_score: number; // 0 - 100
-  followup_score: number; // 0 - 100
-  conversion_score: number; // 0 - 100
-  workload_score: number; // 0 - 100
+  sla_score: number;
+  followup_score: number;
+  conversion_score: number;
+  workload_score: number;
   avg_frt_minutes: number;
   on_time_followup_pct: number;
   active_leads_count: number;
@@ -243,7 +247,7 @@ export interface ActivityLog {
   outcome?: string;
   notes?: string;
   call_duration_seconds?: number | null;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   created_at: string;
   agent?: Profile;
 }
@@ -255,6 +259,7 @@ export interface WhatsAppTemplate {
   message_body: string;
   is_active: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export type CurrencyCode = 'USD' | 'EUR' | 'GBP' | 'INR' | 'AUD' | 'AED';
@@ -271,13 +276,14 @@ export interface AgencySettings {
   escalate_to_manager: boolean;
   auto_reassign_breached_leads: boolean;
   auto_reassign_hours: number;
-  business_hours_start: string; // e.g. "09:00"
-  business_hours_end: string;   // e.g. "18:00"
+  business_hours_start: string;
+  business_hours_end: string;
   freeze_sla_weekends: boolean;
   timezone: string;
   pre_breach_warning_minutes: number;
 
   // Routing Engine
+  auto_assign_enabled?: boolean;
   routing_strategy: RoutingStrategy;
   routing_overflow_policy: RoutingOverflowPolicy;
   vip_high_budget_threshold: number;
@@ -295,7 +301,7 @@ export interface AgencySettings {
   // Audio & Notifications
   notification_sound_enabled: boolean;
   notification_sound_preset: SoundPreset;
-  notification_volume: number; // 0 - 100
+  notification_volume: number;
   mute_sound_in_call: boolean;
   browser_push_enabled: boolean;
   toast_duration_seconds: number;
@@ -428,8 +434,8 @@ export interface PreDepartureChecklist {
 }
 
 export interface PostTripReview {
-  rating: number; // 1 to 5
-  nps_score: number; // 0 to 10
+  rating: number;
+  nps_score: number;
   feedback_notes?: string;
   repeat_interest?: boolean;
   reviewed_at?: string;
