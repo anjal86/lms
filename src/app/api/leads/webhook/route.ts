@@ -113,6 +113,13 @@ export async function POST(req: NextRequest) {
     }
     leadPersisted = true;
 
+    const { data: duplicateOf, error: duplicateError } = await admin.rpc('mark_possible_duplicate', {
+      p_lead_id: insertedLead.id,
+    });
+    if (duplicateError) {
+      console.error('Lead persisted but duplicate detection failed:', duplicateError.message);
+    }
+
     let assignedTo: string | null = null;
     const { data: routedAgent, error: routingError } = await admin.rpc('route_lead_atomic', {
       p_lead_id: insertedLead.id,
@@ -137,11 +144,26 @@ export async function POST(req: NextRequest) {
     }
     const lead = reloadedLead || insertedLead;
 
+    if (duplicateOf) {
+      const { error: duplicateLogError } = await admin.from('activity_logs').insert({
+        lead_id: insertedLead.id,
+        activity_type: 'system',
+        title: 'Possible duplicate lead detected',
+        notes: 'Matched a recent lead by normalized phone number and/or email address.',
+        metadata: { duplicate_of: duplicateOf },
+      });
+      if (duplicateLogError) {
+        console.error('Duplicate activity log failed:', duplicateLogError.message);
+      }
+    }
+
     if (assignedTo) {
       const { error: notificationError } = await admin.from('notifications').insert({
         user_id: assignedTo,
-        title: 'New Lead Assigned',
-        message: `${lead.customer_name} (${lead.destination}) has been routed to you.`,
+        title: duplicateOf ? 'Possible Duplicate Lead Assigned' : 'New Lead Assigned',
+        message: duplicateOf
+          ? `${lead.customer_name} (${lead.destination}) was routed to you and may duplicate a recent lead.`
+          : `${lead.customer_name} (${lead.destination}) has been routed to you.`,
         type: 'lead_assigned',
         link: `/leads/${lead.id}`,
       });
@@ -150,7 +172,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, lead, routed: Boolean(assignedTo) }, { status: 201 });
+    return NextResponse.json(
+      {
+        success: true,
+        lead,
+        routed: Boolean(assignedTo),
+        possible_duplicate: Boolean(duplicateOf),
+        duplicate_of: duplicateOf || null,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Webhook ingestion failed:', error);
     if (!leadPersisted) {
