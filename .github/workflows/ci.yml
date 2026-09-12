@@ -25,7 +25,7 @@ jobs:
       ANON_KEY: ci-placeholder-anon-key
       SERVICE_ROLE_KEY: ci-placeholder-service-role-key
       SECRET_KEY_BASE: ci-realtime-secret-key-base-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJ
-      REALTIME_DB_ENC_KEY: ci-realtime-key12
+      REALTIME_DB_ENC_KEY: ci-realtime-key1
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
