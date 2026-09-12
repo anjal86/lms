@@ -124,6 +124,10 @@ const migrations = [
     file: '202609120022_profile_load_trigger_integrity.sql',
     applied: () => functionDefinitionContains('public.protect_profile_privileged_fields()', 'pg_trigger_depth() > 1'),
   },
+  {
+    file: '202609120023_phone_lead_index_integrity.sql',
+    applied: () => exists("select to_regprocedure('public.extract_phone_numbers_from_text(text)') is not null and exists(select 1 from pg_trigger where tgname='trg_index_phone_from_lead_message' and not tgisinternal)"),
+  },
 ];
 
 console.log('\nChecking local Wanderlust database migrations...\n');
