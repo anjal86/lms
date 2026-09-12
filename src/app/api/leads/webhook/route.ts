@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
       const { data: candidates, error: candidateError } = await admin
         .from('profiles')
         .select('id,role,destination_tags,max_capacity,current_load,status,is_active,accepting_leads')
+        .eq('role', 'agent')
         .eq('is_active', true)
         .eq('accepting_leads', true)
         .eq('status', 'available');
@@ -141,17 +142,18 @@ export async function POST(req: NextRequest) {
 
     if (insertError) throw insertError;
 
+    // Profile workload is maintained by the database trigger in migration 004.
     if (assignedTo) {
-      await Promise.all([
-        admin.rpc('increment_profile_load', { profile_id: assignedTo }).then(() => undefined),
-        admin.from('notifications').insert({
-          user_id: assignedTo,
-          title: 'New Lead Assigned',
-          message: `${lead.customer_name} (${lead.destination}) has been routed to you.`,
-          type: 'lead_assigned',
-          link: `/leads/${lead.id}`,
-        }),
-      ]);
+      const { error: notificationError } = await admin.from('notifications').insert({
+        user_id: assignedTo,
+        title: 'New Lead Assigned',
+        message: `${lead.customer_name} (${lead.destination}) has been routed to you.`,
+        type: 'lead_assigned',
+        link: `/leads/${lead.id}`,
+      });
+      if (notificationError) {
+        console.error('Lead assignment notification failed:', notificationError.message);
+      }
     }
 
     return NextResponse.json({ success: true, lead }, { status: 201 });
