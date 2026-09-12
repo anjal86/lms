@@ -14,7 +14,7 @@ export default function MobileBottomNav() {
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         { label: 'My Work', href: '/my-work', icon: ListChecks },
-        { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
+        { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock },
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
       ]
     : [
