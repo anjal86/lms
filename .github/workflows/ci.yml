@@ -24,6 +24,8 @@ jobs:
       JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
       ANON_KEY: ci-placeholder-anon-key
       SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      SECRET_KEY_BASE: ci-realtime-secret-key-base-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJ
+      REALTIME_DB_ENC_KEY: ci-realtime-key12
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
