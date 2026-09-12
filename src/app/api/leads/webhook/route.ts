@@ -65,7 +65,6 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = createSupabaseAdminClient();
-
   const { error: eventError } = await admin
     .from('webhook_events')
     .insert({ idempotency_key: idempotencyKey, source });
@@ -79,41 +78,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { data: settingsRow } = await admin
-      .from('agency_settings')
-      .select('settings')
-      .eq('id', 'default')
-      .maybeSingle();
-
-    const settings = (settingsRow?.settings || {}) as Record<string, unknown>;
-    const autoAssign = settings.auto_assign_enabled !== false;
-    let assignedTo: string | null = null;
-
-    if (autoAssign) {
-      const { data: candidates, error: candidateError } = await admin
-        .from('profiles')
-        .select('id,role,destination_tags,max_capacity,current_load,status,is_active,accepting_leads')
-        .eq('role', 'agent')
-        .eq('is_active', true)
-        .eq('accepting_leads', true)
-        .eq('status', 'available');
-
-      if (candidateError) throw candidateError;
-
-      const destination = data.destination.toLowerCase();
-      const eligible = (candidates || []).filter((profile) => profile.current_load < profile.max_capacity);
-      const specialists = eligible.filter((profile) =>
-        (profile.destination_tags || []).some((tag: string) => {
-          const normalized = tag.toLowerCase();
-          return normalized === 'global' || destination.includes(normalized) || normalized.includes(destination);
-        })
-      );
-      const pool = specialists.length ? specialists : eligible;
-      pool.sort((a, b) => (a.current_load / a.max_capacity) - (b.current_load / b.max_capacity));
-      assignedTo = pool[0]?.id || null;
-    }
-
-    const now = new Date().toISOString();
     const payload = {
       customer_name: data.customer_name,
       customer_phone: data.customer_phone,
@@ -130,19 +94,32 @@ export async function POST(req: NextRequest) {
       external_id: data.external_id || idempotencyKey,
       stage: 'new',
       priority: data.priority || 'normal',
-      assigned_to: assignedTo,
-      assigned_at: assignedTo ? now : null,
+      assigned_to: null,
+      assigned_at: null,
     };
 
-    const { data: lead, error: insertError } = await admin
+    const { data: insertedLead, error: insertError } = await admin
       .from('leads')
       .insert(payload)
       .select('*')
       .single();
-
     if (insertError) throw insertError;
 
-    // Profile workload is maintained by the database trigger in migration 004.
+    const { data: assignedTo, error: routingError } = await admin.rpc('route_lead_atomic', {
+      p_lead_id: insertedLead.id,
+      p_destination: data.destination,
+      p_excluded_agent: null,
+      p_force: false,
+    });
+    if (routingError) throw routingError;
+
+    const { data: lead, error: reloadError } = await admin
+      .from('leads')
+      .select('*')
+      .eq('id', insertedLead.id)
+      .single();
+    if (reloadError) throw reloadError;
+
     if (assignedTo) {
       const { error: notificationError } = await admin.from('notifications').insert({
         user_id: assignedTo,
