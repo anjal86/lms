@@ -53,6 +53,13 @@ jobs:
       SERVICE_ROLE_KEY: ci-placeholder-service-role-key
       SECRET_KEY_BASE: ci-realtime-secret-key-base-0123456789abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJ
       REALTIME_DB_ENC_KEY: ci-realtime-key1
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:8000
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+      LEADS_WEBHOOK_SECRET: ci-placeholder-secret-at-least-32-characters-long
+      SLA_CRON_SECRET: ci-placeholder-sla-secret-at-least-32-characters-long
+      INTEGRATION_TOKEN_ENCRYPTION_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v5
       - name: Validate Docker Compose
