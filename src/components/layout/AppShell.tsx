@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import MobileBottomNav from './MobileBottomNav';
 
 const PUBLIC_AUTH_PATHS = new Set(['/login', '/forgot-password', '/reset-password']);
 
@@ -49,9 +50,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header />
-        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-[#f6f7f9] px-4 py-5 sm:px-6 sm:py-6 xl:px-8">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-[#f6f7f9] px-4 py-5 pb-24 sm:px-6 sm:py-6 md:pb-6 xl:px-8">
           {children}
         </main>
+        <MobileBottomNav />
       </div>
     </div>
   );
