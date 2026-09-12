@@ -224,6 +224,10 @@ function deliveryLabel(message: Message) {
   }
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
 export default function InboxPage() {
   const { currentUser, templates, showToast } = useApp();
   const [filter, setFilter] = useState<'unconverted' | 'all' | 'mine' | 'converted'>('unconverted');
@@ -251,6 +255,8 @@ export default function InboxPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const listAbortRef = useRef<AbortController | null>(null);
   const listSequenceRef = useRef(0);
+  const liveSyncAbortRef = useRef<AbortController | null>(null);
+  const liveSyncInFlightRef = useRef(false);
   const selectedIdRef = useRef<string | null>(null);
   const inspectorCloseRef = useRef<HTMLButtonElement>(null);
   const lightboxCloseRef = useRef<HTMLButtonElement>(null);
@@ -301,6 +307,32 @@ export default function InboxPage() {
     window.setTimeout(() => setCopiedKey(null), 1600);
   };
 
+  const runLiveMetaSync = useCallback(async () => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (liveSyncInFlightRef.current) return;
+
+    const controller = new AbortController();
+    liveSyncAbortRef.current = controller;
+    liveSyncInFlightRef.current = true;
+    try {
+      const response = await fetch('/api/conversations/sync?mode=live', {
+        method: 'POST',
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (!response.ok && response.status !== 502) {
+        console.warn('Live Meta sync returned', response.status);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && !isAbortError(error)) {
+        console.warn('Live Meta sync failed:', error);
+      }
+    } finally {
+      if (liveSyncAbortRef.current === controller) liveSyncAbortRef.current = null;
+      liveSyncInFlightRef.current = false;
+    }
+  }, []);
+
   const loadConversations = useCallback(async (selectFirst = false, silent = false) => {
     if (silent && typeof document !== 'undefined' && document.hidden) return;
     listAbortRef.current?.abort();
@@ -329,7 +361,7 @@ export default function InboxPage() {
         setSelectedId(null);
       }
     } catch (error) {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && !isAbortError(error)) {
         console.error('Failed to load conversations:', error);
         if (!silent) showToast('Unable to load inbox conversations.', 'error');
       }
@@ -339,27 +371,45 @@ export default function InboxPage() {
   }, [filter, providerFilter, debouncedSearch, showToast]);
 
   useEffect(() => {
-    void loadConversations(true);
-    return () => listAbortRef.current?.abort();
-  }, [loadConversations]);
+    let cancelled = false;
+    void (async () => {
+      await loadConversations(true);
+      await runLiveMetaSync();
+      if (!cancelled) await loadConversations(false, true);
+    })();
+    return () => {
+      cancelled = true;
+      listAbortRef.current?.abort();
+    };
+  }, [loadConversations, runLiveMetaSync]);
 
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
     const poll = async () => {
       if (stopped) return;
-      if (!document.hidden) await loadConversations(false, true);
+      if (!document.hidden) {
+        await runLiveMetaSync();
+        if (!stopped) await loadConversations(false, true);
+      }
       if (!stopped) timer = window.setTimeout(poll, LIST_POLL_MS);
     };
     timer = window.setTimeout(poll, LIST_POLL_MS);
-    const onVisibility = () => { if (!document.hidden) void loadConversations(false, true); };
+    const onVisibility = () => {
+      if (!document.hidden) {
+        void (async () => {
+          await runLiveMetaSync();
+          if (!stopped) await loadConversations(false, true);
+        })();
+      }
+    };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [loadConversations]);
+  }, [loadConversations, runLiveMetaSync]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -371,19 +421,27 @@ export default function InboxPage() {
     let stopped = false;
     let timer: number | undefined;
     let controller: AbortController | null = null;
+    let inFlight = false;
     let sequence = 0;
 
     const loadThread = async (showLoading = false) => {
-      if (stopped || (document.hidden && !showLoading)) return;
-      controller?.abort();
-      controller = new AbortController();
+      if (stopped || inFlight || (document.hidden && !showLoading)) return;
+      inFlight = true;
+      const requestController = new AbortController();
+      controller = requestController;
       const requestSequence = ++sequence;
       if (showLoading) setIsLoadingMessages(true);
       try {
-        const response = await fetch(`/api/conversations/${selectedId}`, { signal: controller.signal, cache: 'no-store' });
+        await runLiveMetaSync();
+        if (stopped || requestController.signal.aborted) return;
+
+        const response = await fetch(`/api/conversations/${selectedId}`, {
+          signal: requestController.signal,
+          cache: 'no-store',
+        });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Unable to load conversation.');
-        if (stopped || controller.signal.aborted || requestSequence !== sequence) return;
+        if (stopped || requestController.signal.aborted || requestSequence !== sequence) return;
 
         const conversation = data.conversation as Conversation;
         const incoming = Array.isArray(data.messages) ? data.messages as Message[] : [];
@@ -407,8 +465,12 @@ export default function InboxPage() {
           setConversations((previous) => previous.map((item) => item.id === selectedId ? { ...item, unread_count: 0 } : item));
         }
       } catch (error) {
-        if (!controller?.signal.aborted) console.error('Failed to load thread:', error);
+        if (!requestController.signal.aborted && !isAbortError(error)) {
+          console.error('Failed to load thread:', error);
+        }
       } finally {
+        if (controller === requestController) controller = null;
+        inFlight = false;
         if (!stopped && showLoading) setIsLoadingMessages(false);
       }
     };
@@ -431,7 +493,11 @@ export default function InboxPage() {
       if (timer) window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [selectedId]);
+  }, [selectedId, runLiveMetaSync]);
+
+  useEffect(() => {
+    return () => liveSyncAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -576,7 +642,7 @@ export default function InboxPage() {
                   <span className="hidden lg:inline">Sync</span>
                 </button>
               )}
-              <button type="button" onClick={() => void loadConversations(false, false)} className="button-ghost button-sm px-2" aria-label="Refresh inbox">
+              <button type="button" onClick={() => void (async () => { await runLiveMetaSync(); await loadConversations(false, false); })()} className="button-ghost button-sm px-2" aria-label="Refresh inbox">
                 <RefreshCw className="h-3.5 w-3.5" />
               </button>
             </div>
