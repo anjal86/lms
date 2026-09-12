@@ -1,187 +1,133 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
+import { BarChart3 } from 'lucide-react';
 import { useApp } from '@/lib/store';
-import {
-  BarChart3,
-  Trophy,
-  Clock,
-  Target,
-  TrendingUp,
-} from 'lucide-react';
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
+}
 
 export default function AnalyticsPage() {
-  const { allLeads, allProfiles, activities } = useApp();
+  const { allLeads, allProfiles, activities, formatCurrency } = useApp();
 
   useEffect(() => {
-    document.title = 'Analytics & Performance — Wanderlust CRM';
+    document.title = 'Performance — Wanderlust CRM';
   }, []);
 
-  const totalLeads = allLeads.length;
-  const wonLeads = allLeads.filter((l) => l.stage === 'won');
-  const lostLeads = allLeads.filter((l) => l.stage === 'lost');
-  const closedLeadsCount = wonLeads.length + lostLeads.length;
-  const winRate = closedLeadsCount > 0 ? Math.round((wonLeads.length / closedLeadsCount) * 100) : 0;
-  const totalWonValue = wonLeads.reduce((sum, l) => sum + (l.won_deal_value || 0), 0);
+  const metrics = useMemo(() => {
+    const won = allLeads.filter((lead) => lead.stage === 'won');
+    const lost = allLeads.filter((lead) => lead.stage === 'lost');
+    const closed = won.length + lost.length;
+    const firstResponses = allLeads.filter((lead) => lead.first_response_time_seconds != null);
+    const averageResponseSeconds = firstResponses.length
+      ? Math.round(firstResponses.reduce((sum, lead) => sum + (lead.first_response_time_seconds || 0), 0) / firstResponses.length)
+      : 0;
+    const breached = allLeads.filter((lead) => lead.is_first_response_breached).length;
 
-  const leadsWithFrt = allLeads.filter((l) => l.first_response_time_seconds != null);
-  const avgFrtSeconds =
-    leadsWithFrt.length > 0
-      ? Math.round(
-          leadsWithFrt.reduce((sum, l) => sum + (l.first_response_time_seconds || 0), 0) /
-            leadsWithFrt.length
-        )
-      : 720;
-  const avgFrtMinutes = Math.round(avgFrtSeconds / 60);
+    return {
+      winRate: closed ? Math.round((won.length / closed) * 100) : 0,
+      wonCount: won.length,
+      closedCount: closed,
+      averageResponseMinutes: Math.round(averageResponseSeconds / 60),
+      responseOnTime: allLeads.length ? Math.round(((allLeads.length - breached) / allLeads.length) * 100) : 100,
+      lateReplies: breached,
+      wonValue: won.reduce((sum, lead) => sum + Number(lead.package_sale_price || lead.won_deal_value || 0), 0),
+    };
+  }, [allLeads]);
 
-  const breachedCount = allLeads.filter((l) => l.is_first_response_breached).length;
-  const slaComplianceRate =
-    totalLeads > 0 ? Math.round(((totalLeads - breachedCount) / totalLeads) * 100) : 100;
-
-  const agents = allProfiles.filter((p) => p.role === 'agent');
-
-  const leaderboard = agents
+  const leaderboard = useMemo(() => allProfiles
+    .filter((profile) => profile.role === 'agent' && profile.is_active)
     .map((agent) => {
-      const agentLeads = allLeads.filter((l) => l.assigned_to === agent.id);
-      const agentWon = agentLeads.filter((l) => l.stage === 'won');
-      const agentLost = agentLeads.filter((l) => l.stage === 'lost');
-      const agentClosed = agentWon.length + agentLost.length;
-      const rate = agentClosed > 0 ? Math.round((agentWon.length / agentClosed) * 100) : 0;
-      const revenue = agentWon.reduce((sum, l) => sum + (l.won_deal_value || 0), 0);
-
-      const agentFrtLeads = agentLeads.filter((l) => l.first_response_time_seconds != null);
-      const agentAvgFrt =
-        agentFrtLeads.length > 0
-          ? Math.round(
-              agentFrtLeads.reduce((s, l) => s + (l.first_response_time_seconds || 0), 0) /
-                agentFrtLeads.length /
-                60
-            )
-          : 12;
-
-      const agentBreaches = agentLeads.filter((l) => l.is_first_response_breached).length;
-      const agentActivities = activities.filter((a) => a.agent_id === agent.id).length;
+      const agentLeads = allLeads.filter((lead) => lead.assigned_to === agent.id);
+      const active = agentLeads.filter((lead) => !['won', 'lost', 'junk'].includes(lead.stage));
+      const won = agentLeads.filter((lead) => lead.stage === 'won');
+      const lost = agentLeads.filter((lead) => lead.stage === 'lost');
+      const closed = won.length + lost.length;
+      const responseLeads = agentLeads.filter((lead) => lead.first_response_time_seconds != null);
+      const averageResponse = responseLeads.length
+        ? Math.round(responseLeads.reduce((sum, lead) => sum + (lead.first_response_time_seconds || 0), 0) / responseLeads.length / 60)
+        : null;
 
       return {
         ...agent,
-        totalAssigned: agentLeads.length,
-        wonCount: agentWon.length,
-        winRate: rate,
-        revenue,
-        avgFrtMinutes: agentAvgFrt,
-        breaches: agentBreaches,
-        activityCount: agentActivities,
+        activeCount: active.length,
+        wonCount: won.length,
+        winRate: closed ? Math.round((won.length / closed) * 100) : 0,
+        averageResponse,
+        lateReplies: agentLeads.filter((lead) => lead.is_first_response_breached).length,
+        wonValue: won.reduce((sum, lead) => sum + Number(lead.package_sale_price || lead.won_deal_value || 0), 0),
+        activityCount: activities.filter((activity) => activity.agent_id === agent.id).length,
       };
     })
-    .sort((a, b) => b.wonCount - a.wonCount || a.avgFrtMinutes - b.avgFrtMinutes);
+    .sort((a, b) => b.wonCount - a.wonCount || (a.averageResponse ?? Number.MAX_SAFE_INTEGER) - (b.averageResponse ?? Number.MAX_SAFE_INTEGER)), [activities, allLeads, allProfiles]);
 
   return (
-    <div className="space-y-4 max-w-6xl mx-auto text-xs">
-      {/* Title */}
-      <div>
-        <h1 className="text-base font-semibold text-zinc-900 tracking-tight flex items-center gap-2">
-          <BarChart3 className="w-4 h-4 text-zinc-500" />
-          Employee Performance & SLA Metrics
-        </h1>
-        <p className="text-xs text-zinc-500 mt-0.5">
-          Response velocity, conversion rates, and consultant leaderboards
-        </p>
-      </div>
+    <div className="app-page">
+      <header className="page-header">
+        <div>
+          <p className="page-eyebrow">Insights</p>
+          <h1 className="page-title flex items-center gap-2"><BarChart3 className="h-5 w-5 text-zinc-400" /> Team performance</h1>
+          <p className="page-description">A simple view of conversion, response speed, and each consultant’s active workload.</p>
+        </div>
+      </header>
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <div className="bg-white p-3 rounded-lg border border-zinc-200 shadow-2xs">
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-tight">Win Rate</div>
-          <div className="text-xl font-mono font-medium text-zinc-900 mt-1">{winRate}%</div>
-          <div className="text-[11px] text-zinc-500 mt-0.5">{wonLeads.length} won / {closedLeadsCount} closed</div>
+      <section className="metric-grid" aria-label="Performance summary">
+        <div className="metric"><div className="metric-label">Win rate</div><div className="metric-value">{metrics.winRate}%</div><div className="metric-hint">{metrics.wonCount} won from {metrics.closedCount} closed</div></div>
+        <div className="metric"><div className="metric-label">Average first reply</div><div className="metric-value">{metrics.averageResponseMinutes}m</div><div className="metric-hint">Across leads with a recorded first response</div></div>
+        <div className="metric"><div className="metric-label">Replies on time</div><div className="metric-value">{metrics.responseOnTime}%</div><div className="metric-hint">{metrics.lateReplies} late first replies</div></div>
+        <div className="metric"><div className="metric-label">Won value</div><div className="metric-value">{formatCurrency(metrics.wonValue)}</div><div className="metric-hint">Confirmed package value</div></div>
+      </section>
+
+      <section className="surface-flat overflow-hidden">
+        <div className="panel-header">
+          <div><h2 className="section-heading">Consultants</h2><p className="section-description">Ordered by won deals, then response speed.</p></div>
         </div>
 
-        <div className="bg-white p-3 rounded-lg border border-zinc-200 shadow-2xs">
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-tight">Avg Response (FRT)</div>
-          <div className="text-xl font-mono font-medium text-zinc-900 mt-1">{avgFrtMinutes}m</div>
-          <div className="text-[11px] text-zinc-500 mt-0.5">Target: &lt;30m limit</div>
-        </div>
+        {leaderboard.length === 0 ? (
+          <div className="empty-state"><BarChart3 className="h-5 w-5 text-zinc-300" /><h2 className="empty-state-title mt-3">No consultant data yet</h2><p className="empty-state-description">Performance appears after leads are assigned and worked.</p></div>
+        ) : (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table>
+                <thead><tr><th className="w-16">Rank</th><th>Consultant</th><th>Active</th><th>Won</th><th>Win rate</th><th>Avg reply</th><th>Late replies</th><th className="text-right">Won value</th></tr></thead>
+                <tbody>
+                  {leaderboard.map((agent, index) => (
+                    <tr key={agent.id}>
+                      <td className="font-mono text-[11px] text-zinc-400">#{index + 1}</td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[9px] font-bold text-zinc-600">{initials(agent.full_name)}</span>
+                          <div><div className="font-semibold text-zinc-900">{agent.full_name}</div><div className="mt-0.5 text-[10px] text-zinc-400">{agent.destination_tags.slice(0, 2).join(' · ') || 'General'}</div></div>
+                        </div>
+                      </td>
+                      <td className="font-mono text-[11px]">{agent.activeCount}/{agent.max_capacity}</td>
+                      <td className="font-mono text-[11px] font-semibold text-zinc-900">{agent.wonCount}</td>
+                      <td className="font-mono text-[11px]">{agent.winRate}%</td>
+                      <td className="font-mono text-[11px]">{agent.averageResponse == null ? '—' : `${agent.averageResponse}m`}</td>
+                      <td><span className="status-line"><span className={`status-dot ${agent.lateReplies ? 'status-dot-danger' : 'status-dot-success'}`} />{agent.lateReplies}</span></td>
+                      <td className="text-right font-mono text-[11px] font-semibold text-zinc-900">{formatCurrency(agent.wonValue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-        <div className="bg-white p-3 rounded-lg border border-zinc-200 shadow-2xs">
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-tight">SLA Compliance</div>
-          <div className="text-xl font-mono font-medium text-zinc-900 mt-1">{slaComplianceRate}%</div>
-          <div className="text-[11px] text-zinc-500 mt-0.5">{breachedCount} breaches recorded</div>
-        </div>
-
-        <div className="bg-white p-3 rounded-lg border border-zinc-200 shadow-2xs">
-          <div className="text-[10px] font-medium text-zinc-500 uppercase tracking-tight">Converted Revenue</div>
-          <div className="text-xl font-mono font-medium text-emerald-700 mt-1">
-            ${totalWonValue.toLocaleString()}
-          </div>
-          <div className="text-[11px] text-zinc-500 mt-0.5">Gross confirmed packages</div>
-        </div>
-      </div>
-
-      {/* Leaderboard Table */}
-      <div className="bg-white rounded-lg border border-zinc-200 shadow-2xs overflow-hidden">
-        <div className="px-3 py-2 border-b border-zinc-200/80 bg-zinc-50/50 flex items-center justify-between">
-          <span className="text-[11px] font-medium uppercase tracking-tight text-zinc-600">
-            Consultant Productivity Leaderboard
-          </span>
-          <span className="text-[11px] font-mono text-zinc-400">rank by won deals</span>
-        </div>
-
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="bg-zinc-50/70 border-b border-zinc-200 text-zinc-500 uppercase tracking-tight text-[10px] font-medium">
-              <th className="py-2 px-3 font-mono">Rank</th>
-              <th className="py-2 px-3">Consultant</th>
-              <th className="py-2 px-3">Specialty</th>
-              <th className="py-2 px-3 text-center">Active Leads</th>
-              <th className="py-2 px-3 text-center">Won</th>
-              <th className="py-2 px-3 text-center">Win Rate</th>
-              <th className="py-2 px-3 text-center">Avg FRT</th>
-              <th className="py-2 px-3 text-center">Breaches</th>
-              <th className="py-2 px-3 text-right">Revenue</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100 font-sans">
-            {leaderboard.map((agent, index) => (
-              <tr key={agent.id} className="hover:bg-zinc-50/80 transition">
-                <td className="py-2 px-3 font-mono text-[11px] text-zinc-400">
-                  #{index + 1}
-                </td>
-                <td className="py-2 px-3 font-medium text-zinc-900">
-                  <div className="flex items-center gap-2">
-                    <img src={agent.avatar_url} alt={agent.full_name} className="w-4 h-4 rounded-full object-cover" />
-                    <span>{agent.full_name}</span>
+            <div className="divide-y divide-line md:hidden">
+              {leaderboard.map((agent, index) => (
+                <article key={agent.id} className="p-4">
+                  <div className="flex items-center gap-3"><span className="font-mono text-[10px] text-zinc-400">#{index + 1}</span><span className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600">{initials(agent.full_name)}</span><div><div className="text-sm font-semibold text-zinc-900">{agent.full_name}</div><div className="mt-0.5 text-[11px] text-zinc-500">{agent.activeCount} active · {agent.wonCount} won</div></div></div>
+                  <div className="mt-3 grid grid-cols-3 gap-3 border-t border-line pt-3">
+                    <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Win rate</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{agent.winRate}%</div></div>
+                    <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Avg reply</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{agent.averageResponse == null ? '—' : `${agent.averageResponse}m`}</div></div>
+                    <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Won value</div><div className="mt-1 truncate font-mono text-xs font-semibold text-zinc-800">{formatCurrency(agent.wonValue)}</div></div>
                   </div>
-                </td>
-                <td className="py-2 px-3 text-zinc-500 text-[11px]">
-                  {agent.destination_tags.slice(0, 2).join(', ')}
-                </td>
-                <td className="py-2 px-3 text-center font-mono text-[11px] text-zinc-700">
-                  {agent.totalAssigned}/{agent.max_capacity}
-                </td>
-                <td className="py-2 px-3 text-center font-mono text-[11px] font-medium text-emerald-700">
-                  {agent.wonCount}
-                </td>
-                <td className="py-2 px-3 text-center font-mono text-[11px] text-zinc-800">
-                  {agent.winRate}%
-                </td>
-                <td className="py-2 px-3 text-center font-mono text-[11px] text-zinc-700">
-                  {agent.avgFrtMinutes}m
-                </td>
-                <td className="py-2 px-3 text-center font-mono text-[11px]">
-                  {agent.breaches > 0 ? (
-                    <span className="text-red-700 font-medium">{agent.breaches}</span>
-                  ) : (
-                    <span className="text-zinc-300">0</span>
-                  )}
-                </td>
-                <td className="py-2 px-3 text-right font-mono text-[11px] font-medium text-zinc-900">
-                  ${agent.revenue.toLocaleString()}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </article>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
     </div>
   );
 }
