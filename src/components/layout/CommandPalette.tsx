@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { exportToCsv } from '@/lib/export-csv';
@@ -20,7 +20,7 @@ import {
   X,
   Download,
   Database,
-  RotateCcw,
+  LoaderCircle,
 } from 'lucide-react';
 
 interface CommandPaletteProps {
@@ -30,6 +30,14 @@ interface CommandPaletteProps {
   onOpenCsv?: () => void;
 }
 
+type SearchResult = {
+  kind: 'lead' | 'profile';
+  id: string;
+  title: string;
+  subtitle: string;
+  meta: Record<string, unknown>;
+};
+
 export default function CommandPalette({
   isOpen,
   onClose,
@@ -37,22 +45,21 @@ export default function CommandPalette({
   onOpenCsv,
 }: CommandPaletteProps) {
   const router = useRouter();
-  const { allLeads, allProfiles, exportCrmBackup, resetToFactoryDefaults, currentUser } = useApp();
+  const { allLeads, exportCrmBackup, currentUser } = useApp();
   const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const canManageStorage = currentUser.role === 'admin';
   const isAgent = currentUser.role === 'agent';
 
-  // Global shortcut listener: ⌘K or Ctrl+K
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        if (isOpen) {
-          onClose();
-        }
-      } else if (e.key === 'Escape' && isOpen) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (isOpen) onClose();
+      } else if (event.key === 'Escape' && isOpen) {
         onClose();
       }
     };
@@ -61,61 +68,68 @@ export default function CommandPalette({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Focus input when modal opens
   useEffect(() => {
     if (isOpen) {
       setQuery('');
+      setSearchResults([]);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!isOpen || trimmed.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('Search request failed');
+        const payload = (await response.json()) as { results?: SearchResult[] };
+        setSearchResults(payload.results || []);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error('Command palette search failed:', error);
+          setSearchResults([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false);
+      }
+    }, 180);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [isOpen, query]);
+
   if (!isOpen) return null;
 
   const q = query.trim().toLowerCase();
-
-  // Navigation Items
   const navItems = [
+    { label: 'Action Center', hint: 'Operational exceptions that need attention', path: '/dashboard', icon: ArrowRight },
     { label: 'Leads Pipeline', hint: 'View active pipeline & kanban', path: '/leads', icon: ArrowRight },
     { label: 'Follow-Up Agenda', hint: 'Today & overdue client callbacks', path: '/follow-ups', icon: CalendarClock },
-    { label: 'Executive Analytics', hint: 'Conversion rates & Pareto lost debrief', path: '/analytics', icon: TrendingUp },
+    { label: 'Executive Analytics', hint: 'Conversion rates & performance', path: '/analytics', icon: TrendingUp },
     { label: 'Incentives & Commissions', hint: 'Leaderboard, tiers, and payouts', path: '/incentives', icon: Award },
     { label: 'Consultants & Roster', hint: 'Capacity, workloads, and dossiers', path: '/team', icon: Users },
     { label: 'My Profile & Workload', hint: 'Personal tags & auto-assignment settings', path: '/profile', icon: User },
-    ...(!isAgent ? [
-      { label: 'SLA & Webhook Settings', hint: 'FRT thresholds and routing engine', path: '/settings', icon: Settings },
-    ] : []),
-    { label: 'WhatsApp Proposal Templates', hint: 'Pre-written templates for 1-click wa.me', path: '/templates', icon: MessageSquareQuote },
-    ...(!isAgent ? [
-      { label: 'Data & Backup Center', hint: 'Export JSON snapshots, restore, or reset demo data', path: '/settings?tab=storage', icon: Database },
-    ] : []),
+    ...(!isAgent ? [{ label: 'SLA & Webhook Settings', hint: 'FRT thresholds and routing engine', path: '/settings', icon: Settings }] : []),
+    { label: 'WhatsApp Proposal Templates', hint: 'Reusable client-message templates', path: '/templates', icon: MessageSquareQuote },
+    ...(!isAgent ? [{ label: 'Data Export Center', hint: 'Export controlled CRM snapshots', path: '/settings?tab=storage', icon: Database }] : []),
   ].filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
 
-  // Matching Leads (max 6)
-  const matchingLeads = allLeads
-    .filter((l) => {
-      if (!q) return false;
-      return (
-        l.customer_name.toLowerCase().includes(q) ||
-        l.lead_code.toLowerCase().includes(q) ||
-        l.destination.toLowerCase().includes(q) ||
-        l.customer_phone.includes(q)
-      );
-    })
-    .slice(0, 6);
+  const matchingLeads = searchResults.filter((result) => result.kind === 'lead').slice(0, 6);
+  const matchingAgents = searchResults.filter((result) => result.kind === 'profile').slice(0, 4);
 
-  // Matching Team Members (max 4)
-  const matchingAgents = allProfiles
-    .filter((p) => {
-      if (!q) return false;
-      return (
-        p.full_name.toLowerCase().includes(q) ||
-        p.email.toLowerCase().includes(q) ||
-        p.destination_tags.some((t) => t.toLowerCase().includes(q))
-      );
-    })
-    .slice(0, 4);
-
-  // Quick Action Items
   const actionItems = [
     {
       label: 'Create New Lead',
@@ -136,75 +150,49 @@ export default function CommandPalette({
       icon: FileSpreadsheet,
     },
     {
-      label: 'Export Pipeline Leads (CSV)',
-      hint: 'Download all leads as CSV spreadsheet',
+      label: 'Export Visible Pipeline (CSV)',
+      hint: 'Download your RLS-visible lead set',
       action: () => {
         onClose();
         exportToCsv(
           `wanderlust_leads_${new Date().toISOString().slice(0, 10)}`,
           allLeads,
           [
-            { header: 'Lead Code', accessor: (l) => l.lead_code },
-            { header: 'Traveler Name', accessor: (l) => l.customer_name },
-            { header: 'Phone', accessor: (l) => l.customer_phone },
-            { header: 'Email', accessor: (l) => l.customer_email || '' },
-            { header: 'Destination', accessor: (l) => l.destination },
-            { header: 'Stage', accessor: (l) => l.stage },
-            { header: 'Budget Range', accessor: (l) => l.budget_range || '' },
-            { header: 'Package Sale Price', accessor: (l) => l.package_sale_price || 0 },
-            { header: 'Vendor Net Cost', accessor: (l) => l.vendor_net_cost || 0 },
-            { header: 'Gross Profit', accessor: (l) => l.gross_profit || 0 },
-            { header: 'Source', accessor: (l) => l.source },
-            { header: 'Created At', accessor: (l) => l.created_at },
+            { header: 'Lead Code', accessor: (lead) => lead.lead_code },
+            { header: 'Traveler Name', accessor: (lead) => lead.customer_name },
+            { header: 'Phone', accessor: (lead) => lead.customer_phone },
+            { header: 'Email', accessor: (lead) => lead.customer_email || '' },
+            { header: 'Destination', accessor: (lead) => lead.destination },
+            { header: 'Stage', accessor: (lead) => lead.stage },
+            { header: 'Budget Range', accessor: (lead) => lead.budget_range || '' },
+            { header: 'Package Sale Price', accessor: (lead) => lead.package_sale_price || 0 },
+            { header: 'Vendor Net Cost', accessor: (lead) => lead.vendor_net_cost || 0 },
+            { header: 'Gross Profit', accessor: (lead) => lead.gross_profit || 0 },
+            { header: 'Source', accessor: (lead) => lead.source },
+            { header: 'Created At', accessor: (lead) => lead.created_at },
           ]
         );
       },
       icon: Download,
     },
-    // Admin-only: CRM Backup & Reset
-    ...(canManageStorage ? [
-      {
-        label: 'Download Full CRM Backup (JSON)',
-        hint: 'Export complete client data snapshot',
-        action: () => {
-          onClose();
-          exportCrmBackup();
-        },
-        icon: Database,
-      },
-      {
-        label: 'Reset CRM to Factory Demo Data',
-        hint: 'Revert all leads and settings to seed dataset',
-        action: () => {
-          onClose();
-          if (
-            typeof window !== 'undefined' &&
-            window.confirm('Are you sure you want to reset all CRM data to factory defaults?')
-          ) {
-            resetToFactoryDefaults();
-          }
-        },
-        icon: RotateCcw,
-      },
-    ] : []),
-  ].filter((item) => !q || item.label.toLowerCase().includes(q) || (item.hint && item.hint.toLowerCase().includes(q)));
+    ...(canManageStorage
+      ? [{
+          label: 'Download CRM Snapshot (JSON)',
+          hint: 'Admin-only export; restore remains server-controlled',
+          action: () => {
+            onClose();
+            exportCrmBackup();
+          },
+          icon: Database,
+        }]
+      : []),
+  ].filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
 
-  const totalItemsCount =
-    navItems.length + matchingLeads.length + matchingAgents.length + actionItems.length;
+  const totalItemsCount = navItems.length + matchingLeads.length + matchingAgents.length + actionItems.length;
 
-  const handleSelectNav = (path: string) => {
+  const navigate = (path: string) => {
     onClose();
     router.push(path);
-  };
-
-  const handleSelectLead = (id: string) => {
-    onClose();
-    router.push(`/leads/${id}`);
-  };
-
-  const handleSelectAgent = (id: string) => {
-    onClose();
-    router.push(`/team/${id}`);
   };
 
   return (
@@ -212,177 +200,127 @@ export default function CommandPalette({
       role="dialog"
       aria-modal="true"
       aria-label="Search pipeline and actions"
-      className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-zinc-950/40 backdrop-blur-2xs p-4 animate-in fade-in duration-100"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-950/40 p-4 pt-20 backdrop-blur-2xs animate-in fade-in duration-100"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl bg-white rounded-lg border border-zinc-200 shadow-2xl overflow-hidden flex flex-col max-h-[70vh] animate-in zoom-in-95 duration-100"
-        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl animate-in zoom-in-95 duration-100"
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* Search Input Bar */}
-        <div className="h-11 px-3.5 border-b border-zinc-200 flex items-center gap-2.5 bg-zinc-50/50">
-          <Search className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+        <div className="flex h-11 items-center gap-2.5 border-b border-zinc-200 bg-zinc-50/50 px-3.5">
+          {isSearching ? <LoaderCircle className="h-4 w-4 animate-spin text-zinc-400" /> : <Search className="h-4 w-4 text-zinc-400" />}
           <input
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(event) => setQuery(event.target.value)}
             placeholder="Search leads, consultants, pages, or actions..."
             aria-label="Search leads, consultants, pages, or actions"
             className="flex-1 bg-transparent text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none"
           />
           {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              aria-label="Clear search query"
-              className="text-zinc-400 hover:text-zinc-600 p-0.5"
-            >
-              <X className="w-3.5 h-3.5" />
+            <button type="button" onClick={() => setQuery('')} aria-label="Clear search query" className="p-0.5 text-zinc-400 hover:text-zinc-600">
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-white border border-zinc-200 rounded text-zinc-500 shadow-2xs">
-            ESC
-          </kbd>
+          <kbd className="rounded border border-zinc-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 shadow-2xs">ESC</kbd>
         </div>
 
-        {/* Results List */}
-        <div className="p-2 overflow-y-auto space-y-3 text-xs">
-          {/* Quick Actions (if query matches or empty) */}
+        <div className="space-y-3 overflow-y-auto p-2 text-xs">
           {actionItems.length > 0 && (
-            <div>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">
-                Actions
-              </div>
+            <section>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">Actions</div>
               <div className="space-y-0.5">
-                {actionItems.map((act) => (
-                  <button
-                    key={act.label}
-                    onClick={act.action}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-zinc-100 flex items-center justify-between text-zinc-800 transition group"
-                  >
+                {actionItems.map((item) => (
+                  <button key={item.label} onClick={item.action} className="group flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-zinc-800 transition hover:bg-zinc-100">
                     <div className="flex items-center gap-2">
-                      <act.icon className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-900" />
-                      <span className="font-medium text-zinc-900">{act.label}</span>
+                      <item.icon className="h-3.5 w-3.5 text-zinc-500 group-hover:text-zinc-900" />
+                      <span className="font-medium text-zinc-900">{item.label}</span>
                     </div>
-                    <span className="text-[11px] text-zinc-400">{act.hint}</span>
+                    <span className="text-[11px] text-zinc-400">{item.hint}</span>
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Matching Leads */}
           {matchingLeads.length > 0 && (
-            <div>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400 flex items-center justify-between">
+            <section>
+              <div className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">
                 <span>Matching Leads</span>
-                <span className="font-mono text-[10px] text-zinc-400">{matchingLeads.length} found</span>
+                <span className="font-mono">{matchingLeads.length} found</span>
               </div>
               <div className="space-y-0.5">
                 {matchingLeads.map((lead) => (
-                  <button
-                    key={lead.id}
-                    onClick={() => handleSelectLead(lead.id)}
-                    className="w-full text-left px-2.5 py-2 rounded-md hover:bg-zinc-100 flex items-center justify-between transition group"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono text-[11px] text-zinc-400 group-hover:text-zinc-600">
-                        {lead.lead_code}
-                      </span>
-                      <span className="font-medium text-zinc-900 truncate">
-                        {lead.customer_name}
-                      </span>
-                      <span className="text-[11px] text-zinc-500 flex items-center gap-0.5 font-mono">
-                        <MapPin className="w-2.5 h-2.5 text-zinc-400" /> {lead.destination}
+                  <button key={lead.id} onClick={() => navigate(`/leads/${lead.id}`)} className="group flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left transition hover:bg-zinc-100">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium text-zinc-900">{lead.title}</span>
+                        {lead.meta.possible_duplicate === true && <span className="rounded bg-amber-50 px-1 py-0.5 text-[9px] font-medium text-amber-700">Possible duplicate</span>}
+                      </div>
+                      <span className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-zinc-500">
+                        <MapPin className="h-2.5 w-2.5" /> {lead.subtitle}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="font-mono text-[10px] uppercase px-1.5 py-0.2 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
-                        {lead.stage.replace('_', ' ')}
-                      </span>
-                      <span className="font-mono text-[11px] font-medium text-zinc-800">
-                        {lead.budget_range || '$2k'}
-                      </span>
-                    </div>
+                    <span className="ml-3 flex-none rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] uppercase text-zinc-600">
+                      {String(lead.meta.stage || 'lead').replace('_', ' ')}
+                    </span>
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Matching Consultants */}
           {matchingAgents.length > 0 && (
-            <div>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">
-                Consultants
-              </div>
+            <section>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">Consultants</div>
               <div className="space-y-0.5">
                 {matchingAgents.map((agent) => (
-                  <button
-                    key={agent.id}
-                    onClick={() => handleSelectAgent(agent.id)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-zinc-100 flex items-center justify-between transition group"
-                  >
-                    <div className="flex items-center gap-2">
-                      <img
-                        src={agent.avatar_url}
-                        alt={agent.full_name}
-                        className="w-5 h-5 rounded-full object-cover border border-zinc-200"
-                      />
-                      <span className="font-medium text-zinc-900">{agent.full_name}</span>
-                      <span className="text-[10px] font-mono text-zinc-400">
-                        ({agent.destination_tags.slice(0, 2).join(', ')})
-                      </span>
+                  <button key={agent.id} onClick={() => navigate(`/team/${agent.id}`)} className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left transition hover:bg-zinc-100">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <User className="h-3.5 w-3.5 flex-none text-zinc-400" />
+                      <div className="min-w-0">
+                        <span className="block truncate font-medium text-zinc-900">{agent.title}</span>
+                        <span className="block truncate text-[10px] text-zinc-400">{agent.subtitle}</span>
+                      </div>
                     </div>
-                    <span className="font-mono text-[10px] text-zinc-500">
-                      {agent.current_load}/{agent.max_capacity} load
+                    <span className="ml-3 flex-none font-mono text-[10px] text-zinc-500">
+                      {Number(agent.meta.current_load || 0)}/{Number(agent.meta.max_capacity || 0)} load
                     </span>
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Navigation Pages */}
           {navItems.length > 0 && (
-            <div>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">
-                Navigation
-              </div>
+            <section>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-tight text-zinc-400">Navigation</div>
               <div className="space-y-0.5">
                 {navItems.map((item) => (
-                  <button
-                    key={item.path}
-                    onClick={() => handleSelectNav(item.path)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-zinc-100 flex items-center justify-between text-zinc-800 transition group"
-                  >
+                  <button key={item.path} onClick={() => navigate(item.path)} className="group flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-zinc-800 transition hover:bg-zinc-100">
                     <div className="flex items-center gap-2">
-                      <item.icon className="w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-800" />
+                      <item.icon className="h-3.5 w-3.5 text-zinc-400 group-hover:text-zinc-800" />
                       <span className="font-medium text-zinc-900">{item.label}</span>
                     </div>
-                    <span className="text-[11px] text-zinc-400 group-hover:text-zinc-500">
-                      {item.hint}
-                    </span>
+                    <span className="text-[11px] text-zinc-400">{item.hint}</span>
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           )}
 
-          {totalItemsCount === 0 && (
-            <div className="py-8 text-center text-xs text-zinc-400 font-mono">
-              No results matching "{query}"
-            </div>
+          {q.length >= 2 && !isSearching && matchingLeads.length === 0 && matchingAgents.length === 0 && actionItems.length === 0 && navItems.length === 0 && (
+            <div className="py-8 text-center font-mono text-xs text-zinc-400">No results matching “{query}”</div>
+          )}
+          {totalItemsCount === 0 && q.length < 2 && (
+            <div className="py-8 text-center text-xs text-zinc-400">Type at least 2 characters to search CRM records.</div>
           )}
         </div>
 
-        {/* Command Palette Footer */}
-        <div className="h-8 px-3 border-t border-zinc-100 bg-zinc-50 flex items-center justify-between text-[11px] text-zinc-400 font-mono">
-          <div className="flex items-center gap-3">
-            <span>Click or press ESC to close</span>
-          </div>
-          <span>Travel LMS Command Palette</span>
+        <div className="flex h-8 items-center justify-between border-t border-zinc-100 bg-zinc-50 px-3 font-mono text-[11px] text-zinc-400">
+          <span>CRM records are searched server-side with your access rules.</span>
+          <span>ESC to close</span>
         </div>
       </div>
     </div>
