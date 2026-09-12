@@ -1,18 +1,17 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDialog } from '@/lib/useDialog';
 import { useApp } from '@/lib/store';
 import {
-  X,
-  UserCheck,
-  MapPin,
+  AlertCircle,
   Calendar,
   DollarSign,
-  Users,
-  AlertCircle,
   Loader2,
+  MapPin,
   Sparkles,
+  UserCheck,
+  X,
 } from 'lucide-react';
 
 export type ConversationForConversion = {
@@ -34,6 +33,15 @@ interface ConvertToLeadDrawerProps {
   initialPhone?: string | null;
 }
 
+function locationSourceLabel(source: unknown, inferredFromText: unknown) {
+  if (source === 'manual') return 'Manual';
+  if (source === 'lead_form') return 'From form';
+  if (source === 'existing_lead') return 'From lead';
+  if (source === 'meta_profile') return 'Meta profile';
+  if (source === 'chat_heuristic' || inferredFromText === true) return 'From chat';
+  return 'Detected';
+}
+
 export default function ConvertToLeadDrawer({
   isOpen,
   onClose,
@@ -49,7 +57,7 @@ export default function ConvertToLeadDrawer({
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerCity, setCustomerCity] = useState('');
   const [customerCountry, setCustomerCountry] = useState('');
-  const [detectedLocationLabel, setDetectedLocationLabel] = useState<string | null>(null);
+  const [locationSource, setLocationSource] = useState<string | null>(null);
   const [destination, setDestination] = useState('');
   const [travelDates, setTravelDates] = useState('');
   const [budgetRange, setBudgetRange] = useState('$2,000 - $3,500');
@@ -61,41 +69,42 @@ export default function ConvertToLeadDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize form state when conversation changes
   useEffect(() => {
-    if (conversation && isOpen) {
-      setCustomerName(conversation.customer_name || 'Traveler');
-      const fallbackPhone = conversation.customer_phone?.startsWith(`${conversation.provider}:`) ? '' : (conversation.customer_phone || '');
-      setCustomerPhone(initialPhone || fallbackPhone);
-      setCustomerEmail(conversation.customer_email || '');
+    if (!conversation || !isOpen) return;
 
-      const profile = (conversation.metadata as Record<string, unknown> | undefined)?.customer_profile as Record<string, unknown> | undefined;
-      const detectedCity = typeof profile?.city === 'string' ? profile.city : '';
-      const detectedCountry = typeof profile?.country === 'string' ? profile.country : '';
-      setCustomerCity(detectedCity);
-      setCustomerCountry(detectedCountry);
-      if (detectedCity || detectedCountry) {
-        setDetectedLocationLabel([detectedCity, detectedCountry].filter(Boolean).join(', '));
-      } else {
-        setDetectedLocationLabel(null);
-      }
+    setCustomerName(conversation.customer_name || 'Traveler');
+    const fallbackPhone = conversation.customer_phone?.startsWith(`${conversation.provider}:`)
+      ? ''
+      : (conversation.customer_phone || '');
+    setCustomerPhone(initialPhone || fallbackPhone);
+    setCustomerEmail(conversation.customer_email || '');
 
-      setDestination('');
-      setTravelDates('');
-      setBudgetRange('$2,000 - $3,500');
-      setPaxAdults(2);
-      setPaxChildren(0);
-      setPriority('normal');
-      setAssignedTo(conversation.assigned_to || (currentUser.role === 'agent' ? currentUser.id : ''));
-      setNotes(conversation.last_message_preview ? `Inquiry snippet: "${conversation.last_message_preview}"` : '');
-      setError(null);
-    }
-  }, [conversation, isOpen, currentUser, initialPhone]);
+    const profile = (conversation.metadata as Record<string, unknown> | undefined)?.customer_profile as Record<string, unknown> | undefined;
+    const detectedCity = typeof profile?.city === 'string' ? profile.city : '';
+    const detectedCountry = typeof profile?.country === 'string' ? profile.country : '';
+    setCustomerCity(detectedCity);
+    setCustomerCountry(detectedCountry);
+    setLocationSource(
+      detectedCity || detectedCountry
+        ? locationSourceLabel(profile?.locationSource, profile?.inferredFromText)
+        : null
+    );
+
+    setDestination('');
+    setTravelDates('');
+    setBudgetRange('$2,000 - $3,500');
+    setPaxAdults(2);
+    setPaxChildren(0);
+    setPriority('normal');
+    setAssignedTo(conversation.assigned_to || (currentUser.role === 'agent' ? currentUser.id : ''));
+    setNotes(conversation.last_message_preview ? `Inquiry snippet: "${conversation.last_message_preview}"` : '');
+    setError(null);
+  }, [conversation, isOpen, currentUser.id, currentUser.role, initialPhone]);
 
   if (!isOpen || !conversation) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError(null);
 
     if (!destination.trim()) {
@@ -125,10 +134,9 @@ export default function ConvertToLeadDrawer({
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to convert conversation to lead.');
-      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to convert conversation to lead.');
+      if (!data.lead?.id) throw new Error('Lead conversion returned an incomplete response.');
 
       showToast(`Lead created for ${data.lead.customer_name} (${data.lead.destination})!`, 'success');
       onConverted(data.lead);
@@ -140,59 +148,70 @@ export default function ConvertToLeadDrawer({
     }
   };
 
-  const activeAgents = allProfiles.filter((p) => p.is_active && (p.role === 'agent' || p.role === 'manager' || p.role === 'admin'));
+  const activeAgents = allProfiles.filter((profile) => {
+    if (!profile.is_active) return false;
+    if (currentUser.role === 'agent') return profile.id === currentUser.id;
+    return profile.role === 'agent' || profile.role === 'manager' || profile.role === 'admin';
+  });
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="convert-drawer-title">
-      {/* Backdrop */}
+    <div
+      className="fixed inset-0 z-50 overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="convert-drawer-title"
+      aria-describedby="convert-drawer-description"
+      aria-busy={isSubmitting}
+      tabIndex={-1}
+    >
       <div
         className="fixed inset-0 bg-zinc-950/40 backdrop-blur-[2px] transition-opacity animate-in fade-in"
-        onClick={onClose}
+        onClick={isSubmitting ? undefined : onClose}
+        aria-hidden="true"
       />
 
-      <div className="fixed inset-y-0 right-0 flex max-w-full pl-10">
-        <div className="w-screen max-w-lg border-l border-zinc-200 bg-white shadow-xl transition-all animate-in slide-in-from-right duration-200">
+      <div className="fixed inset-y-0 right-0 flex w-full max-w-full pl-0 sm:pl-10">
+        <div className="w-full max-w-lg border-l border-zinc-200 bg-white shadow-xl transition-all animate-in slide-in-from-right duration-200">
           <form onSubmit={handleSubmit} className="flex h-full flex-col">
-            {/* Drawer Header */}
-            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-4 sm:px-6">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 text-zinc-800">
                   <UserCheck className="h-4 w-4" />
                 </span>
-                <div>
+                <div className="min-w-0">
                   <h2 id="convert-drawer-title" className="text-sm font-semibold text-zinc-950">
                     Convert to Sales Lead
                   </h2>
-                  <p className="text-xs text-zinc-500">
-                    Turn this {conversation.provider} chat into an active CRM lead with attached history.
+                  <p id="convert-drawer-description" className="truncate text-xs text-zinc-500">
+                    Create a CRM lead and attach this {conversation.provider} chat history.
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950"
-                aria-label="Close drawer"
+                disabled={isSubmitting}
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950 disabled:opacity-50"
+                aria-label="Close conversion drawer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* Error Banner */}
             {error && (
-              <div className="mx-6 mt-4 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                <AlertCircle className="h-4 w-4 shrink-0" />
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="mx-4 mt-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-700 sm:mx-6"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
-            {/* Drawer Body Form */}
-            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5 text-xs">
-              {/* Customer Info Section */}
+            <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5 text-xs sm:px-6">
               <div className="space-y-3">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                  Traveler Contact
-                </div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Traveler Contact</div>
                 <div>
                   <label htmlFor="drawer-customer-name" className="mb-1 block font-semibold text-zinc-800">
                     Full Name <span className="text-red-500">*</span>
@@ -201,6 +220,7 @@ export default function ConvertToLeadDrawer({
                     id="drawer-customer-name"
                     type="text"
                     required
+                    maxLength={120}
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
                     className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
@@ -208,29 +228,26 @@ export default function ConvertToLeadDrawer({
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label htmlFor="drawer-customer-phone" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
                       <span>Phone Number</span>
                       {initialPhone && (
-                        <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          From chat
-                        </span>
+                        <span className="rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700">From chat</span>
                       )}
                     </label>
                     <input
                       id="drawer-customer-phone"
-                      type="text"
+                      type="tel"
+                      maxLength={60}
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
-                      className={`h-9 w-full font-mono rounded-md border ${initialPhone ? 'border-emerald-400 bg-emerald-50/20' : 'border-zinc-200 bg-white'} px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950`}
+                      className={`h-9 w-full rounded-md border px-3 font-mono text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950 ${initialPhone ? 'border-zinc-300 bg-zinc-50' : 'border-zinc-200 bg-white'}`}
                       placeholder="+1 555 0192"
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-customer-email" className="mb-1 block font-semibold text-zinc-800">
-                      Email Address
-                    </label>
+                    <label htmlFor="drawer-customer-email" className="mb-1 block font-semibold text-zinc-800">Email Address</label>
                     <input
                       id="drawer-customer-email"
                       type="email"
@@ -242,19 +259,16 @@ export default function ConvertToLeadDrawer({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="drawer-customer-city" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
+                    <label htmlFor="drawer-customer-city" className="mb-1 flex items-center justify-between gap-2 font-semibold text-zinc-800">
                       <span>City / Town</span>
-                      {detectedLocationLabel && customerCity && (
-                        <span className="rounded bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700">
-                          Detected
-                        </span>
-                      )}
+                      {locationSource && customerCity && <span className="rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">{locationSource}</span>}
                     </label>
                     <input
                       id="drawer-customer-city"
                       type="text"
+                      maxLength={120}
                       value={customerCity}
                       onChange={(e) => setCustomerCity(e.target.value)}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
@@ -262,32 +276,25 @@ export default function ConvertToLeadDrawer({
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-customer-country" className="mb-1 flex items-center justify-between font-semibold text-zinc-800">
+                    <label htmlFor="drawer-customer-country" className="mb-1 flex items-center justify-between gap-2 font-semibold text-zinc-800">
                       <span>Country</span>
-                      {detectedLocationLabel && customerCountry && (
-                        <span className="rounded bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700">
-                          Detected
-                        </span>
-                      )}
+                      {locationSource && customerCountry && <span className="rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">{locationSource}</span>}
                     </label>
                     <input
                       id="drawer-customer-country"
                       type="text"
+                      maxLength={120}
                       value={customerCountry}
                       onChange={(e) => setCustomerCountry(e.target.value)}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
-                      placeholder="e.g. Nepal, USA, India"
+                      placeholder="e.g. Nepal, Australia"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Trip Requirements Section */}
               <div className="space-y-3 pt-2">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                  Trip Details
-                </div>
-
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Trip Details</div>
                 <div>
                   <label htmlFor="drawer-destination" className="mb-1 block font-semibold text-zinc-800">
                     Destination <span className="text-red-500">*</span>
@@ -298,24 +305,24 @@ export default function ConvertToLeadDrawer({
                       id="drawer-destination"
                       type="text"
                       required
+                      maxLength={120}
                       value={destination}
                       onChange={(e) => setDestination(e.target.value)}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
-                      placeholder="e.g. Japan Cherry Blossom, Maldives, Swiss Alps"
+                      placeholder="e.g. Japan Cherry Blossom"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <label htmlFor="drawer-travel-dates" className="mb-1 block font-semibold text-zinc-800">
-                      Travel Dates
-                    </label>
+                    <label htmlFor="drawer-travel-dates" className="mb-1 block font-semibold text-zinc-800">Travel Dates</label>
                     <div className="relative">
                       <Calendar className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                       <input
                         id="drawer-travel-dates"
                         type="text"
+                        maxLength={120}
                         value={travelDates}
                         onChange={(e) => setTravelDates(e.target.value)}
                         className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
@@ -324,14 +331,13 @@ export default function ConvertToLeadDrawer({
                     </div>
                   </div>
                   <div>
-                    <label htmlFor="drawer-budget" className="mb-1 block font-semibold text-zinc-800">
-                      Budget Range
-                    </label>
+                    <label htmlFor="drawer-budget" className="mb-1 block font-semibold text-zinc-800">Budget Range</label>
                     <div className="relative">
                       <DollarSign className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
                       <input
                         id="drawer-budget"
                         type="text"
+                        maxLength={120}
                         value={budgetRange}
                         onChange={(e) => setBudgetRange(e.target.value)}
                         className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
@@ -341,43 +347,37 @@ export default function ConvertToLeadDrawer({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   <div>
-                    <label htmlFor="drawer-adults" className="mb-1 block font-semibold text-zinc-800">
-                      Adults
-                    </label>
+                    <label htmlFor="drawer-adults" className="mb-1 block font-semibold text-zinc-800">Adults</label>
                     <input
                       id="drawer-adults"
                       type="number"
                       min={1}
-                      max={50}
+                      max={100}
                       value={paxAdults}
                       onChange={(e) => setPaxAdults(Number(e.target.value))}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     />
                   </div>
                   <div>
-                    <label htmlFor="drawer-children" className="mb-1 block font-semibold text-zinc-800">
-                      Children
-                    </label>
+                    <label htmlFor="drawer-children" className="mb-1 block font-semibold text-zinc-800">Children</label>
                     <input
                       id="drawer-children"
                       type="number"
                       min={0}
-                      max={30}
+                      max={50}
                       value={paxChildren}
                       onChange={(e) => setPaxChildren(Number(e.target.value))}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     />
                   </div>
-                  <div>
-                    <label htmlFor="drawer-priority" className="mb-1 block font-semibold text-zinc-800">
-                      Priority
-                    </label>
+                  <div className="col-span-2 sm:col-span-1">
+                    <label htmlFor="drawer-priority" className="mb-1 block font-semibold text-zinc-800">Priority</label>
                     <select
                       id="drawer-priority"
                       value={priority}
-                      onChange={(e) => setPriority(e.target.value as any)}
+                      onChange={(e) => setPriority(e.target.value as 'low' | 'normal' | 'high' | 'urgent')}
                       className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
                     >
                       <option value="low">Low</option>
@@ -389,23 +389,18 @@ export default function ConvertToLeadDrawer({
                 </div>
               </div>
 
-              {/* Assignment & Notes Section */}
               <div className="space-y-3 pt-2">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                  Routing & Notes
-                </div>
-
+                <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">Routing & Notes</div>
                 <div>
-                  <label htmlFor="drawer-assign-to" className="mb-1 block font-semibold text-zinc-800">
-                    Assign To Travel Agent
-                  </label>
+                  <label htmlFor="drawer-assign-to" className="mb-1 block font-semibold text-zinc-800">Assign To Travel Agent</label>
                   <select
                     id="drawer-assign-to"
                     value={assignedTo}
                     onChange={(e) => setAssignedTo(e.target.value)}
-                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
+                    disabled={currentUser.role === 'agent'}
+                    className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-semibold text-zinc-950 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950 disabled:bg-zinc-50 disabled:text-zinc-600"
                   >
-                    <option value="">Unassigned (Queue / Pool)</option>
+                    {currentUser.role !== 'agent' && <option value="">Unassigned (Queue / Pool)</option>}
                     {activeAgents.map((profile) => (
                       <option key={profile.id} value={profile.id}>
                         {profile.full_name || profile.email} ({profile.role})
@@ -415,12 +410,11 @@ export default function ConvertToLeadDrawer({
                 </div>
 
                 <div>
-                  <label htmlFor="drawer-notes" className="mb-1 block font-medium text-zinc-700">
-                    Internal Lead Notes
-                  </label>
+                  <label htmlFor="drawer-notes" className="mb-1 block font-medium text-zinc-700">Internal Lead Notes</label>
                   <textarea
                     id="drawer-notes"
                     rows={3}
+                    maxLength={2000}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     className="w-full rounded-md border border-zinc-200 bg-white p-3 text-xs text-zinc-900 focus:border-zinc-950 focus:outline-none focus:ring-1 focus:ring-zinc-950"
@@ -430,18 +424,17 @@ export default function ConvertToLeadDrawer({
               </div>
             </div>
 
-            {/* Drawer Footer */}
-            <div className="flex items-center justify-between border-t border-zinc-200 bg-zinc-50 px-6 py-3.5">
+            <div className="flex flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
               <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                <Sparkles className="h-3.5 w-3.5 text-zinc-500" />
                 <span>Chat history will attach to the new lead.</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={onClose}
                   disabled={isSubmitting}
-                  className="rounded-md border border-zinc-200 bg-white px-3.5 py-2 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50"
+                  className="rounded-md border border-zinc-200 bg-white px-3.5 py-2 text-xs font-medium text-zinc-700 shadow-2xs hover:bg-zinc-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -451,7 +444,7 @@ export default function ConvertToLeadDrawer({
                   className="inline-flex items-center gap-1.5 rounded-md bg-zinc-950 px-4 py-2 text-xs font-medium text-white shadow-2xs hover:bg-zinc-800 disabled:opacity-50"
                 >
                   {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                  Create Lead
+                  {isSubmitting ? 'Creating…' : 'Create Lead'}
                 </button>
               </div>
             </div>
