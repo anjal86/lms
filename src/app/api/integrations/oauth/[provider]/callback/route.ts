@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider, type IntegrationProvider } from '@/lib/integrations/catalog';
+import { encryptIntegrationSecret, encryptSecretPayload } from '@/lib/integrations/secrets';
 
 export const runtime = 'nodejs';
 
@@ -12,6 +13,14 @@ type MetaPage = {
   name?: string;
   access_token?: string;
   instagram_business_account?: { id: string; username?: string; name?: string };
+};
+
+type WhatsAppPhone = {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  quality_rating?: string;
+  code_verification_status?: string;
 };
 
 function redirectWith(appUrl: string, key: 'connected' | 'error', value: string) {
@@ -75,30 +84,21 @@ async function saveConnection(input: {
 
   let connectionId: string;
   if (existing?.id) {
-    const { data, error } = await admin
-      .from('integration_connections')
-      .update(connectionPatch)
-      .eq('id', existing.id)
-      .select('id')
-      .single();
+    const { data, error } = await admin.from('integration_connections').update(connectionPatch).eq('id', existing.id).select('id').single();
     if (error) throw error;
     connectionId = data.id;
   } else {
-    const { data, error } = await admin
-      .from('integration_connections')
-      .insert(connectionPatch)
-      .select('id')
-      .single();
+    const { data, error } = await admin.from('integration_connections').insert(connectionPatch).select('id').single();
     if (error) throw error;
     connectionId = data.id;
   }
 
   const { error: secretError } = await admin.from('integration_secrets').upsert({
     connection_id: connectionId,
-    access_token: input.accessToken,
-    refresh_token: input.refreshToken || null,
+    access_token: encryptIntegrationSecret(input.accessToken),
+    refresh_token: encryptIntegrationSecret(input.refreshToken),
     token_expires_at: input.expiresAt || null,
-    secret_payload: input.secretPayload || {},
+    secret_payload: encryptSecretPayload(input.secretPayload || {}),
     updated_at: new Date().toISOString(),
   });
   if (secretError) throw secretError;
@@ -138,25 +138,43 @@ async function completeMeta(provider: IntegrationProvider, code: string, callbac
     console.warn('Meta page discovery was unavailable:', error);
   }
 
-  const subscriptions: Array<{ id: string; ok: boolean }> = [];
+  const subscriptions: Array<{ id: string; ok: boolean; fields: string }> = [];
   if (provider === 'facebook') {
     for (const page of pages) {
       if (!page.access_token) continue;
+      const fields = 'leadgen,messages,messaging_postbacks';
       try {
         const subscribeUrl = new URL(`https://graph.facebook.com/${version}/${page.id}/subscribed_apps`);
-        subscribeUrl.searchParams.set('subscribed_fields', 'leadgen');
+        subscribeUrl.searchParams.set('subscribed_fields', fields);
         subscribeUrl.searchParams.set('access_token', page.access_token);
         await fetchJson(subscribeUrl, { method: 'POST' });
-        subscriptions.push({ id: page.id, ok: true });
+        subscriptions.push({ id: page.id, ok: true, fields });
       } catch (error) {
-        console.warn(`Facebook lead subscription failed for page ${page.id}:`, error);
-        subscriptions.push({ id: page.id, ok: false });
+        console.warn(`Facebook subscription failed for page ${page.id}:`, error);
+        subscriptions.push({ id: page.id, ok: false, fields });
+      }
+    }
+  }
+
+  if (provider === 'instagram') {
+    for (const page of pages.filter((item) => item.instagram_business_account?.id)) {
+      if (!page.access_token) continue;
+      const fields = 'messages,messaging_postbacks';
+      try {
+        const subscribeUrl = new URL(`https://graph.facebook.com/${version}/${page.id}/subscribed_apps`);
+        subscribeUrl.searchParams.set('subscribed_fields', fields);
+        subscribeUrl.searchParams.set('access_token', page.access_token);
+        await fetchJson(subscribeUrl, { method: 'POST' });
+        subscriptions.push({ id: page.id, ok: true, fields });
+      } catch (error) {
+        console.warn(`Instagram message subscription failed for page ${page.id}:`, error);
+        subscriptions.push({ id: page.id, ok: false, fields });
       }
     }
   }
 
   const businesses: Array<{ id: string; name?: string }> = [];
-  const wabas: Array<{ id: string; name?: string; business_id?: string }> = [];
+  const wabas: Array<{ id: string; name?: string; business_id?: string; phone_numbers?: WhatsAppPhone[] }> = [];
   if (provider === 'whatsapp') {
     try {
       const businessUrl = new URL(`https://graph.facebook.com/${version}/me/businesses`);
@@ -173,7 +191,18 @@ async function completeMeta(provider: IntegrationProvider, code: string, callbac
           wabaUrl.searchParams.set('access_token', token.access_token);
           const wabaPayload = await fetchJson(wabaUrl) as { data?: Array<{ id: string; name?: string }> };
           for (const waba of wabaPayload.data || []) {
-            wabas.push({ ...waba, business_id: business.id });
+            let phoneNumbers: WhatsAppPhone[] = [];
+            try {
+              const phoneUrl = new URL(`https://graph.facebook.com/${version}/${waba.id}/phone_numbers`);
+              phoneUrl.searchParams.set('fields', 'id,display_phone_number,verified_name,quality_rating,code_verification_status');
+              phoneUrl.searchParams.set('access_token', token.access_token);
+              const phonePayload = await fetchJson(phoneUrl) as { data?: WhatsAppPhone[] };
+              phoneNumbers = phonePayload.data || [];
+            } catch (error) {
+              console.warn(`WhatsApp phone discovery failed for WABA ${waba.id}:`, error);
+            }
+
+            wabas.push({ ...waba, business_id: business.id, phone_numbers: phoneNumbers });
             try {
               const subscribeUrl = new URL(`https://graph.facebook.com/${version}/${waba.id}/subscribed_apps`);
               subscribeUrl.searchParams.set('access_token', token.access_token);
@@ -192,9 +221,7 @@ async function completeMeta(provider: IntegrationProvider, code: string, callbac
   }
 
   const publicPages = pages.map(({ access_token: _token, ...page }) => page);
-  const expiresAt = token.expires_in
-    ? new Date(Date.now() + token.expires_in * 1000).toISOString()
-    : null;
+  const expiresAt = token.expires_in ? new Date(Date.now() + token.expires_in * 1000).toISOString() : null;
 
   await saveConnection({
     provider,
@@ -246,12 +273,8 @@ async function completeTikTok(code: string, userId: string) {
     const advertiserUrl = new URL('https://business-api.tiktok.com/open_api/v1.3/oauth2/advertiser/get/');
     advertiserUrl.searchParams.set('app_id', appId);
     advertiserUrl.searchParams.set('secret', secret);
-    const advertiserPayload = await fetchJson(advertiserUrl, {
-      headers: { 'Access-Token': token.access_token },
-    }) as { data?: { list?: unknown[] } | unknown[] };
-    advertisers = Array.isArray(advertiserPayload.data)
-      ? advertiserPayload.data
-      : advertiserPayload.data?.list || [];
+    const advertiserPayload = await fetchJson(advertiserUrl, { headers: { 'Access-Token': token.access_token } }) as { data?: { list?: unknown[] } | unknown[] };
+    advertisers = Array.isArray(advertiserPayload.data) ? advertiserPayload.data : advertiserPayload.data?.list || [];
   } catch (error) {
     console.warn('TikTok advertiser discovery was unavailable:', error);
   }
@@ -263,12 +286,7 @@ async function completeTikTok(code: string, userId: string) {
     displayName: advertiserIds.length ? `TikTok Ads — ${advertiserIds[0]}` : 'TikTok Ads',
     externalAccountId: externalId,
     capabilities: definition.capabilities,
-    config: {
-      advertiser_ids: advertiserIds,
-      advertisers,
-      scope: token.scope || null,
-      connected_at: new Date().toISOString(),
-    },
+    config: { advertiser_ids: advertiserIds, advertisers, scope: token.scope || null, connected_at: new Date().toISOString() },
     userId,
     accessToken: token.access_token,
     refreshToken: token.refresh_token || null,
@@ -281,42 +299,29 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   const provider = rawProvider as IntegrationProvider;
   const definition = getProvider(provider);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') || new URL(request.url).origin;
-  if (!definition || !['meta_oauth', 'tiktok_oauth'].includes(definition.connectMode)) {
-    return redirectWith(appUrl, 'error', 'unsupported_provider');
-  }
+  if (!definition || !['meta_oauth', 'tiktok_oauth'].includes(definition.connectMode)) return redirectWith(appUrl, 'error', 'unsupported_provider');
 
   const url = new URL(request.url);
   const state = url.searchParams.get('state') || '';
   const code = url.searchParams.get('code') || url.searchParams.get('auth_code') || '';
   const providerError = url.searchParams.get('error') || url.searchParams.get('error_reason');
   const cookieHeader = request.headers.get('cookie') || '';
-  const cookieValue = cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith('wanderlust_integration_oauth='))
-    ?.slice('wanderlust_integration_oauth='.length);
+  const cookieValue = cookieHeader.split(';').map((part) => part.trim()).find((part) => part.startsWith('wanderlust_integration_oauth='))?.slice('wanderlust_integration_oauth='.length);
   const oauthCookie = parseCookie(cookieValue ? decodeURIComponent(cookieValue) : undefined);
 
   if (providerError) return redirectWith(appUrl, 'error', `${provider}_authorization_cancelled`);
-  if (!oauthCookie || oauthCookie.provider !== provider || oauthCookie.state !== state || !code) {
-    return redirectWith(appUrl, 'error', 'invalid_oauth_state');
-  }
+  if (!oauthCookie || oauthCookie.provider !== provider || oauthCookie.state !== state || !code) return redirectWith(appUrl, 'error', 'invalid_oauth_state');
 
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user || user.id !== oauthCookie.userId) return redirectWith(appUrl, 'error', 'session_expired');
   const { data: profile } = await supabase.from('profiles').select('role,is_active').eq('id', user.id).maybeSingle();
-  if (!profile?.is_active || !['admin', 'manager'].includes(profile.role)) {
-    return redirectWith(appUrl, 'error', 'forbidden');
-  }
+  if (!profile?.is_active || !['admin', 'manager'].includes(profile.role)) return redirectWith(appUrl, 'error', 'forbidden');
 
   const callbackUrl = `${appUrl}/api/integrations/oauth/${provider}/callback`;
   try {
-    if (definition.connectMode === 'meta_oauth') {
-      await completeMeta(provider, code, callbackUrl, user.id);
-    } else {
-      await completeTikTok(code, user.id);
-    }
+    if (definition.connectMode === 'meta_oauth') await completeMeta(provider, code, callbackUrl, user.id);
+    else await completeTikTok(code, user.id);
     const response = redirectWith(appUrl, 'connected', provider);
     response.cookies.delete('wanderlust_integration_oauth');
     return response;
