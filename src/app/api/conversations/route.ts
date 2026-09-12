@@ -16,10 +16,10 @@ export async function GET(request: Request) {
   const filter = url.searchParams.get('filter') || 'all';
   const provider = url.searchParams.get('provider') || 'all';
   const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
-  // The inbox is intentionally scroll-based today, so return a useful working set
-  // instead of silently truncating the list at 40 conversations. Keep a hard cap
-  // to protect the API until cursor pagination is added to the client.
-  const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
+  // The inbox is intentionally scroll-based today. The current production queue
+  // already exceeds 300 conversations, so return 500 by default instead of
+  // silently hiding older clients. Keep a hard cap until cursor pagination lands.
+  const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
   let query = actor.supabase
