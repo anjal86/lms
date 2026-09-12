@@ -115,10 +115,14 @@ values
   ('44444444-4444-4444-4444-444444444444','other@test.local','{"full_name":"Other Agent"}'::jsonb,now(),now())
 on conflict (id) do nothing;
 
+-- Profile protection deliberately preserves privileged fields for ordinary users.
+-- Seed test fixtures through the service role so roles/statuses match production admin behavior.
+set role service_role;
 update public.profiles set role='admin', is_active=true where id='11111111-1111-1111-1111-111111111111';
 update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
 update public.profiles set role='agent', is_active=false where id='33333333-3333-3333-3333-333333333333';
 update public.profiles set role='agent', is_active=true where id='44444444-4444-4444-4444-444444444444';
+reset role;
 
 insert into public.leads(id,customer_name,customer_phone,destination,assigned_to,stage)
 values
