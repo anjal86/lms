@@ -8,6 +8,8 @@ interface UseDialogOptions {
   lockScroll?: boolean;
 }
 
+const NOOP = () => {};
+
 /**
  * Hook for accessible modals, drawers, and popovers:
  * - Listens for the Escape key to close the dialog
@@ -19,15 +21,15 @@ export function useDialog(
   maybeLockScroll: boolean = true
 ) {
   const isOpen = typeof optionsOrIsOpen === 'boolean' ? optionsOrIsOpen : optionsOrIsOpen.isOpen;
-  const onClose = typeof optionsOrIsOpen === 'boolean' ? (maybeOnClose || (() => {})) : optionsOrIsOpen.onClose;
-  const lockScroll = typeof optionsOrIsOpen === 'boolean' ? (maybeLockScroll ?? true) : (optionsOrIsOpen.lockScroll ?? true);
+  const onClose = typeof optionsOrIsOpen === 'boolean' ? (maybeOnClose || NOOP) : optionsOrIsOpen.onClose;
+  const lockScroll = typeof optionsOrIsOpen === 'boolean' ? maybeLockScroll : (optionsOrIsOpen.lockScroll ?? true);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
         onClose();
       }
     };
