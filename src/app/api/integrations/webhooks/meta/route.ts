@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedLead } from '@/lib/integrations/ingest';
+import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 
 export const runtime = 'nodejs';
 
@@ -67,12 +68,15 @@ async function pageToken(connectionId: string, pageId: string) {
     .select('secret_payload,access_token')
     .eq('connection_id', connectionId)
     .maybeSingle();
-  const payload = (data?.secret_payload || {}) as Record<string, unknown>;
+
+  const payload = decryptSecretPayload(data?.secret_payload || {}) as Record<string, unknown>;
   const pageTokens = Array.isArray(payload.page_access_tokens)
     ? payload.page_access_tokens as Array<Record<string, unknown>>
     : [];
   const page = pageTokens.find((item) => String(item.id || '') === pageId);
-  return String(page?.access_token || data?.access_token || '');
+  const storedPageToken = typeof page?.access_token === 'string' ? page.access_token : null;
+  if (storedPageToken) return storedPageToken;
+  return decryptIntegrationSecret(data?.access_token) || '';
 }
 
 async function processLeadgen(pageId: string, value: Record<string, unknown>) {
@@ -260,7 +264,6 @@ export async function POST(request: Request) {
     }
   } catch (error) {
     console.error('Meta webhook processing failed:', error);
-    // Return 200 after signature verification so one malformed event does not create a retry storm.
     return NextResponse.json({ received: true, processed: false });
   }
 
