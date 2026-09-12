@@ -1,0 +1,270 @@
+.scope {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.scope > div {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Conversation list: compact but easier to scan. */
+.scope :global(section[aria-label='Inbox conversations']) {
+  background: #ffffff;
+}
+
+.scope :global(button[data-conversation-item='true']) {
+  min-height: 82px;
+  padding: 12px 14px !important;
+  border-left-width: 3px !important;
+}
+
+.scope :global(button[data-conversation-item='true'] p) {
+  margin-top: 4px !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  color: #52525b !important;
+}
+
+.scope :global(button[data-conversation-item='true'][aria-current='true']) {
+  border-left-color: #18181b !important;
+  background: #f4f4f5 !important;
+}
+
+.scope :global(button[data-conversation-item='true']:hover) {
+  background: #fafafa;
+}
+
+.scope :global(a[href='/inbox/phone-leads']) {
+  border-color: #d4d4d8 !important;
+  background: #ffffff !important;
+  color: #3f3f46 !important;
+}
+
+.scope :global(a[href='/inbox/phone-leads']:hover) {
+  background: #f4f4f5 !important;
+}
+
+/* Main chat canvas. */
+.scope :global(section[aria-label='Conversation thread']) {
+  background: #f7f7f8 !important;
+}
+
+.scope :global(section[aria-label='Conversation thread'] > header) {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 64px;
+  border-color: #e4e4e7 !important;
+  background: rgba(255, 255, 255, 0.97) !important;
+  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.04), 0 5px 16px rgba(24, 24, 27, 0.025);
+  backdrop-filter: blur(10px);
+}
+
+.scope :global([aria-label='Message history']) {
+  padding: 24px clamp(16px, 3vw, 42px) 30px !important;
+  background-color: #f7f7f8;
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.55), rgba(250, 250, 250, 0.2));
+  scroll-padding-bottom: 28px;
+}
+
+/* Keep messages in a readable central column even on very wide displays. */
+.scope :global([aria-label='Message history'] > article),
+.scope :global([aria-label='Message history'] > div.mx-auto) {
+  width: 100%;
+  max-width: 920px;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+.scope :global([aria-label='Message history'] article + article) {
+  margin-top: 14px !important;
+}
+
+.scope :global([aria-label='Message history'] article.items-start + article.items-start),
+.scope :global([aria-label='Message history'] article.items-end + article.items-end) {
+  margin-top: 6px !important;
+}
+
+/* Traveler bubble. */
+.scope :global([aria-label='Message history'] article.items-start > div:first-child) {
+  max-width: min(72%, 680px) !important;
+  padding: 10px 13px !important;
+  border: 1px solid #d4d4d8 !important;
+  border-radius: 14px 14px 14px 5px !important;
+  background: #ffffff !important;
+  color: #18181b !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.05) !important;
+  font-size: 14px !important;
+  font-weight: 450 !important;
+  line-height: 1.55 !important;
+}
+
+/* Agent bubble. */
+.scope :global([aria-label='Message history'] article.items-end > div:first-child) {
+  max-width: min(72%, 680px) !important;
+  padding: 10px 13px !important;
+  border-radius: 14px 14px 5px 14px !important;
+  background: #18181b !important;
+  color: #ffffff !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.12) !important;
+  font-size: 14px !important;
+  font-weight: 450 !important;
+  line-height: 1.55 !important;
+}
+
+.scope :global([aria-label='Message history'] article.items-end > div[class*='border-red']) {
+  border: 1px solid #fecdd3 !important;
+  background: #fff1f2 !important;
+  color: #18181b !important;
+}
+
+.scope :global([aria-label='Message history'] article > div:first-child p) {
+  line-height: 1.55 !important;
+}
+
+/* Time and delivery state stay visible without competing with the message. */
+.scope :global([aria-label='Message history'] article > div:nth-child(2)) {
+  margin-top: 4px !important;
+  gap: 6px !important;
+  color: #71717a !important;
+  font-size: 10.5px !important;
+}
+
+/* Internal notes read as operational context rather than chat bubbles. */
+.scope :global([aria-label='Message history'] > div.mx-auto) {
+  max-width: 720px;
+  padding: 10px 13px !important;
+  border-color: #fcd34d !important;
+  border-radius: 8px !important;
+  background: #fffbeb !important;
+  box-shadow: none !important;
+}
+
+/* Media needs enough space to be useful without taking over the transcript. */
+.scope :global([aria-label='Message history'] article img) {
+  max-height: 360px;
+}
+
+.scope :global([aria-label='Message history'] audio) {
+  min-width: min(280px, 70vw);
+}
+
+/* Composer behaves like a stable work surface. */
+.scope :global(section[aria-label='Conversation thread'] > footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  border-color: #e4e4e7 !important;
+  background: rgba(255, 255, 255, 0.985) !important;
+  box-shadow: 0 -8px 24px rgba(24, 24, 27, 0.045);
+  backdrop-filter: blur(10px);
+}
+
+.scope :global(section[aria-label='Conversation thread'] > footer textarea) {
+  min-height: 72px !important;
+  padding: 10px 12px !important;
+  border-color: #d4d4d8 !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  color: #18181b !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  box-shadow: inset 0 1px 1px rgba(24, 24, 27, 0.025);
+}
+
+.scope :global(section[aria-label='Conversation thread'] > footer textarea:focus) {
+  border-color: #71717a !important;
+  box-shadow: 0 0 0 3px rgba(161, 161, 170, 0.18) !important;
+}
+
+.scope :global(section[aria-label='Conversation thread'] > footer button[type='submit']) {
+  min-height: 34px;
+  min-width: 86px;
+}
+
+/* Turn the large phone-detection banner into a calmer action callout. */
+.scope :global(section[aria-label='Conversation thread'] > footer [class*='border-emerald-300']) {
+  border-color: #d4d4d8 !important;
+  border-left: 3px solid #16a34a !important;
+  background: #fafafa !important;
+  box-shadow: none !important;
+}
+
+/* Details inspector should stay dense and readable. */
+.scope :global(aside[aria-label='Conversation details']) {
+  background: #ffffff;
+}
+
+.scope :global([aria-label='Message history']),
+.scope :global(section[aria-label='Inbox conversations'] > div:last-child) {
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d8 transparent;
+}
+
+@media (max-width: 1023px) {
+  .scope :global([aria-label='Message history'] article.items-start > div:first-child),
+  .scope :global([aria-label='Message history'] article.items-end > div:first-child) {
+    max-width: min(80%, 640px) !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .scope > div {
+    border-radius: 0 !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+  }
+
+  .scope :global(section[aria-label='Conversation thread'] > header) {
+    min-height: 58px;
+    padding: 9px 10px !important;
+  }
+
+  .scope :global([aria-label='Message history']) {
+    padding: 16px 10px 22px !important;
+  }
+
+  .scope :global([aria-label='Message history'] article.items-start > div:first-child),
+  .scope :global([aria-label='Message history'] article.items-end > div:first-child) {
+    max-width: 90% !important;
+    padding: 9px 12px !important;
+    font-size: 14px !important;
+    line-height: 1.52 !important;
+  }
+
+  .scope :global([aria-label='Message history'] article + article) {
+    margin-top: 12px !important;
+  }
+
+  .scope :global([aria-label='Message history'] article.items-start + article.items-start),
+  .scope :global([aria-label='Message history'] article.items-end + article.items-end) {
+    margin-top: 5px !important;
+  }
+
+  .scope :global(section[aria-label='Conversation thread'] > footer) {
+    padding: 10px !important;
+  }
+
+  .scope :global(section[aria-label='Conversation thread'] > footer textarea) {
+    min-height: 66px !important;
+    font-size: 16px !important;
+  }
+
+  .scope :global(button[data-conversation-item='true']) {
+    min-height: 78px;
+    padding: 11px 12px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scope *,
+  .scope *::before,
+  .scope *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
