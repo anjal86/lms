@@ -10,6 +10,8 @@ const LOCATION_FIELDS: Array<keyof CustomerDemographics> = [
   'postalCode',
 ];
 
+const COUNTRY_DERIVED_FIELDS = new Set<keyof CustomerDemographics>(['countryCode', 'countryFlag']);
+
 const SOURCE_PRIORITY: Record<CustomerLocationSource, number> = {
   chat_heuristic: 1,
   meta_profile: 2,
@@ -53,18 +55,35 @@ export function mergeCustomerDemographics(
   const incomingSource = inferLocationSource(incoming);
   const keepExistingLocation = priority(existingSource) > priority(incomingSource);
   const locationWinner = keepExistingLocation ? existing : incoming;
+  const locationFallback = keepExistingLocation ? incoming : existing;
   const locationSource = keepExistingLocation ? existingSource : incomingSource;
+  const winnerCountry = typeof locationWinner.country === 'string' ? locationWinner.country.trim() : '';
+  const fallbackCountry = typeof locationFallback.country === 'string' ? locationFallback.country.trim() : '';
+  const countriesConflict = Boolean(winnerCountry && fallbackCountry && winnerCountry.toLowerCase() !== fallbackCountry.toLowerCase());
 
   const merged: CustomerDemographics = { ...existing, ...incoming };
   for (const key of LOCATION_FIELDS) {
+    const mergedRecord = merged as Record<string, unknown>;
+    const winnerRecord = locationWinner as Record<string, unknown>;
+    const fallbackRecord = locationFallback as Record<string, unknown>;
+
     if (Object.prototype.hasOwnProperty.call(locationWinner, key)) {
-      // TypeScript cannot express assignment across this heterogeneous mapped-key set.
-      (merged as Record<string, unknown>)[key] = (locationWinner as Record<string, unknown>)[key];
+      mergedRecord[key] = winnerRecord[key];
+      continue;
+    }
+
+    // Never borrow a country code/flag from a lower-confidence profile when its
+    // country disagrees with the winning location. That would produce combinations
+    // such as "Australia 🇳🇵" after a manual correction.
+    if (COUNTRY_DERIVED_FIELDS.has(key) && (winnerCountry || countriesConflict)) {
+      delete mergedRecord[key];
+      continue;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(locationFallback, key)) {
+      mergedRecord[key] = fallbackRecord[key];
     } else {
-      const fallback = keepExistingLocation ? incoming : existing;
-      if (Object.prototype.hasOwnProperty.call(fallback, key)) {
-        (merged as Record<string, unknown>)[key] = (fallback as Record<string, unknown>)[key];
-      }
+      delete mergedRecord[key];
     }
   }
 
