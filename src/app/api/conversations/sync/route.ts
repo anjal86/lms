@@ -31,7 +31,7 @@ async function runLiveSync() {
   }
 
   if (!liveSyncPromise) {
-    liveSyncPromise = syncMetaConversations().finally(() => {
+    liveSyncPromise = syncMetaConversations({ liveMode: true }).finally(() => {
       lastLiveSyncCompletedAt = Date.now();
       liveSyncPromise = null;
     });
@@ -61,15 +61,15 @@ export async function POST(request: Request) {
     if (liveMode) {
       const result = await runLiveSync();
       return NextResponse.json(result, {
-        status: result.success ? 200 : 502,
+        status: 200,
         headers: { 'Cache-Control': 'no-store' },
       });
     }
 
-    const result = await syncMetaConversations();
+    const result = await syncMetaConversations({ liveMode: false });
     const avatarRefresh = internalSync
       ? null
-      : await refreshMetaConversationProfiles({ limit: 500 });
+      : await refreshMetaConversationProfiles({ limit: 50 });
 
     return NextResponse.json(
       {
@@ -79,10 +79,19 @@ export async function POST(request: Request) {
         avatarProfilesUnavailable: avatarRefresh?.unavailable || 0,
         avatarErrors: avatarRefresh?.errors || [],
       },
-      { status: result.success ? 200 : 502 }
+      { status: 200 }
     );
   } catch (error) {
     console.error('Meta conversation sync failed:', error);
-    return NextResponse.json({ success: false, error: 'Meta conversation sync failed.' }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: false,
+        pagesCount: 0,
+        conversationsCount: 0,
+        messagesCount: 0,
+        error: error instanceof Error ? error.message : 'Meta conversation sync failed.',
+      },
+      { status: 500 }
+    );
   }
 }

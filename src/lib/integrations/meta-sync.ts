@@ -184,13 +184,40 @@ async function facebookThreads(input: {
   token: string;
   version: string;
   since?: string | null;
+  pageSize?: number;
+  maxPages?: number;
 }): Promise<SyncThread[]> {
+  const pageSize = input.pageSize || 15;
+  const maxPages = input.maxPages || 1;
   const url = new URL(`https://graph.facebook.com/${input.version}/${input.pageId}/conversations`);
-  url.searchParams.set('fields', 'id,updated_time,snippet,unread_count,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key,messages.limit(100){id,created_time,from,to,message,tags,attachments{id,mime_type,name,size,image_data,video_data,file_url}}');
-  url.searchParams.set('limit', '100');
+  url.searchParams.set(
+    'fields',
+    `id,updated_time,snippet,unread_count,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key,messages.limit(${pageSize}){id,created_time,from,to,message,tags,attachments{id,mime_type,name,size,image_data,video_data,file_url}}`
+  );
+  url.searchParams.set('limit', String(pageSize));
   if (input.since) url.searchParams.set('since', Math.floor(new Date(input.since).getTime() / 1000).toString());
   url.searchParams.set('access_token', input.token);
-  const conversations = await pagedGraph(url);
+
+  let conversations: MetaRecord[] = [];
+  try {
+    conversations = await pagedGraph(url, maxPages);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/reduce the amount of data|unknown error|timed out|exceeded/i.test(message)) {
+      console.warn(`[Meta Sync] Facebook Page ${input.pageId} hit data threshold (${message}). Retrying with compact limit...`);
+      const fallbackUrl = new URL(`https://graph.facebook.com/${input.version}/${input.pageId}/conversations`);
+      fallbackUrl.searchParams.set(
+        'fields',
+        'id,updated_time,snippet,unread_count,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key,messages.limit(5){id,created_time,from,to,message,tags,attachments{id,mime_type,name,size,image_data,video_data,file_url}}'
+      );
+      fallbackUrl.searchParams.set('limit', '10');
+      if (input.since) fallbackUrl.searchParams.set('since', Math.floor(new Date(input.since).getTime() / 1000).toString());
+      fallbackUrl.searchParams.set('access_token', input.token);
+      conversations = await pagedGraph(fallbackUrl, 1);
+    } else {
+      throw err;
+    }
+  }
 
   const customerIds = conversations.map((conversation) => {
     const participants = asArray(record(conversation.participants).data);
@@ -272,14 +299,42 @@ async function instagramThreads(input: {
   token: string;
   version: string;
   since?: string | null;
+  pageSize?: number;
+  maxPages?: number;
 }): Promise<SyncThread[]> {
+  const pageSize = input.pageSize || 15;
+  const maxPages = input.maxPages || 1;
   const url = new URL(`https://graph.facebook.com/${input.version}/${input.instagramId}/conversations`);
   url.searchParams.set('platform', 'instagram');
-  url.searchParams.set('fields', 'id,updated_time,participants,messages.limit(100){id,created_time,from,to,message,attachments{id,mime_type,name,size,image_data,video_data,file_url}}');
-  url.searchParams.set('limit', '100');
+  url.searchParams.set(
+    'fields',
+    `id,updated_time,participants,messages.limit(${pageSize}){id,created_time,from,to,message,attachments{id,mime_type,name,size,image_data,video_data,file_url}}`
+  );
+  url.searchParams.set('limit', String(pageSize));
   if (input.since) url.searchParams.set('since', Math.floor(new Date(input.since).getTime() / 1000).toString());
   url.searchParams.set('access_token', input.token);
-  const conversations = await pagedGraph(url);
+
+  let conversations: MetaRecord[] = [];
+  try {
+    conversations = await pagedGraph(url, maxPages);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/reduce the amount of data|unknown error|timed out|exceeded/i.test(message)) {
+      console.warn(`[Meta Sync] Instagram ${input.instagramId} hit data threshold (${message}). Retrying with compact limit...`);
+      const fallbackUrl = new URL(`https://graph.facebook.com/${input.version}/${input.instagramId}/conversations`);
+      fallbackUrl.searchParams.set('platform', 'instagram');
+      fallbackUrl.searchParams.set(
+        'fields',
+        'id,updated_time,participants,messages.limit(5){id,created_time,from,to,message,attachments{id,mime_type,name,size,image_data,video_data,file_url}}'
+      );
+      fallbackUrl.searchParams.set('limit', '10');
+      if (input.since) fallbackUrl.searchParams.set('since', Math.floor(new Date(input.since).getTime() / 1000).toString());
+      fallbackUrl.searchParams.set('access_token', input.token);
+      conversations = await pagedGraph(fallbackUrl, 1);
+    } else {
+      throw err;
+    }
+  }
 
   const customerIds = conversations.map((conversation) => {
     const participants = asArray(record(conversation.participants).data);
@@ -418,7 +473,7 @@ function pageTokenForAccount(input: {
 
 export async function refreshMetaConversationProfiles(options?: { limit?: number }): Promise<MetaAvatarRefreshResult> {
   const admin = createSupabaseAdminClient();
-  const limit = Math.max(1, Math.min(options?.limit || 500, 1000));
+  const limit = Math.max(1, Math.min(options?.limit || 50, 200));
   const errors: string[] = [];
   let attempted = 0;
   let updated = 0;
@@ -430,6 +485,7 @@ export async function refreshMetaConversationProfiles(options?: { limit?: number
     .in('provider', ['facebook', 'instagram'])
     .not('connection_id', 'is', null)
     .not('external_contact_id', 'is', null)
+    .is('customer_avatar_url', null)
     .order('last_message_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -515,12 +571,19 @@ export async function refreshMetaConversationProfiles(options?: { limit?: number
   return { attempted, updated, unavailable, errors: errors.slice(0, 50) };
 }
 
-export async function syncMetaConversations(options?: { connectionId?: string; pageId?: string }): Promise<MetaSyncResult> {
+export async function syncMetaConversations(options?: {
+  connectionId?: string;
+  pageId?: string;
+  liveMode?: boolean;
+}): Promise<MetaSyncResult> {
   const admin = createSupabaseAdminClient();
   const errors: string[] = [];
   let pagesCount = 0;
   let conversationsCount = 0;
   let messagesCount = 0;
+  const isLive = options?.liveMode ?? false;
+  const pageSize = isLive ? 15 : 25;
+  const maxPages = isLive ? 1 : 2;
 
   let query = admin
     .from('integration_connections')
@@ -559,36 +622,46 @@ export async function syncMetaConversations(options?: { connectionId?: string; p
         const token = typeof pageTokenRow?.access_token === 'string' ? pageTokenRow.access_token : fallbackToken;
         if (!token) continue;
 
-        let threads: SyncThread[] = [];
-        if (connection.provider === 'instagram') {
-          const instagramAccount = record(page.instagram_business_account);
-          const instagramId = String(instagramAccount.id || '');
-          if (!instagramId) continue;
-          threads = await instagramThreads({
-            connectionId: connection.id,
-            instagramId,
-            accountName: String(instagramAccount.username || page.name || connection.display_name || 'Instagram'),
-            token,
-            version,
-            since: connection.last_external_timestamp,
-          });
-        } else {
-          threads = await facebookThreads({
-            connectionId: connection.id,
-            pageId,
-            pageName: String(page.name || connection.display_name || 'Facebook Page'),
-            token,
-            version,
-            since: connection.last_external_timestamp,
-          });
-        }
+        try {
+          let threads: SyncThread[] = [];
+          if (connection.provider === 'instagram') {
+            const instagramAccount = record(page.instagram_business_account);
+            const instagramId = String(instagramAccount.id || '');
+            if (!instagramId) continue;
+            threads = await instagramThreads({
+              connectionId: connection.id,
+              instagramId,
+              accountName: String(instagramAccount.username || page.name || connection.display_name || 'Instagram'),
+              token,
+              version,
+              since: connection.last_external_timestamp,
+              pageSize,
+              maxPages,
+            });
+          } else {
+            threads = await facebookThreads({
+              connectionId: connection.id,
+              pageId,
+              pageName: String(page.name || connection.display_name || 'Facebook Page'),
+              token,
+              version,
+              since: connection.last_external_timestamp,
+              pageSize,
+              maxPages,
+            });
+          }
 
-        pagesCount += 1;
-        for (const thread of threads) {
-          const result = await persistThread(thread);
-          conversationsCount += 1;
-          messagesCount += result.inserted;
-          if (!newestTimestamp || new Date(thread.updatedAt) > new Date(newestTimestamp)) newestTimestamp = thread.updatedAt;
+          pagesCount += 1;
+          for (const thread of threads) {
+            const result = await persistThread(thread);
+            conversationsCount += 1;
+            messagesCount += result.inserted;
+            if (!newestTimestamp || new Date(thread.updatedAt) > new Date(newestTimestamp)) newestTimestamp = thread.updatedAt;
+          }
+        } catch (pageError) {
+          const message = pageError instanceof Error ? pageError.message : String(pageError);
+          errors.push(`Page ${page.name || pageId}: ${message}`);
+          console.warn(`[Meta Sync] Warning syncing page ${pageId}:`, message);
         }
       }
 
@@ -597,7 +670,7 @@ export async function syncMetaConversations(options?: { connectionId?: string; p
         .update({
           last_sync_at: new Date().toISOString(),
           last_external_timestamp: newestTimestamp,
-          last_error: null,
+          last_error: errors.length > 0 ? errors[0].slice(0, 1000) : null,
           last_health_check_at: new Date().toISOString(),
         })
         .eq('id', connection.id);
