@@ -16,20 +16,27 @@ const AGENT_REDIRECTS: Record<string, string> = {
   '/team': '/dashboard',
   '/settings': '/dashboard',
   '/audit': '/dashboard',
+  '/connections': '/dashboard',
 };
+
+function legacyLeadTarget(pathname: string, role: string) {
+  const match = pathname.match(/^\/leads\/([^/]+)$/);
+  if (!match) return undefined;
+  return role === 'agent' ? `/my-work/${match[1]}` : `/leads/${match[1]}/workspace`;
+}
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { isAuthenticated, isHydrated, currentUser } = useApp();
   const isPublicAuthPage = PUBLIC_AUTH_PATHS.has(pathname);
-  const agentRedirectTarget = isHydrated && isAuthenticated && currentUser.role === 'agent'
-    ? AGENT_REDIRECTS[pathname]
+  const redirectTarget = isHydrated && isAuthenticated
+    ? (currentUser.role === 'agent' ? AGENT_REDIRECTS[pathname] : undefined) || legacyLeadTarget(pathname, currentUser.role)
     : undefined;
 
   useEffect(() => {
-    if (agentRedirectTarget) router.replace(agentRedirectTarget);
-  }, [agentRedirectTarget, router]);
+    if (redirectTarget) router.replace(redirectTarget);
+  }, [redirectTarget, router]);
 
   if (isPublicAuthPage) return <>{children}</>;
 
@@ -51,15 +58,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-950 text-sm font-bold text-white">W</div>
           <h1 className="mt-4 text-lg font-semibold tracking-tight text-zinc-950">Your session has expired</h1>
           <p className="mt-2 text-sm leading-6 text-zinc-500">Sign in again to continue from where you left off.</p>
-          <a href={`/login?returnUrl=${encodeURIComponent(pathname)}`} className="button-primary mt-5 w-full">
-            Sign in again
-          </a>
+          <a href={`/login?returnUrl=${encodeURIComponent(pathname)}`} className="button-primary mt-5 w-full">Sign in again</a>
         </div>
       </div>
     );
   }
 
-  if (agentRedirectTarget) {
+  if (redirectTarget) {
     return (
       <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
         <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
