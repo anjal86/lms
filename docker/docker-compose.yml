@@ -138,6 +138,10 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SUPABASE_URL: ${PUBLIC_SUPABASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY is required}
     container_name: travel-lms-frontend
     restart: unless-stopped
     ports:
@@ -148,10 +152,29 @@ services:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       LEADS_WEBHOOK_SECRET: ${LEADS_WEBHOOK_SECRET:?LEADS_WEBHOOK_SECRET is required}
+      SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
       NODE_ENV: production
     depends_on:
       - supabase-kong
       - supabase-db
+
+  sla-worker:
+    image: curlimages/curl:8.10.1
+    container_name: travel-lms-sla-worker
+    restart: unless-stopped
+    environment:
+      SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
+      SLA_INTERVAL_SECONDS: ${SLA_INTERVAL_SECONDS:-60}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        while true; do
+          curl -fsS -X POST -H "Authorization: Bearer $$SLA_CRON_SECRET" http://app:3000/api/cron/sla || true;
+          sleep "$$SLA_INTERVAL_SECONDS";
+        done
+    depends_on:
+      - app
 
 volumes:
   db-data:
