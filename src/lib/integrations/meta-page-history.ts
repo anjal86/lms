@@ -7,10 +7,18 @@ import { metaFetchJson } from '@/lib/integrations/meta-http';
 type Provider = 'facebook' | 'instagram';
 type MetaRecord = Record<string, unknown>;
 
+type PageDiscoveryState = {
+  after_cursor?: string | null;
+  complete?: boolean;
+  updated_at?: string;
+};
+
 export type SelectedPageHistoryResult = {
   conversationsDiscovered: number;
   conversationsScanned: number;
   previewMessagesInserted: number;
+  historyComplete: boolean;
+  nextCursor: string | null;
   errors: string[];
 };
 
@@ -43,7 +51,13 @@ function previewBody(message: MetaRecord | null) {
   return '[Attachment]';
 }
 
-function conversationUrl(provider: Provider, accountId: string, token: string, version: string) {
+function conversationUrl(
+  provider: Provider,
+  accountId: string,
+  token: string,
+  version: string,
+  afterCursor?: string | null
+) {
   const url = new URL(`https://graph.facebook.com/${version}/${accountId}/conversations`);
   if (provider === 'instagram') url.searchParams.set('platform', 'instagram');
   const messageFields = provider === 'facebook'
@@ -54,26 +68,87 @@ function conversationUrl(provider: Provider, accountId: string, token: string, v
     : 'id,updated_time,participants';
   url.searchParams.set('fields', `${baseFields},messages.limit(1){${messageFields}}`);
   url.searchParams.set('limit', '50');
+  if (afterCursor) url.searchParams.set('after', afterCursor);
   url.searchParams.set('access_token', token);
   return url;
 }
 
 async function pagedGraph(url: URL, maxPages: number) {
-  const result: MetaRecord[] = [];
+  const items: MetaRecord[] = [];
   let next: string | null = url.toString();
+  let nextCursor: string | null = null;
+  let complete = false;
+
   for (let page = 0; page < maxPages && next; page += 1) {
-    // Foreground Page discovery must stay responsive. If Meta is slow, fail this
-    // small chunk and let a later sync cycle continue instead of retrying for a minute.
-    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 5_000, retries: 0 });
+    // Conversation discovery is incremental and resumable. Keep every provider
+    // call short; a later Inbox cycle resumes from the saved Meta cursor.
+    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 4_000, retries: 0 });
     if (!response.ok) {
       const providerError = record(data.error);
       throw new Error(typeof providerError.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
     }
-    result.push(...rows(data.data));
+
+    items.push(...rows(data.data));
     const paging = record(data.paging);
-    next = typeof paging.next === 'string' ? paging.next : null;
+    const cursors = record(paging.cursors);
+    const hasNext = typeof paging.next === 'string' && Boolean(paging.next);
+    nextCursor = typeof cursors.after === 'string' && cursors.after ? cursors.after : null;
+
+    if (!hasNext) {
+      complete = true;
+      next = null;
+      nextCursor = null;
+    } else {
+      next = String(paging.next);
+    }
   }
-  return result;
+
+  return { items, nextCursor, complete };
+}
+
+function discoveryKey(provider: Provider, accountId: string) {
+  return `${provider}:${accountId}`;
+}
+
+async function saveDiscoveryState(input: {
+  connectionId: string;
+  config: Record<string, unknown>;
+  key: string;
+  nextCursor: string | null;
+  complete: boolean;
+}) {
+  const admin = createSupabaseAdminClient();
+  const existingRoot = record(input.config.inbox_history_discovery);
+  const nextRoot = {
+    ...existingRoot,
+    [input.key]: {
+      after_cursor: input.nextCursor,
+      complete: input.complete,
+      updated_at: new Date().toISOString(),
+    },
+  };
+
+  const { error } = await admin
+    .from('integration_connections')
+    .update({
+      config: {
+        ...input.config,
+        inbox_history_discovery: nextRoot,
+      },
+    })
+    .eq('id', input.connectionId);
+  if (error) throw error;
+}
+
+function emptyResult(error?: string): SelectedPageHistoryResult {
+  return {
+    conversationsDiscovered: 0,
+    conversationsScanned: 0,
+    previewMessagesInserted: 0,
+    historyComplete: false,
+    nextCursor: null,
+    errors: error ? [error] : [],
+  };
 }
 
 export async function discoverSelectedMetaPageHistory(input: {
@@ -85,7 +160,7 @@ export async function discoverSelectedMetaPageHistory(input: {
 }): Promise<SelectedPageHistoryResult> {
   const admin = createSupabaseAdminClient();
   const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
-  const maxPages = Math.max(1, Math.min(input.maxPages || 30, 40));
+  const maxPages = Math.max(1, Math.min(input.maxPages || 1, 4));
   const errors: string[] = [];
   let conversationsDiscovered = 0;
   let previewMessagesInserted = 0;
@@ -105,7 +180,28 @@ export async function discoverSelectedMetaPageHistory(input: {
   if (connectionError) throw connectionError;
   if (secretError) throw secretError;
   if (!connection || !secret || connection.provider !== input.provider) {
-    return { conversationsDiscovered: 0, conversationsScanned: 0, previewMessagesInserted: 0, errors: ['Selected provider connection is unavailable.'] };
+    return emptyResult('Selected provider connection is unavailable.');
+  }
+
+  const connectionConfig = record(connection.config);
+  const stateKey = discoveryKey(input.provider, input.accountId);
+  const discoveryRoot = record(connectionConfig.inbox_history_discovery);
+  const discoveryState = record(discoveryRoot[stateKey]) as PageDiscoveryState;
+  const savedCursor = typeof discoveryState.after_cursor === 'string' && discoveryState.after_cursor
+    ? discoveryState.after_cursor
+    : null;
+
+  // Once the historical walk reaches the end, recent/new conversations are kept
+  // current by the normal live Meta sync. Do not restart page 1 on every poll.
+  if (discoveryState.complete === true) {
+    return {
+      conversationsDiscovered: 0,
+      conversationsScanned: 0,
+      previewMessagesInserted: 0,
+      historyComplete: true,
+      nextCursor: null,
+      errors: [],
+    };
   }
 
   const payload = decryptSecretPayload(secret.secret_payload || {}) as Record<string, unknown>;
@@ -116,25 +212,33 @@ export async function discoverSelectedMetaPageHistory(input: {
   const token = typeof pageToken?.access_token === 'string'
     ? pageToken.access_token
     : decryptIntegrationSecret(secret.access_token);
-  if (!token) {
-    return { conversationsDiscovered: 0, conversationsScanned: 0, previewMessagesInserted: 0, errors: ['Selected Page access token is unavailable.'] };
-  }
+  if (!token) return emptyResult('Selected Page access token is unavailable.');
 
-  const configPages = rows(record(connection.config).pages);
+  const configPages = rows(connectionConfig.pages);
   const configuredPage = configPages.find((page) => String(page.id || '') === input.pageId);
   const pageName = input.provider === 'facebook'
     ? String(configuredPage?.name || connection.display_name || 'Facebook Page')
     : String(record(configuredPage?.instagram_business_account).username || configuredPage?.name || connection.display_name || 'Instagram');
 
-  let metaConversations: MetaRecord[] = [];
+  let graphResult: Awaited<ReturnType<typeof pagedGraph>>;
   try {
-    metaConversations = await pagedGraph(conversationUrl(input.provider, input.accountId, token, version), maxPages);
+    graphResult = await pagedGraph(
+      conversationUrl(input.provider, input.accountId, token, version, savedCursor),
+      maxPages
+    );
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
-    return { conversationsDiscovered, conversationsScanned: 0, previewMessagesInserted, errors };
+    return {
+      conversationsDiscovered,
+      conversationsScanned: 0,
+      previewMessagesInserted,
+      historyComplete: false,
+      nextCursor: savedCursor,
+      errors,
+    };
   }
 
-  for (const metaConversation of metaConversations) {
+  for (const metaConversation of graphResult.items) {
     try {
       const customer = customerFromParticipants(metaConversation.participants, input.accountId);
       const customerId = String(customer?.id || '');
@@ -195,26 +299,41 @@ export async function discoverSelectedMetaPageHistory(input: {
           .select('id,lead_id')
           .single();
         if (createError || !created) {
-          if (createError?.code === '23505') continue;
-          throw createError || new Error('Unable to create Page conversation.');
+          if (createError?.code === '23505') {
+            const retry = await admin
+              .from('lead_conversations')
+              .select('id,lead_id')
+              .eq('provider', input.provider)
+              .eq('external_thread_id', externalThreadId)
+              .maybeSingle();
+            conversationId = retry.data?.id;
+            leadId = retry.data?.lead_id || null;
+          } else {
+            throw createError || new Error('Unable to create Page conversation.');
+          }
+        } else {
+          conversationId = created.id;
+          leadId = created.lead_id;
+          conversationsDiscovered += 1;
         }
-        conversationId = created.id;
-        leadId = created.lead_id;
-        conversationsDiscovered += 1;
       } else {
         const existingMetadata = record(existing.metadata);
+        const patch: Record<string, unknown> = {
+          connection_id: input.connectionId,
+          last_message_at: updatedAt,
+          metadata: { ...existingMetadata, ...providerMetadata },
+        };
+        if (body) patch.last_message_preview = body;
+
         const { error: updateError } = await admin
           .from('lead_conversations')
-          .update({
-            connection_id: input.connectionId,
-            last_message_preview: body || undefined,
-            last_message_at: updatedAt,
-            metadata: { ...existingMetadata, ...providerMetadata },
-          })
+          .update(patch)
           .eq('id', existing.id);
         if (updateError) throw updateError;
       }
 
+      // Page-wide history discovery stores only the newest preview message. Full
+      // message history remains a separate per-thread/incremental concern.
       if (conversationId && preview?.id) {
         const externalMessageId = String(preview.id);
         const { data: duplicate } = await admin
@@ -253,10 +372,26 @@ export async function discoverSelectedMetaPageHistory(input: {
     }
   }
 
+  // Advance the Page conversation cursor only after this chunk has been handled.
+  // Subsequent sync cycles start from this cursor instead of re-reading page 1.
+  try {
+    await saveDiscoveryState({
+      connectionId: input.connectionId,
+      config: connectionConfig,
+      key: stateKey,
+      nextCursor: graphResult.nextCursor,
+      complete: graphResult.complete,
+    });
+  } catch (stateError) {
+    errors.push(`Unable to save Page history cursor: ${stateError instanceof Error ? stateError.message : String(stateError)}`);
+  }
+
   return {
     conversationsDiscovered,
-    conversationsScanned: metaConversations.length,
+    conversationsScanned: graphResult.items.length,
     previewMessagesInserted,
+    historyComplete: graphResult.complete,
+    nextCursor: graphResult.nextCursor,
     errors: errors.slice(0, 50),
   };
 }
