@@ -1,8 +1,15 @@
 import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import './globals.css';
 import { AppProvider } from '@/lib/store';
 import AppShell from '@/components/layout/AppShell';
 import ToastContainer from '@/components/layout/ToastContainer';
+
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-inter',
+});
 
 export const metadata: Metadata = {
   title: {
@@ -11,7 +18,7 @@ export const metadata: Metadata = {
   },
   description: 'High-density travel lead management and pipeline operations system for agency teams.',
   robots: {
-    index: false, // Internal CRM by default
+    index: false,
     follow: false,
   },
 };
@@ -23,21 +30,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="antialiased bg-zinc-50 text-zinc-900" suppressHydrationWarning>
+      <body className={`${inter.variable} bg-zinc-50 text-zinc-950 antialiased`} suppressHydrationWarning>
         <AppProvider>
-          {/* WCAG 2.2 AA Skip to Content Link */}
           <a
             href="#main-content"
-            className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-1.5 focus:bg-zinc-900 focus:text-white focus:text-xs focus:font-medium focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-lg focus:bg-zinc-950 focus:px-3.5 focus:py-2.5 focus:text-sm focus:font-semibold focus:text-white focus:shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             Skip to main content
           </a>
 
-          <AppShell>
-            {children}
-          </AppShell>
-
-          {/* Global Notification Toast */}
+          <AppShell>{children}</AppShell>
           <ToastContainer />
         </AppProvider>
       </body>
