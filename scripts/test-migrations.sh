@@ -10,24 +10,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Starting disposable PostgreSQL..."
-docker run -d --name "$CONTAINER" \
+echo "==> Starting disposable PostgreSQL ($IMAGE)..."
+run_output="$(docker run -d --name "$CONTAINER" \
   -e POSTGRES_PASSWORD="$PASSWORD" \
   -e POSTGRES_DB=postgres \
-  "$IMAGE" >/dev/null
+  "$IMAGE" 2>&1)" || {
+    echo "$run_output"
+    exit 1
+  }
+echo "    container: ${run_output:0:12}"
 
+ready=false
 for _ in $(seq 1 60); do
   if docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+    ready=true
     break
+  fi
+  if ! docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -q true; then
+    echo "PostgreSQL container exited during startup:"
+    docker logs "$CONTAINER" || true
+    exit 1
   fi
   sleep 1
 done
 
-docker exec -e PGPASSWORD="$PASSWORD" "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null
+if [[ "$ready" != "true" ]]; then
+  echo "PostgreSQL did not become ready in time:"
+  docker logs "$CONTAINER" || true
+  exit 1
+fi
 
-# The application migrations depend on Supabase auth/storage roles and auth.uid()/auth.role().
-# Bootstrap only the public contracts the migrations/RLS tests need instead of depending on
-# Supabase's internal realtime/storage container initialization and ownership rules.
 echo "==> Bootstrapping Supabase-compatible roles and auth schema..."
 docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" \
   psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
