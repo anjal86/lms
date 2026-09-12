@@ -49,6 +49,10 @@ const migrations = [
     file: '202609120012_server_dashboard_queries.sql',
     applied: () => exists("select to_regprocedure('public.dashboard_operational_summary()') is not null and to_regprocedure('public.lead_pipeline_summary()') is not null"),
   },
+  {
+    file: '202609120013_omnichannel_integrations.sql',
+    applied: () => exists("select to_regclass('public.integration_connections') is not null and to_regclass('public.lead_messages') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='source_channel')"),
+  },
 ];
 
 console.log('\nChecking local Wanderlust database migrations...\n');
