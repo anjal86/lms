@@ -15,34 +15,70 @@ const ActionSchema = z.discriminatedUnion('action', [
 
 async function requireAdmin() {
   const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { response: NextResponse.json({ error: 'Unauthorized.' }, { status: 401 }) } as const;
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return { response: NextResponse.json({ error: 'Your session is no longer valid. Sign in again.' }, { status: 401 }) } as const;
+  }
 
-  const { data: actor } = await supabase
+  const { data: actor, error: profileError } = await supabase
     .from('profiles')
     .select('role,is_active')
     .eq('id', user.id)
     .maybeSingle();
 
+  if (profileError) {
+    console.error('Administrator profile check failed:', profileError.message);
+    return { response: NextResponse.json({ error: 'Unable to verify administrator access.' }, { status: 503 }) } as const;
+  }
+
   if (!actor?.is_active || actor.role !== 'admin') {
     return { response: NextResponse.json({ error: 'Administrator access required.' }, { status: 403 }) } as const;
   }
-  return { user, supabase } as const;
+  return { user } as const;
+}
+
+function getAdminClient() {
+  try {
+    return { admin: createSupabaseAdminClient() } as const;
+  } catch (error) {
+    console.error('Supabase administrator client configuration failed:', error);
+    return {
+      response: NextResponse.json(
+        { error: 'User management is not configured. Check the Supabase service-role key.' },
+        { status: 503 }
+      ),
+    } as const;
+  }
+}
+
+function authServiceMessage(message?: string) {
+  const normalized = (message || '').toLowerCase();
+  if (normalized.includes('invalid') || normalized.includes('jwt') || normalized.includes('api key')) {
+    return 'The Supabase administrator key does not match the local Auth service. Run the local configuration check.';
+  }
+  return 'The authentication service is unavailable. Check the local Supabase services and try again.';
 }
 
 export async function GET() {
   const auth = await requireAdmin();
   if ('response' in auth) return auth.response;
 
-  const admin = createSupabaseAdminClient();
+  const adminResult = getAdminClient();
+  if ('response' in adminResult) return adminResult.response;
+  const { admin } = adminResult;
+
   const [{ data: authUsers, error: authError }, { data: profiles, error: profileError }] = await Promise.all([
     admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
     admin.from('profiles').select('*').order('full_name'),
   ]);
 
-  if (authError || profileError) {
-    console.error('User management load failed:', authError?.message || profileError?.message);
-    return NextResponse.json({ error: 'Unable to load users.' }, { status: 500 });
+  if (authError) {
+    console.error('Auth user list failed:', authError.message);
+    return NextResponse.json({ error: authServiceMessage(authError.message) }, { status: 503 });
+  }
+  if (profileError) {
+    console.error('Profile list failed:', profileError.message);
+    return NextResponse.json({ error: 'Unable to load user profiles from the database.' }, { status: 503 });
   }
 
   const profileMap = new Map((profiles || []).map((profile) => [profile.id, profile]));
@@ -62,7 +98,7 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ users }, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ users }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 
 export async function PATCH(request: Request) {
@@ -73,12 +109,12 @@ export async function PATCH(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
   }
 
   const parsed = ActionSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Validation failed.', fields: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid user-management action.', fields: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
   const input = parsed.data;
@@ -86,34 +122,35 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'You cannot disable or demote your own administrator account.' }, { status: 400 });
   }
 
-  const admin = createSupabaseAdminClient();
+  const adminResult = getAdminClient();
+  if ('response' in adminResult) return adminResult.response;
+  const { admin } = adminResult;
+
   const { data: targetResult, error: targetError } = await admin.auth.admin.getUserById(input.user_id);
   const target = targetResult?.user;
-  if (targetError || !target) return NextResponse.json({ error: 'User not found.' }, { status: 404 });
+  if (targetError) {
+    console.error('Auth user lookup failed:', targetError.message);
+    return NextResponse.json({ error: authServiceMessage(targetError.message) }, { status: 503 });
+  }
+  if (!target) return NextResponse.json({ error: 'User not found.' }, { status: 404 });
 
   if (input.action === 'disable') {
-    const { error: authError } = await admin.auth.admin.updateUserById(input.user_id, { ban_duration: '876000h' });
-    if (authError) return NextResponse.json({ error: 'Unable to disable login.' }, { status: 500 });
-    const { error: profileError } = await admin
-      .from('profiles')
-      .update({ is_active: false, accepting_leads: false, status: 'offline' })
-      .eq('id', input.user_id);
-    if (profileError) return NextResponse.json({ error: 'Login was disabled, but profile status could not be updated.' }, { status: 500 });
+    const { error: authActionError } = await admin.auth.admin.updateUserById(input.user_id, { ban_duration: '876000h' });
+    if (authActionError) return NextResponse.json({ error: authServiceMessage(authActionError.message) }, { status: 503 });
+    const { error: profileError } = await admin.from('profiles').update({ is_active: false, accepting_leads: false, status: 'offline' }).eq('id', input.user_id);
+    if (profileError) return NextResponse.json({ error: 'Login was disabled, but the profile could not be updated.' }, { status: 500 });
   }
 
   if (input.action === 'enable') {
-    const { error: authError } = await admin.auth.admin.updateUserById(input.user_id, { ban_duration: 'none' });
-    if (authError) return NextResponse.json({ error: 'Unable to enable login.' }, { status: 500 });
-    const { error: profileError } = await admin
-      .from('profiles')
-      .update({ is_active: true })
-      .eq('id', input.user_id);
-    if (profileError) return NextResponse.json({ error: 'Login was enabled, but profile status could not be updated.' }, { status: 500 });
+    const { error: authActionError } = await admin.auth.admin.updateUserById(input.user_id, { ban_duration: 'none' });
+    if (authActionError) return NextResponse.json({ error: authServiceMessage(authActionError.message) }, { status: 503 });
+    const { error: profileError } = await admin.from('profiles').update({ is_active: true }).eq('id', input.user_id);
+    if (profileError) return NextResponse.json({ error: 'Login was enabled, but the profile could not be updated.' }, { status: 500 });
   }
 
   if (input.action === 'role') {
     const { error } = await admin.from('profiles').update({ role: input.role }).eq('id', input.user_id);
-    if (error) return NextResponse.json({ error: 'Unable to update role.' }, { status: 500 });
+    if (error) return NextResponse.json({ error: 'Unable to update the role.' }, { status: 500 });
   }
 
   if (input.action === 'reset_password') {
@@ -123,7 +160,7 @@ export async function PATCH(request: Request) {
     const { error } = await admin.auth.resetPasswordForEmail(target.email, { redirectTo });
     if (error) {
       console.error('Password reset email failed:', error.message);
-      return NextResponse.json({ error: 'Unable to send password reset email.' }, { status: 500 });
+      return NextResponse.json({ error: 'Password reset email could not be sent. Check the Auth email/SMTP configuration.' }, { status: 503 });
     }
   }
 
