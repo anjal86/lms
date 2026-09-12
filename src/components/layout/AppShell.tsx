@@ -1,18 +1,35 @@
 'use client';
 
-import React from 'react';
-import { usePathname } from 'next/navigation';
+import React, { useEffect } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import MobileBottomNav from './MobileBottomNav';
 
 const PUBLIC_AUTH_PATHS = new Set(['/login', '/forgot-password', '/reset-password']);
+const AGENT_REDIRECTS: Record<string, string> = {
+  '/leads': '/my-work',
+  '/follow-ups': '/my-follow-ups',
+  '/analytics': '/dashboard',
+  '/incentives': '/dashboard',
+  '/team': '/dashboard',
+  '/settings': '/dashboard',
+  '/audit': '/dashboard',
+};
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { isAuthenticated, isHydrated } = useApp();
+  const router = useRouter();
+  const { isAuthenticated, isHydrated, currentUser } = useApp();
   const isPublicAuthPage = PUBLIC_AUTH_PATHS.has(pathname);
+  const agentRedirectTarget = isHydrated && isAuthenticated && currentUser.role === 'agent'
+    ? AGENT_REDIRECTS[pathname]
+    : undefined;
+
+  useEffect(() => {
+    if (agentRedirectTarget) router.replace(agentRedirectTarget);
+  }, [agentRedirectTarget, router]);
 
   if (isPublicAuthPage) return <>{children}</>;
 
@@ -21,7 +38,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9]" role="status" aria-live="polite">
         <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm font-medium text-zinc-600 shadow-sm">
           <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-          Loading secure workspace…
+          Loading workspace…
         </div>
       </div>
     );
@@ -34,12 +51,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-950 text-sm font-bold text-white">W</div>
           <h1 className="mt-4 text-lg font-semibold tracking-tight text-zinc-950">Your session has expired</h1>
           <p className="mt-2 text-sm leading-6 text-zinc-500">Sign in again to continue from where you left off.</p>
-          <a
-            href={`/login?returnUrl=${encodeURIComponent(pathname)}`}
-            className="button-primary mt-5 w-full"
-          >
+          <a href={`/login?returnUrl=${encodeURIComponent(pathname)}`} className="button-primary mt-5 w-full">
             Sign in again
           </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (agentRedirectTarget) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9]" role="status" aria-live="polite">
+        <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
+          Opening your workspace…
         </div>
       </div>
     );
