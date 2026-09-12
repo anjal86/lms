@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "admin:create": "node scripts/create-admin.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
