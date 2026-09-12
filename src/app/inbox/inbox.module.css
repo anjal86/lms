@@ -2,28 +2,50 @@
   height: 100%;
   min-height: 0;
   width: 100%;
+  background: #ffffff;
 }
 
 .scope > div {
   height: 100%;
   min-height: 0;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
-/* Conversation list: compact but easier to scan. */
+/* -------------------------------------------------------------------------- */
+/* Conversation list                                                         */
+/* -------------------------------------------------------------------------- */
+
 .scope :global(section[aria-label='Inbox conversations']) {
   background: #ffffff;
 }
 
+@media (min-width: 1024px) {
+  .scope :global(section[aria-label='Inbox conversations']) {
+    width: 336px !important;
+    flex-basis: 336px !important;
+  }
+}
+
+.scope :global(section[aria-label='Inbox conversations'] > div:first-child) {
+  padding: 11px 12px !important;
+}
+
+.scope :global(section[aria-label='Inbox conversations'] input) {
+  height: 34px !important;
+  font-size: 12px !important;
+}
+
 .scope :global(button[data-conversation-item='true']) {
-  min-height: 82px;
-  padding: 12px 14px !important;
+  min-height: 78px;
+  padding: 11px 12px !important;
   border-left-width: 3px !important;
 }
 
 .scope :global(button[data-conversation-item='true'] p) {
-  margin-top: 4px !important;
+  margin-top: 3px !important;
   font-size: 12.5px !important;
-  line-height: 1.45 !important;
+  line-height: 1.4 !important;
   color: #52525b !important;
 }
 
@@ -46,72 +68,99 @@
   background: #f4f4f5 !important;
 }
 
-/* Main chat canvas. */
+/* -------------------------------------------------------------------------- */
+/* Chat header                                                                */
+/* -------------------------------------------------------------------------- */
+
 .scope :global(section[aria-label='Conversation thread']) {
-  background: #f7f7f8 !important;
+  background: #fafafa !important;
 }
 
 .scope :global(section[aria-label='Conversation thread'] > header) {
   position: sticky;
   top: 0;
   z-index: 20;
-  min-height: 64px;
+  min-height: 62px;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
   border-color: #e4e4e7 !important;
-  background: rgba(255, 255, 255, 0.97) !important;
-  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.04), 0 5px 16px rgba(24, 24, 27, 0.025);
+  background: rgba(255, 255, 255, 0.985) !important;
+  box-shadow: 0 1px 0 rgba(24, 24, 27, 0.035);
   backdrop-filter: blur(10px);
 }
 
-.scope :global([aria-label='Message history']) {
-  padding: 24px clamp(16px, 3vw, 42px) 30px !important;
-  background-color: #f7f7f8;
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.55), rgba(250, 250, 250, 0.2));
-  scroll-padding-bottom: 28px;
+/* Keep long provider/synthetic identifiers from dominating the identity line. */
+.scope :global(section[aria-label='Conversation thread'] > header .font-mono) {
+  display: inline-block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
-/* Keep messages in a readable central column even on very wide displays. */
+/* -------------------------------------------------------------------------- */
+/* Transcript                                                                 */
+/* -------------------------------------------------------------------------- */
+
+.scope :global([aria-label='Message history']) {
+  display: flex;
+  flex-direction: column;
+  padding: 22px clamp(16px, 2.4vw, 34px) 22px !important;
+  background: #fafafa !important;
+  scroll-padding-bottom: 24px;
+}
+
+/* Short threads sit near the composer instead of floating at the top. */
+.scope :global([aria-label='Message history'] > article:first-child),
+.scope :global([aria-label='Message history'] > div.mx-auto:first-child) {
+  margin-top: auto !important;
+}
+
+/* A narrower transcript makes inbound/outbound replies visually related. */
 .scope :global([aria-label='Message history'] > article),
 .scope :global([aria-label='Message history'] > div.mx-auto) {
   width: 100%;
-  max-width: 920px;
+  max-width: 740px;
   margin-left: auto !important;
   margin-right: auto !important;
 }
 
 .scope :global([aria-label='Message history'] article + article) {
-  margin-top: 14px !important;
+  margin-top: 12px !important;
 }
 
 .scope :global([aria-label='Message history'] article.items-start + article.items-start),
 .scope :global([aria-label='Message history'] article.items-end + article.items-end) {
-  margin-top: 6px !important;
+  margin-top: 5px !important;
 }
 
 /* Traveler bubble. */
 .scope :global([aria-label='Message history'] article.items-start > div:first-child) {
-  max-width: min(72%, 680px) !important;
+  max-width: min(78%, 540px) !important;
   padding: 10px 13px !important;
   border: 1px solid #d4d4d8 !important;
-  border-radius: 14px 14px 14px 5px !important;
+  border-radius: 12px 12px 12px 4px !important;
   background: #ffffff !important;
   color: #18181b !important;
-  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.05) !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.045) !important;
   font-size: 14px !important;
   font-weight: 450 !important;
-  line-height: 1.55 !important;
+  line-height: 1.52 !important;
 }
 
 /* Agent bubble. */
 .scope :global([aria-label='Message history'] article.items-end > div:first-child) {
-  max-width: min(72%, 680px) !important;
+  max-width: min(78%, 540px) !important;
   padding: 10px 13px !important;
-  border-radius: 14px 14px 5px 14px !important;
+  border: 1px solid #18181b !important;
+  border-radius: 12px 12px 4px 12px !important;
   background: #18181b !important;
   color: #ffffff !important;
-  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.12) !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.09) !important;
   font-size: 14px !important;
   font-weight: 450 !important;
-  line-height: 1.55 !important;
+  line-height: 1.52 !important;
 }
 
 .scope :global([aria-label='Message history'] article.items-end > div[class*='border-red']) {
@@ -121,10 +170,10 @@
 }
 
 .scope :global([aria-label='Message history'] article > div:first-child p) {
-  line-height: 1.55 !important;
+  line-height: 1.52 !important;
 }
 
-/* Time and delivery state stay visible without competing with the message. */
+/* Message metadata is secondary, but still readable. */
 .scope :global([aria-label='Message history'] article > div:nth-child(2)) {
   margin-top: 4px !important;
   gap: 6px !important;
@@ -132,59 +181,80 @@
   font-size: 10.5px !important;
 }
 
-/* Internal notes read as operational context rather than chat bubbles. */
+.scope :global([aria-label='Message history'] article.items-start > div:nth-child(2)) {
+  padding-left: 3px !important;
+}
+
+.scope :global([aria-label='Message history'] article.items-end > div:nth-child(2)) {
+  padding-right: 3px !important;
+}
+
+/* Internal notes read as CRM context rather than another chat bubble. */
 .scope :global([aria-label='Message history'] > div.mx-auto) {
-  max-width: 720px;
-  padding: 10px 13px !important;
-  border-color: #fcd34d !important;
-  border-radius: 8px !important;
-  background: #fffbeb !important;
+  max-width: 620px;
+  padding: 9px 12px !important;
+  border-color: #e4e4e7 !important;
+  border-left: 3px solid #d97706 !important;
+  border-radius: 6px !important;
+  background: #fffdf5 !important;
   box-shadow: none !important;
 }
 
-/* Media needs enough space to be useful without taking over the transcript. */
+/* Media remains useful without taking over the thread. */
 .scope :global([aria-label='Message history'] article img) {
-  max-height: 360px;
+  max-height: 340px;
 }
 
 .scope :global([aria-label='Message history'] audio) {
   min-width: min(280px, 70vw);
 }
 
-/* Composer behaves like a stable work surface. */
+/* -------------------------------------------------------------------------- */
+/* Composer                                                                   */
+/* -------------------------------------------------------------------------- */
+
 .scope :global(section[aria-label='Conversation thread'] > footer) {
   position: sticky;
   bottom: 0;
   z-index: 20;
+  padding: 11px 14px 12px !important;
   border-color: #e4e4e7 !important;
-  background: rgba(255, 255, 255, 0.985) !important;
-  box-shadow: 0 -8px 24px rgba(24, 24, 27, 0.045);
+  background: rgba(255, 255, 255, 0.99) !important;
+  box-shadow: 0 -6px 20px rgba(24, 24, 27, 0.035);
   backdrop-filter: blur(10px);
 }
 
+/* Align composer controls to the same visual column as the transcript. */
+.scope :global(section[aria-label='Conversation thread'] > footer > *) {
+  width: 100%;
+  max-width: 740px;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
 .scope :global(section[aria-label='Conversation thread'] > footer textarea) {
-  min-height: 72px !important;
+  min-height: 62px !important;
   padding: 10px 12px !important;
   border-color: #d4d4d8 !important;
-  border-radius: 8px !important;
+  border-radius: 7px !important;
   background: #ffffff !important;
   color: #18181b !important;
   font-size: 14px !important;
-  line-height: 1.5 !important;
-  box-shadow: inset 0 1px 1px rgba(24, 24, 27, 0.025);
+  line-height: 1.45 !important;
+  box-shadow: none !important;
 }
 
 .scope :global(section[aria-label='Conversation thread'] > footer textarea:focus) {
   border-color: #71717a !important;
-  box-shadow: 0 0 0 3px rgba(161, 161, 170, 0.18) !important;
+  box-shadow: 0 0 0 3px rgba(161, 161, 170, 0.16) !important;
 }
 
 .scope :global(section[aria-label='Conversation thread'] > footer button[type='submit']) {
   min-height: 34px;
-  min-width: 86px;
+  min-width: 82px;
 }
 
-/* Turn the large phone-detection banner into a calmer action callout. */
+/* Phone detection is an action hint, not a large promo card. */
 .scope :global(section[aria-label='Conversation thread'] > footer [class*='border-emerald-300']) {
   border-color: #d4d4d8 !important;
   border-left: 3px solid #16a34a !important;
@@ -192,10 +262,45 @@
   box-shadow: none !important;
 }
 
-/* Details inspector should stay dense and readable. */
+/* -------------------------------------------------------------------------- */
+/* Inspector                                                                  */
+/* -------------------------------------------------------------------------- */
+
 .scope :global(aside[aria-label='Conversation details']) {
   background: #ffffff;
 }
+
+@media (min-width: 1280px) {
+  .scope :global(aside[aria-label='Conversation details']) {
+    width: 292px !important;
+    flex-basis: 292px !important;
+    padding: 14px !important;
+  }
+}
+
+.scope :global(aside[aria-label='Conversation details'] section) {
+  border-color: #e4e4e7 !important;
+}
+
+.scope :global(aside[aria-label='Conversation details'] .font-mono) {
+  max-width: 175px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Make the inspector visually quieter than the actual conversation. */
+.scope :global(aside[aria-label='Conversation details'] dt) {
+  color: #71717a !important;
+}
+
+.scope :global(aside[aria-label='Conversation details'] dd) {
+  color: #27272a !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Scrollbars / responsive                                                    */
+/* -------------------------------------------------------------------------- */
 
 .scope :global([aria-label='Message history']),
 .scope :global(section[aria-label='Inbox conversations'] > div:last-child) {
@@ -203,58 +308,68 @@
   scrollbar-color: #d4d4d8 transparent;
 }
 
+@media (max-width: 1279px) {
+  .scope :global([aria-label='Message history'] > article),
+  .scope :global([aria-label='Message history'] > div.mx-auto),
+  .scope :global(section[aria-label='Conversation thread'] > footer > *) {
+    max-width: 700px;
+  }
+}
+
 @media (max-width: 1023px) {
   .scope :global([aria-label='Message history'] article.items-start > div:first-child),
   .scope :global([aria-label='Message history'] article.items-end > div:first-child) {
-    max-width: min(80%, 640px) !important;
+    max-width: min(82%, 520px) !important;
   }
 }
 
 @media (max-width: 767px) {
   .scope > div {
-    border-radius: 0 !important;
-    border-left: 0 !important;
-    border-right: 0 !important;
+    border: 0 !important;
   }
 
   .scope :global(section[aria-label='Conversation thread'] > header) {
     min-height: 58px;
-    padding: 9px 10px !important;
+    padding: 8px 10px !important;
+  }
+
+  .scope :global(section[aria-label='Conversation thread'] > header .font-mono) {
+    max-width: 130px;
   }
 
   .scope :global([aria-label='Message history']) {
-    padding: 16px 10px 22px !important;
+    padding: 14px 10px 16px !important;
   }
 
   .scope :global([aria-label='Message history'] article.items-start > div:first-child),
   .scope :global([aria-label='Message history'] article.items-end > div:first-child) {
-    max-width: 90% !important;
-    padding: 9px 12px !important;
+    max-width: 91% !important;
+    padding: 9px 11px !important;
     font-size: 14px !important;
-    line-height: 1.52 !important;
+    line-height: 1.5 !important;
   }
 
   .scope :global([aria-label='Message history'] article + article) {
-    margin-top: 12px !important;
+    margin-top: 10px !important;
   }
 
   .scope :global([aria-label='Message history'] article.items-start + article.items-start),
   .scope :global([aria-label='Message history'] article.items-end + article.items-end) {
-    margin-top: 5px !important;
+    margin-top: 4px !important;
   }
 
   .scope :global(section[aria-label='Conversation thread'] > footer) {
-    padding: 10px !important;
+    padding: 9px 10px 10px !important;
   }
 
   .scope :global(section[aria-label='Conversation thread'] > footer textarea) {
-    min-height: 66px !important;
+    min-height: 58px !important;
     font-size: 16px !important;
   }
 
   .scope :global(button[data-conversation-item='true']) {
-    min-height: 78px;
-    padding: 11px 12px !important;
+    min-height: 76px;
+    padding: 10px 11px !important;
   }
 }
 
