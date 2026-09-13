@@ -13,7 +13,7 @@ export default function ForgotPasswordPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = 'Reset Password · Wanderlust CRM';
+    document.title = 'Reset Password · CRM Workspace';
   }, []);
 
   const submit = async (event: React.FormEvent) => {
@@ -62,25 +62,17 @@ export default function ForgotPasswordPage() {
               autoFocus
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@agency.com"
+              placeholder="you@company.com"
               className="field pl-10"
             />
           </div>
         </div>
 
-        {message && (
-          <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm leading-5 text-emerald-800">
-            {message}
-          </div>
-        )}
-        {error && (
-          <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">
-            {error}
-          </div>
-        )}
+        {message && <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm leading-5 text-emerald-800">{message}</div>}
+        {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">{error}</div>}
 
         <button type="submit" disabled={loading} className="button-primary w-full">
-          {loading ? 'Sending reset link…' : 'Send reset link'}
+          {loading ? 'Sending…' : 'Send recovery link'}
         </button>
       </form>
     </AuthShell>
