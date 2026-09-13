@@ -47,16 +47,6 @@ function selectedAccountScope(request: Request, url: URL) {
   return { accountId, accountProvider } as const;
 }
 
-function applyAccountScope<T extends { eq: (column: string, value: string) => T }>(
-  query: T,
-  accountId: string,
-  accountProvider: string,
-) {
-  if (accountId && accountProvider === 'facebook') return query.eq('metadata->>meta_page_id', accountId);
-  if (accountId && accountProvider === 'instagram') return query.eq('metadata->>instagram_business_account_id', accountId);
-  return query;
-}
-
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
@@ -71,7 +61,6 @@ export async function GET(request: Request) {
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
-  // Snoozed work becomes visible again without requiring a cron just to flip state.
   await actor.supabase.rpc('wake_due_conversations', { p_workspace_id: actor.profile.workspace_id });
 
   let query = actor.supabase
@@ -124,12 +113,11 @@ export async function GET(request: Request) {
   else if (filter === 'unread') query = query.gt('unread_count', 0);
   else if (['open', 'waiting', 'snoozed', 'closed'].includes(filter)) query = query.eq('workflow_state', filter);
 
-  if (['open', 'waiting', 'snoozed', 'closed'].includes(requestedState)) {
-    query = query.eq('workflow_state', requestedState);
-  }
+  if (['open', 'waiting', 'snoozed', 'closed'].includes(requestedState)) query = query.eq('workflow_state', requestedState);
   if (['low', 'normal', 'high', 'urgent'].includes(priority)) query = query.eq('priority', priority);
   if (provider !== 'all') query = query.eq('provider', provider);
-  query = applyAccountScope(query, accountId, accountProvider);
+  if (accountId && accountProvider === 'facebook') query = query.eq('metadata->>meta_page_id', accountId);
+  else if (accountId && accountProvider === 'instagram') query = query.eq('metadata->>instagram_business_account_id', accountId);
 
   if (search) {
     const pattern = `%${search}%`;
@@ -147,22 +135,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
-  const scopedCount = () => actor.supabase
-    .from('lead_conversations')
-    .select('id', { count: 'exact', head: true })
-    .eq('workspace_id', actor.profile.workspace_id);
-
-  let unconvertedCountQuery = scopedCount().is('lead_id', null).neq('workflow_state', 'closed');
-  let allOpenQuery = scopedCount().neq('workflow_state', 'closed');
-  let hasPhoneQuery = scopedCount().not('metadata->detected_phone', 'is', null);
-  let unassignedQuery = scopedCount().is('assigned_to', null).neq('workflow_state', 'closed');
-  let waitingQuery = scopedCount().eq('workflow_state', 'waiting');
-  let snoozedQuery = scopedCount().eq('workflow_state', 'snoozed');
-  let unreadQuery = scopedCount().gt('unread_count', 0).neq('workflow_state', 'closed');
-  let overdueQuery = scopedCount()
-    .is('first_responded_at', null)
-    .neq('workflow_state', 'closed')
-    .lt('first_response_due_at', new Date().toISOString());
+  let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed');
+  let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed');
+  let hasPhoneQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).not('metadata->detected_phone', 'is', null);
+  let unassignedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('assigned_to', null).neq('workflow_state', 'closed');
+  let waitingQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'waiting');
+  let snoozedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'snoozed');
+  let unreadQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).gt('unread_count', 0).neq('workflow_state', 'closed');
+  let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString());
 
   if (provider !== 'all') {
     unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
@@ -175,14 +155,25 @@ export async function GET(request: Request) {
     overdueQuery = overdueQuery.eq('provider', provider);
   }
 
-  unconvertedCountQuery = applyAccountScope(unconvertedCountQuery, accountId, accountProvider);
-  allOpenQuery = applyAccountScope(allOpenQuery, accountId, accountProvider);
-  hasPhoneQuery = applyAccountScope(hasPhoneQuery, accountId, accountProvider);
-  unassignedQuery = applyAccountScope(unassignedQuery, accountId, accountProvider);
-  waitingQuery = applyAccountScope(waitingQuery, accountId, accountProvider);
-  snoozedQuery = applyAccountScope(snoozedQuery, accountId, accountProvider);
-  unreadQuery = applyAccountScope(unreadQuery, accountId, accountProvider);
-  overdueQuery = applyAccountScope(overdueQuery, accountId, accountProvider);
+  if (accountId && accountProvider === 'facebook') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>meta_page_id', accountId);
+    allOpenQuery = allOpenQuery.eq('metadata->>meta_page_id', accountId);
+    hasPhoneQuery = hasPhoneQuery.eq('metadata->>meta_page_id', accountId);
+    unassignedQuery = unassignedQuery.eq('metadata->>meta_page_id', accountId);
+    waitingQuery = waitingQuery.eq('metadata->>meta_page_id', accountId);
+    snoozedQuery = snoozedQuery.eq('metadata->>meta_page_id', accountId);
+    unreadQuery = unreadQuery.eq('metadata->>meta_page_id', accountId);
+    overdueQuery = overdueQuery.eq('metadata->>meta_page_id', accountId);
+  } else if (accountId && accountProvider === 'instagram') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>instagram_business_account_id', accountId);
+    allOpenQuery = allOpenQuery.eq('metadata->>instagram_business_account_id', accountId);
+    hasPhoneQuery = hasPhoneQuery.eq('metadata->>instagram_business_account_id', accountId);
+    unassignedQuery = unassignedQuery.eq('metadata->>instagram_business_account_id', accountId);
+    waitingQuery = waitingQuery.eq('metadata->>instagram_business_account_id', accountId);
+    snoozedQuery = snoozedQuery.eq('metadata->>instagram_business_account_id', accountId);
+    unreadQuery = unreadQuery.eq('metadata->>instagram_business_account_id', accountId);
+    overdueQuery = overdueQuery.eq('metadata->>instagram_business_account_id', accountId);
+  }
 
   const [unconvertedCountRes, allOpenRes, hasPhoneRes, unassignedRes, waitingRes, snoozedRes, unreadRes, overdueRes] = await Promise.all([
     unconvertedCountQuery,
