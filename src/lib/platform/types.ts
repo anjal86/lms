@@ -36,6 +36,7 @@ export type DynamicFieldDefinition = {
   is_system: boolean;
   is_active: boolean;
   sort_order: number;
+  definition_source?: 'template' | 'custom';
 };
 
 export type PipelineStageConfig = {
@@ -55,6 +56,7 @@ export type PipelineConfig = {
   description: string | null;
   is_default: boolean;
   is_active: boolean;
+  definition_source?: 'template' | 'custom';
   stages: PipelineStageConfig[];
 };
 
