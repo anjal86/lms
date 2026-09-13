@@ -1,16 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { getApiActor, isManagement, type ApiActor } from '@/lib/auth/api-actor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const CollaboratorSchema = z.object({ user_id: z.string().uuid() });
 
-async function conversationExists(
-  actor: Exclude<Awaited<ReturnType<typeof getApiActor>>, { error: NextResponse }>,
-  id: string,
-) {
+async function conversationExists(actor: ApiActor, id: string) {
   const { data } = await actor.supabase
     .from('lead_conversations')
     .select('id,assigned_to')
