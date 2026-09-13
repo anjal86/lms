@@ -87,29 +87,44 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, logout } = useApp();
-  const { config, term } = useWorkspace();
+  const { config, term, moduleEnabled } = useWorkspace();
   const canManage = canAccessSettings(currentUser.role);
   const isAgent = currentUser.role === 'agent';
   const leadPlural = term('lead_plural', 'Leads');
   const workspaceName = config.workspace.name || 'Workspace';
   const workspaceLabel = term('workspace_label', 'Business Workspace');
   const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'W';
+  const inboxEnabled = moduleEnabled('inbox', true);
+  const leadsEnabled = moduleEnabled('leads', true);
+  const tasksEnabled = moduleEnabled('tasks', true);
 
   const agentItems: NavItem[] = [
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
-    { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' },
-    { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' },
-    { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' },
-    { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' },
+    ...(inboxEnabled ? [
+      { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
+      { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
+    ] : []),
+    ...(leadsEnabled ? [
+      { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const },
+    ] : []),
+    ...(tasksEnabled ? [
+      { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' as const },
+    ] : []),
     { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' },
   ];
 
   const workItems: NavItem[] = [
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
-    { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' },
-    { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' },
-    { label: `All ${leadPlural}`, href: '/leads', icon: Kanban, tone: 'cyan' },
-    { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' },
+    ...(inboxEnabled ? [
+      { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' as const },
+      { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
+    ] : []),
+    ...(leadsEnabled ? [
+      { label: `All ${leadPlural}`, href: '/leads', icon: Kanban, tone: 'cyan' as const },
+    ] : []),
+    ...(tasksEnabled ? [
+      { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const },
+    ] : []),
     { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },
   ];
 
