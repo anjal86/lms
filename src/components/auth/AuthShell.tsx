@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { CheckCircle2, Compass, ShieldCheck, Sparkles } from 'lucide-react';
+import { CheckCircle2, Layers3, ShieldCheck, Sparkles } from 'lucide-react';
 
 export default function AuthShell({
   eyebrow,
@@ -23,11 +23,11 @@ export default function AuthShell({
         </div>
 
         <div className="relative z-10">
-          <Link href="/login" className="inline-flex items-center gap-3" aria-label="Wanderlust CRM sign in">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-bold text-zinc-950 shadow-sm">W</span>
+          <Link href="/login" className="inline-flex items-center gap-3" aria-label="CRM workspace sign in">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-sm font-bold text-zinc-950 shadow-sm">C</span>
             <span>
-              <span className="block text-sm font-semibold tracking-tight">Wanderlust</span>
-              <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">Travel CRM</span>
+              <span className="block text-sm font-semibold tracking-tight">CRM Workspace</span>
+              <span className="block text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">Adaptive business CRM</span>
             </span>
           </Link>
         </div>
@@ -35,23 +35,23 @@ export default function AuthShell({
         <div className="relative z-10 max-w-md pb-8">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-zinc-300">
             <Sparkles className="h-3.5 w-3.5 text-blue-400" />
-            Built for fast-moving travel teams
+            Built around the way your business works
           </div>
           <h2 className="text-4xl font-semibold leading-[1.08] tracking-[-0.035em] xl:text-5xl">
-            Move every inquiry forward with less friction.
+            Move every customer conversation forward with less friction.
           </h2>
           <p className="mt-5 max-w-sm text-sm leading-6 text-zinc-400">
-            One secure workspace for lead ownership, response SLAs, follow-ups, trip operations and revenue visibility.
+            One secure workspace for conversations, ownership, configurable pipelines, follow-ups and business-specific operations.
           </p>
 
           <div className="mt-8 space-y-3 text-sm text-zinc-300">
             <div className="flex items-center gap-3">
               <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              Clear next actions for every lead
+              Clear next actions for every customer record
             </div>
             <div className="flex items-center gap-3">
-              <Compass className="h-4 w-4 text-blue-400" />
-              Pipeline and trip operations in one place
+              <Layers3 className="h-4 w-4 text-blue-400" />
+              Fields, pipelines and modules that adapt to your business
             </div>
             <div className="flex items-center gap-3">
               <ShieldCheck className="h-4 w-4 text-zinc-300" />
@@ -60,15 +60,15 @@ export default function AuthShell({
           </div>
         </div>
 
-        <p className="relative z-10 text-xs text-zinc-600">Internal agency workspace</p>
+        <p className="relative z-10 text-xs text-zinc-600">Secure business workspace</p>
       </section>
 
       <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
         <div className="w-full max-w-md">
           <div className="mb-8 lg:hidden">
             <Link href="/login" className="inline-flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-950 text-xs font-bold text-white">W</span>
-              <span className="text-sm font-semibold tracking-tight">Wanderlust CRM</span>
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-950 text-xs font-bold text-white">C</span>
+              <span className="text-sm font-semibold tracking-tight">CRM Workspace</span>
             </Link>
           </div>
 
