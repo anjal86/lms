@@ -49,11 +49,14 @@ export default function Header() {
     markAllNotificationsAsRead,
     showToast,
   } = useApp();
-  const { config, term } = useWorkspace();
+  const { config, term, moduleEnabled } = useWorkspace();
 
   const isAgent = currentUser.role === 'agent';
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const isTravel = config.workspace.business_type === 'travel';
+  const inboxEnabled = moduleEnabled('inbox', true);
+  const leadsEnabled = moduleEnabled('leads', true);
+  const tasksEnabled = moduleEnabled('tasks', true);
   const leadLabel = term('lead', 'Lead');
   const leadPlural = term('lead_plural', 'Leads');
   const workspaceName = config.workspace.name || 'Workspace';
@@ -63,18 +66,22 @@ export default function Header() {
   const mobileNavItems = isAgent
     ? [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
-        { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-        { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
-        { label: 'My Work', href: '/my-work', icon: ListChecks },
-        { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock },
+        ...(inboxEnabled ? [
+          { label: 'Inbox', href: '/inbox', icon: MessageSquare },
+          { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
+        ] : []),
+        ...(leadsEnabled ? [{ label: 'My Work', href: '/my-work', icon: ListChecks }] : []),
+        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock }] : []),
         { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
       ]
     : [
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
-        { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-        { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
-        { label: `All ${leadPlural}`, href: '/leads', icon: Kanban },
-        { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
+        ...(inboxEnabled ? [
+          { label: 'Inbox', href: '/inbox', icon: MessageSquare },
+          { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
+        ] : []),
+        ...(leadsEnabled ? [{ label: `All ${leadPlural}`, href: '/leads', icon: Kanban }] : []),
+        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock }] : []),
         { label: 'Team', href: '/team', icon: Users },
         { label: 'Performance', href: '/analytics', icon: BarChart3 },
         { label: 'Incentives', href: '/incentives', icon: Trophy },
@@ -114,7 +121,7 @@ export default function Header() {
         setIsShortcutsOpen((value) => !value);
         return;
       }
-      if (event.key.toLowerCase() === 'c' || event.key.toLowerCase() === 'n') {
+      if (leadsEnabled && (event.key.toLowerCase() === 'c' || event.key.toLowerCase() === 'n')) {
         event.preventDefault();
         setIsLeadModalOpen(true);
         return;
@@ -128,8 +135,8 @@ export default function Header() {
       }
       if (lastKey === 'g' && now - lastKeyTime < 1500) {
         const key = event.key.toLowerCase();
-        if (key === 'l') router.push(isAgent ? '/my-work' : '/leads');
-        else if (key === 'f') router.push(isAgent ? '/my-follow-ups' : '/follow-ups');
+        if (key === 'l' && leadsEnabled) router.push(isAgent ? '/my-work' : '/leads');
+        else if (key === 'f' && tasksEnabled) router.push(isAgent ? '/my-follow-ups' : '/follow-ups');
         else if (key === 't' && canManage) router.push('/team');
         lastKey = '';
       }
@@ -137,7 +144,7 @@ export default function Header() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canManage, isAgent, router]);
+  }, [canManage, isAgent, leadsEnabled, router, tasksEnabled]);
 
   React.useEffect(() => {
     if (!isNotifOpen && !isProfileOpen) return;
@@ -179,19 +186,21 @@ export default function Header() {
             <Menu className="h-4 w-4" />
           </button>
 
-          <button type="button" onClick={() => setIsLeadModalOpen(true)} className="button-primary whitespace-nowrap">
-            <Plus className="h-4 w-4" /> Add {leadLabel}
-          </button>
+          {leadsEnabled && (
+            <button type="button" onClick={() => setIsLeadModalOpen(true)} className="button-primary whitespace-nowrap">
+              <Plus className="h-4 w-4" /> Add {leadLabel}
+            </button>
+          )}
 
-          {canManage && isTravel && (
+          {leadsEnabled && canManage && isTravel && (
             <button type="button" onClick={() => setIsCsvModalOpen(true)} className="button-secondary hidden sm:inline-flex" title="Travel CSV importer">
               <FileSpreadsheet className="h-4 w-4" /> Import
             </button>
           )}
 
-          <button type="button" onClick={() => setIsCommandPaletteOpen(true)} aria-label={`Search ${leadPlural}`} className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64">
+          <button type="button" onClick={() => setIsCommandPaletteOpen(true)} aria-label={leadsEnabled ? `Search ${leadPlural}` : 'Search workspace'} className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64">
             <Search className="h-4 w-4 shrink-0" />
-            <span className="truncate">Search {leadPlural.toLowerCase()}</span>
+            <span className="truncate">{leadsEnabled ? `Search ${leadPlural.toLowerCase()}` : 'Search workspace'}</span>
             <kbd className="ml-auto hidden rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 lg:inline">⌘K</kbd>
           </button>
         </div>
@@ -321,10 +330,15 @@ export default function Header() {
         </div>
       )}
 
-      <LeadModal isOpen={isLeadModalOpen} onClose={() => setIsLeadModalOpen(false)} />
-      {canManage && isTravel && <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} />}
+      {leadsEnabled && <LeadModal isOpen={isLeadModalOpen} onClose={() => setIsLeadModalOpen(false)} />}
+      {leadsEnabled && canManage && isTravel && <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} />}
       <KeyboardShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
-      <CommandPalette isOpen={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} onOpenNewLead={() => setIsLeadModalOpen(true)} onOpenCsv={() => canManage && isTravel && setIsCsvModalOpen(true)} />
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onOpenNewLead={leadsEnabled ? () => setIsLeadModalOpen(true) : undefined}
+        onOpenCsv={leadsEnabled && canManage && isTravel ? () => setIsCsvModalOpen(true) : undefined}
+      />
     </>
   );
 }
