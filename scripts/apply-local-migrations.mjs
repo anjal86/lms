@@ -85,6 +85,7 @@ const migrations = [
   { file: '202609120023_phone_lead_index_integrity.sql', applied: () => exists("select to_regprocedure('public.extract_phone_numbers_from_text(text)') is not null and exists(select 1 from pg_trigger where tgname='trg_index_phone_from_lead_message' and not tgisinternal)") },
   { file: '202609120024_dynamic_business_platform.sql', applied: () => exists("select to_regclass('public.workspaces') is not null and to_regclass('public.field_definitions') is not null and to_regprocedure('public.apply_business_template(uuid,text)') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='custom_data')") },
   { file: '202609120025_workspace_runtime_integrity.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_profiles_workspace_membership' and not tgisinternal) and position('v_business_type' in pg_get_functiondef(to_regprocedure('public.prepare_lead()'))) > 0") },
+  { file: '202609120026_business_configuration_provenance.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='field_definitions' and column_name='definition_source') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='pipelines' and column_name='definition_source')") },
 ];
 
 console.log('\nChecking local Wanderlust database migrations...\n');
