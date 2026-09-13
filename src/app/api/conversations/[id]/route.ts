@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { backfillMetaConversationMessages } from '@/lib/integrations/meta-history';
 
 export const runtime = 'nodejs';
@@ -12,8 +13,16 @@ const historyBackfillPromises = new Map<string, Promise<void>>();
 
 const PatchConversationSchema = z.object({
   status: z.enum(['open', 'closed', 'archived']).optional(),
+  workflow_state: z.enum(['open', 'waiting', 'snoozed', 'closed']).optional(),
+  priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+  snoozed_until: z.string().datetime().nullable().optional(),
+  resolution_code: z.string().trim().max(80).nullable().optional(),
+  closing_note: z.string().trim().max(4000).nullable().optional(),
+  next_action_at: z.string().datetime().nullable().optional(),
   assigned_to: z.string().uuid().nullable().optional(),
+  assign_strategy: z.enum(['least_open', 'workload_balanced', 'round_robin', 'conversion_weighted']).optional(),
   mark_read: z.boolean().optional(),
+  lifecycle_key: z.string().trim().min(1).max(80).optional(),
   customer_city: z.string().trim().max(120).optional().or(z.literal('')),
   customer_country: z.string().trim().max(120).optional().or(z.literal('')),
 });
@@ -56,6 +65,46 @@ async function maybeBackfillHistory(input: {
   await promise;
 }
 
+const CONVERSATION_SELECT = `
+  id,
+  workspace_id,
+  contact_id,
+  lead_id,
+  connection_id,
+  provider,
+  external_thread_id,
+  external_contact_id,
+  customer_name,
+  customer_phone,
+  customer_email,
+  customer_avatar_url,
+  last_message_preview,
+  status,
+  workflow_state,
+  priority,
+  snoozed_until,
+  first_response_due_at,
+  next_action_at,
+  first_responded_at,
+  last_inbound_at,
+  last_outbound_at,
+  closed_at,
+  closed_by,
+  resolution_code,
+  closing_note,
+  team_key,
+  unread_count,
+  assigned_to,
+  last_message_at,
+  created_at,
+  updated_at,
+  converted_at,
+  metadata,
+  contact:contacts(id, display_name, primary_phone, primary_email, lifecycle_key, owner_id, tags, custom_data, last_seen_at),
+  lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
+  assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role, status)
+`;
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
@@ -69,29 +118,8 @@ export async function GET(
 
   const { data: conversation, error: convError } = await actor.supabase
     .from('lead_conversations')
-    .select(`
-      id,
-      lead_id,
-      connection_id,
-      provider,
-      external_thread_id,
-      external_contact_id,
-      customer_name,
-      customer_phone,
-      customer_email,
-      customer_avatar_url,
-      last_message_preview,
-      status,
-      unread_count,
-      assigned_to,
-      last_message_at,
-      created_at,
-      updated_at,
-      converted_at,
-      metadata,
-      lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
-      assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role)
-    `)
+    .select(CONVERSATION_SELECT)
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', id)
     .maybeSingle();
 
@@ -102,6 +130,7 @@ export async function GET(
   const { count: beforeBackfillCount } = await actor.supabase
     .from('lead_messages')
     .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('conversation_id', id);
 
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
@@ -115,8 +144,6 @@ export async function GET(
     localMessageCount: beforeBackfillCount || 0,
   });
 
-  // Fetch newest-first so a long conversation never drops the newest messages,
-  // then reverse before returning because the chat UI renders oldest -> newest.
   const { data: messageRows, error: msgError, count: messageTotal } = await actor.supabase
     .from('lead_messages')
     .select(`
@@ -135,6 +162,7 @@ export async function GET(
       created_at,
       author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
     `, { count: 'exact' })
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('conversation_id', id)
     .order('sent_at', { ascending: false })
     .limit(messageLimit);
@@ -174,55 +202,132 @@ export async function PATCH(
     return NextResponse.json({ error: 'Validation failed.', details: parsed.error.flatten() }, { status: 400 });
   }
 
+  const { data: existing, error: existingError } = await actor.supabase
+    .from('lead_conversations')
+    .select('id,workspace_id,contact_id,assigned_to,priority,workflow_state')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', id)
+    .maybeSingle();
+  if (existingError || !existing) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+
   if (parsed.data.assigned_to !== undefined && !isManagement(actor.profile) && parsed.data.assigned_to !== actor.user.id) {
     return NextResponse.json({ error: 'Agents may only claim a conversation for themselves.' }, { status: 403 });
   }
+  if (parsed.data.assign_strategy && !isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Only managers can run automatic assignment.' }, { status: 403 });
+  }
 
-  const patch: Record<string, unknown> = {};
-  if (parsed.data.status !== undefined) patch.status = parsed.data.status;
-  if (parsed.data.assigned_to !== undefined) patch.assigned_to = parsed.data.assigned_to;
-  if (parsed.data.mark_read === true) patch.unread_count = 0;
-
+  let changed = false;
   const locationRequested = parsed.data.customer_city !== undefined || parsed.data.customer_country !== undefined;
-  let locationConversation: Record<string, unknown> | null = null;
-
   if (locationRequested) {
     const { data: locationData, error: locationError } = await actor.supabase.rpc('update_conversation_location', {
       p_conversation_id: id,
       p_customer_city: parsed.data.customer_city ?? '',
       p_customer_country: parsed.data.customer_country ?? '',
     });
-
     if (locationError) {
       console.error('Failed to update conversation location:', locationError.message);
       if (locationError.code === '42501') return NextResponse.json({ error: 'You do not have access to update this conversation.' }, { status: 403 });
       if (locationError.code === 'P0002') return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
       return NextResponse.json({ error: 'Unable to update customer location.' }, { status: 500 });
     }
-
-    const result = (locationData || {}) as LocationUpdateResult;
-    locationConversation = result.conversation || null;
+    void (locationData as LocationUpdateResult | null);
+    changed = true;
   }
 
-  if (Object.keys(patch).length === 0) {
-    if (locationRequested && locationConversation) {
-      return NextResponse.json({ conversation: locationConversation });
+  if (parsed.data.assigned_to !== undefined || parsed.data.assign_strategy) {
+    const { error: assignmentError } = await actor.supabase.rpc('assign_conversation', {
+      p_conversation_id: id,
+      p_assignee_id: parsed.data.assigned_to ?? null,
+      p_strategy: parsed.data.assign_strategy ?? null,
+      p_automation_run_id: null,
+    });
+    if (assignmentError) {
+      console.error('Conversation assignment failed:', assignmentError.message);
+      const status = assignmentError.code === '42501' ? 403 : assignmentError.code === 'P0002' ? 404 : 400;
+      return NextResponse.json({ error: assignmentError.message || 'Unable to assign conversation.' }, { status });
     }
-    return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });
+    changed = true;
   }
+
+  const requestedState = parsed.data.workflow_state
+    ?? (parsed.data.status === 'closed' || parsed.data.status === 'archived' ? 'closed' : parsed.data.status === 'open' ? 'open' : undefined);
+  if (requestedState) {
+    const { error: transitionError } = await actor.supabase.rpc('transition_conversation', {
+      p_conversation_id: id,
+      p_state: requestedState,
+      p_snoozed_until: parsed.data.snoozed_until ?? null,
+      p_resolution_code: parsed.data.resolution_code ?? null,
+      p_closing_note: parsed.data.closing_note ?? null,
+      p_next_action_at: parsed.data.next_action_at ?? null,
+      p_automation_run_id: null,
+    });
+    if (transitionError) {
+      console.error('Conversation transition failed:', transitionError.message);
+      const status = transitionError.code === '42501' ? 403 : transitionError.code === 'P0002' ? 404 : 400;
+      return NextResponse.json({ error: transitionError.message || 'Unable to change conversation state.' }, { status });
+    }
+    changed = true;
+  }
+
+  const directPatch: Record<string, unknown> = {};
+  if (parsed.data.mark_read === true) directPatch.unread_count = 0;
+  if (parsed.data.priority !== undefined) directPatch.priority = parsed.data.priority;
+  if (Object.keys(directPatch).length > 0) {
+    const { error: directError } = await actor.supabase
+      .from('lead_conversations')
+      .update(directPatch)
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', id);
+    if (directError) {
+      console.error('Failed to update conversation:', directError.message);
+      return NextResponse.json({ error: 'Unable to update conversation.' }, { status: 500 });
+    }
+    changed = true;
+
+    if (parsed.data.priority && parsed.data.priority !== existing.priority) {
+      const admin = createSupabaseAdminClient();
+      await admin.from('conversation_events').insert({
+        workspace_id: actor.profile.workspace_id,
+        conversation_id: id,
+        contact_id: existing.contact_id,
+        event_type: 'priority_changed',
+        actor_id: actor.user.id,
+        payload: { from: existing.priority, priority: parsed.data.priority },
+      });
+    }
+  }
+
+  if (parsed.data.lifecycle_key !== undefined) {
+    if (!existing.contact_id) return NextResponse.json({ error: 'Conversation contact is not initialized.' }, { status: 409 });
+    const { error: lifecycleError } = await actor.supabase
+      .from('contacts')
+      .update({ lifecycle_key: parsed.data.lifecycle_key, updated_at: new Date().toISOString() })
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', existing.contact_id);
+    if (lifecycleError) return NextResponse.json({ error: 'Unable to update contact lifecycle.' }, { status: 500 });
+
+    const admin = createSupabaseAdminClient();
+    await admin.from('conversation_events').insert({
+      workspace_id: actor.profile.workspace_id,
+      conversation_id: id,
+      contact_id: existing.contact_id,
+      event_type: 'lifecycle_changed',
+      actor_id: actor.user.id,
+      payload: { lifecycle_key: parsed.data.lifecycle_key },
+    });
+    changed = true;
+  }
+
+  if (!changed) return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });
 
   const { data: updated, error } = await actor.supabase
     .from('lead_conversations')
-    .update(patch)
+    .select(CONVERSATION_SELECT)
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', id)
-    .select()
     .maybeSingle();
-
-  if (error) {
-    console.error('Failed to update conversation:', error.message);
-    return NextResponse.json({ error: 'Unable to update conversation.' }, { status: 500 });
-  }
-  if (!updated) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+  if (error || !updated) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
 
   return NextResponse.json({ conversation: updated });
 }
