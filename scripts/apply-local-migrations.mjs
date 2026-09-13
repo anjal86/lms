@@ -58,7 +58,7 @@ try {
 }
 
 if (!exists("select to_regclass('public.profiles') is not null and to_regclass('public.leads') is not null")) {
-  console.error('The local database does not contain the base Wanderlust schema. Do not apply incremental repairs to this database.');
+  console.error('The local database does not contain the base CRM schema. Do not apply incremental repairs to this database.');
   console.error('Create a fresh local database volume or restore a valid database first.');
   process.exit(1);
 }
@@ -86,9 +86,10 @@ const migrations = [
   { file: '202609120024_dynamic_business_platform.sql', applied: () => exists("select to_regclass('public.workspaces') is not null and to_regclass('public.field_definitions') is not null and to_regprocedure('public.apply_business_template(uuid,text)') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='custom_data')") },
   { file: '202609120025_workspace_runtime_integrity.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_profiles_workspace_membership' and not tgisinternal) and position('v_business_type' in pg_get_functiondef(to_regprocedure('public.prepare_lead()'))) > 0") },
   { file: '202609120026_business_configuration_provenance.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='field_definitions' and column_name='definition_source') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='pipelines' and column_name='definition_source')") },
+  { file: '202609120027_adaptive_inbox_conversion.sql', applied: () => exists("select to_regprocedure('public.convert_conversation_to_business_lead(uuid,text,text,text,text,text,text,uuid,text,jsonb)') is not null and to_regprocedure('public.repair_workspace_pipeline_assignments(uuid)') is not null") },
 ];
 
-console.log('\nChecking local Wanderlust database migrations...\n');
+console.log('\nChecking local CRM database migrations...\n');
 let changed = false;
 
 for (const migration of migrations) {
