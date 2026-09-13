@@ -13,6 +13,7 @@ const updateSchema = z.object({
   currency: z.string().trim().length(3).transform((value) => value.toUpperCase()).optional(),
   locale: z.string().trim().min(2).max(35).optional(),
   terminology: z.record(z.string(), z.string().trim().min(1).max(80)).optional(),
+  modules: z.record(z.string().regex(/^[a-z0-9_-]+$/), z.boolean()).optional(),
 }).refine((value) => Object.keys(value).length > 0, { message: 'No configuration changes supplied.' });
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -40,7 +41,7 @@ async function loadWorkspaceConfig(actor: ApiActor): Promise<WorkspaceConfig> {
       .single(),
     actor.supabase
       .from('field_definitions')
-      .select('id,entity_type,field_key,label,field_type,section_key,description,options,validation,default_value,is_required,is_searchable,is_filterable,is_system,is_active,sort_order')
+      .select('id,entity_type,field_key,label,field_type,section_key,description,options,validation,default_value,is_required,is_searchable,is_filterable,is_system,is_active,sort_order,definition_source')
       .eq('workspace_id', workspaceId)
       .eq('is_active', true)
       .order('sort_order', { ascending: true }),
@@ -51,7 +52,7 @@ async function loadWorkspaceConfig(actor: ApiActor): Promise<WorkspaceConfig> {
       .order('sort_order', { ascending: true }),
     actor.supabase
       .from('pipelines')
-      .select('id,pipeline_key,name,description,is_default,is_active')
+      .select('id,pipeline_key,name,description,is_default,is_active,definition_source')
       .eq('workspace_id', workspaceId)
       .eq('is_active', true)
       .order('is_default', { ascending: false }),
@@ -88,6 +89,7 @@ async function loadWorkspaceConfig(actor: ApiActor): Promise<WorkspaceConfig> {
     description: row.description,
     is_default: Boolean(row.is_default),
     is_active: Boolean(row.is_active),
+    definition_source: row.definition_source === 'custom' ? 'custom' : 'template',
     stages: stageRows
       .filter((stage) => stage.pipeline_id === row.id)
       .map((stage) => ({
@@ -117,14 +119,15 @@ async function loadWorkspaceConfig(actor: ApiActor): Promise<WorkspaceConfig> {
     },
     fields: (fieldsResult.data || []).map((field) => ({
       ...field,
+      definition_source: field.definition_source === 'custom' ? 'custom' : 'template',
       options: Array.isArray(field.options) ? field.options : [],
       validation: asRecord(field.validation),
     })),
-    modules: (modulesResult.data || []).map((module) => ({
-      module_key: module.module_key,
-      is_enabled: Boolean(module.is_enabled),
-      settings: asRecord(module.settings),
-      sort_order: Number(module.sort_order || 100),
+    modules: (modulesResult.data || []).map((moduleRow) => ({
+      module_key: moduleRow.module_key,
+      is_enabled: Boolean(moduleRow.is_enabled),
+      settings: asRecord(moduleRow.settings),
+      sort_order: Number(moduleRow.sort_order || 100),
     })),
     pipelines,
     templates: (templatesResult.data || []).map((template) => ({
@@ -169,6 +172,11 @@ export async function PATCH(request: Request) {
         p_template_key: parsed.data.templateKey,
       });
       if (error) throw error;
+
+      const { error: repairError } = await actor.supabase.rpc('repair_workspace_pipeline_assignments', {
+        p_workspace_id: actor.profile.workspace_id,
+      });
+      if (repairError) throw repairError;
     }
 
     const workspacePatch: Record<string, unknown> = {};
@@ -196,6 +204,19 @@ export async function PATCH(request: Request) {
         .update(workspacePatch)
         .eq('id', actor.profile.workspace_id);
       if (error) throw error;
+    }
+
+    if (parsed.data.modules) {
+      for (const [moduleKey, isEnabled] of Object.entries(parsed.data.modules)) {
+        const { error } = await actor.supabase
+          .from('workspace_modules')
+          .upsert({
+            workspace_id: actor.profile.workspace_id,
+            module_key: moduleKey,
+            is_enabled: isEnabled,
+          }, { onConflict: 'workspace_id,module_key' });
+        if (error) throw error;
+      }
     }
 
     return NextResponse.json(await loadWorkspaceConfig(actor), { headers: { 'Cache-Control': 'no-store' } });
