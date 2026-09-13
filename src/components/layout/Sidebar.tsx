@@ -102,6 +102,7 @@ export default function Sidebar() {
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     ...(inboxEnabled ? [
       { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
+      { label: 'Work Queue', href: '/inbox/operations', icon: ListChecks, tone: 'blue' as const },
       { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
     ] : []),
     ...(leadsEnabled ? [
@@ -117,6 +118,7 @@ export default function Sidebar() {
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     ...(inboxEnabled ? [
       { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' as const },
+      { label: 'Work Queue', href: '/inbox/operations', icon: ListChecks, tone: 'cyan' as const },
       { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
     ] : []),
     ...(leadsEnabled ? [
