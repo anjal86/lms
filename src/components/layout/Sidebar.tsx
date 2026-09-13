@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { canAccessSettings } from '@/lib/permissions';
 import {
   LayoutDashboard,
@@ -20,6 +21,7 @@ import {
   UserCog,
   ListChecks,
   PlugZap,
+  Building2,
 } from 'lucide-react';
 
 type NavTone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet' | 'rose';
@@ -84,8 +86,13 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, logout } = useApp();
+  const { config, term } = useWorkspace();
   const canManage = canAccessSettings(currentUser.role);
   const isAgent = currentUser.role === 'agent';
+  const leadPlural = term('lead_plural', 'Leads');
+  const workspaceName = config.workspace.name || 'Workspace';
+  const workspaceLabel = term('workspace_label', 'Business Workspace');
+  const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'W';
 
   const agentItems: NavItem[] = [
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
@@ -100,7 +107,7 @@ export default function Sidebar() {
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' },
     { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' },
-    { label: 'All Leads', href: '/leads', icon: Kanban, tone: 'cyan' },
+    { label: `All ${leadPlural}`, href: '/leads', icon: Kanban, tone: 'cyan' },
     { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' },
     { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },
   ];
@@ -113,6 +120,7 @@ export default function Sidebar() {
 
   const adminItems: NavItem[] = canManage
     ? [
+        { label: 'Business Setup', href: '/settings/business', icon: Building2, tone: 'blue' },
         { label: 'Connections', href: '/connections', icon: PlugZap, tone: 'cyan' },
         { label: 'Users', href: '/team/users', icon: UserCog, tone: 'emerald' },
         { label: 'Activity Log', href: '/audit', icon: History, tone: 'violet' },
@@ -127,11 +135,11 @@ export default function Sidebar() {
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-slate-800/80 bg-[linear-gradient(180deg,#081226_0%,#0b1730_48%,#10172a_100%)] text-slate-300 md:flex">
       <div className="flex h-16 items-center border-b border-white/[0.07] px-4">
-        <Link href="/dashboard" className="flex items-center gap-3 rounded-lg" aria-label="Wanderlust home">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-xs font-bold text-white shadow-lg shadow-blue-950/30 ring-1 ring-white/20">W</span>
+        <Link href="/dashboard" className="flex min-w-0 items-center gap-3 rounded-lg" aria-label={`${workspaceName} home`}>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-xs font-bold text-white shadow-lg shadow-blue-950/30 ring-1 ring-white/20">{workspaceInitial}</span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold tracking-[-0.01em] text-white">Wanderlust</span>
-            <span className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-300/60">Travel Workspace</span>
+            <span className="block truncate text-sm font-semibold tracking-[-0.01em] text-white">{workspaceName}</span>
+            <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-300/60">{workspaceLabel}</span>
           </span>
         </Link>
       </div>
@@ -164,7 +172,7 @@ export default function Sidebar() {
           {isAgent && (
             <>
               <div className="mt-3 flex items-center justify-between text-[10px] text-slate-500">
-                <span>My active leads</span>
+                <span>My active {leadPlural.toLowerCase()}</span>
                 <span className="font-mono text-slate-300">{currentUser.current_load}/{currentUser.max_capacity}</span>
               </div>
               <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-800">
