@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
@@ -10,10 +11,14 @@ function initials(name: string) {
 
 export default function AnalyticsPage() {
   const { allLeads, allProfiles, activities, formatCurrency } = useApp();
+  const { config, term } = useWorkspace();
+  const leadPlural = term('lead_plural', 'Leads');
+  const dealLabel = term('deal', 'Deal');
+  const dealPlural = term('deal_plural', 'Deals');
 
   useEffect(() => {
-    document.title = 'Performance — Wanderlust CRM';
-  }, []);
+    document.title = `Performance — ${config.workspace.name}`;
+  }, [config.workspace.name]);
 
   const metrics = useMemo(() => {
     const won = allLeads.filter((lead) => lead.stage === 'won');
@@ -66,31 +71,31 @@ export default function AnalyticsPage() {
     <div className="app-page">
       <header className="page-header">
         <div>
-          <p className="page-eyebrow">Insights</p>
+          <p className="page-eyebrow">Insights · {config.workspace.name}</p>
           <h1 className="page-title flex items-center gap-2"><BarChart3 className="h-5 w-5 text-zinc-400" /> Team performance</h1>
-          <p className="page-description">A simple view of conversion, response speed, and each consultant’s active workload.</p>
+          <p className="page-description">Conversion, response speed and active workload across your configured business workflow.</p>
         </div>
       </header>
 
       <section className="metric-grid" aria-label="Performance summary">
-        <div className="metric"><div className="metric-label">Win rate</div><div className="metric-value">{metrics.winRate}%</div><div className="metric-hint">{metrics.wonCount} won from {metrics.closedCount} closed</div></div>
-        <div className="metric"><div className="metric-label">Average first reply</div><div className="metric-value">{metrics.averageResponseMinutes}m</div><div className="metric-hint">Across leads with a recorded first response</div></div>
+        <div className="metric"><div className="metric-label">Win rate</div><div className="metric-value">{metrics.winRate}%</div><div className="metric-hint">{metrics.wonCount} won from {metrics.closedCount} closed {dealPlural.toLowerCase()}</div></div>
+        <div className="metric"><div className="metric-label">Average first reply</div><div className="metric-value">{metrics.averageResponseMinutes}m</div><div className="metric-hint">Across {leadPlural.toLowerCase()} with a recorded first response</div></div>
         <div className="metric"><div className="metric-label">Replies on time</div><div className="metric-value">{metrics.responseOnTime}%</div><div className="metric-hint">{metrics.lateReplies} late first replies</div></div>
-        <div className="metric"><div className="metric-label">Won value</div><div className="metric-value">{formatCurrency(metrics.wonValue)}</div><div className="metric-hint">Confirmed package value</div></div>
+        <div className="metric"><div className="metric-label">Won value</div><div className="metric-value">{formatCurrency(metrics.wonValue)}</div><div className="metric-hint">Value attached to won {dealPlural.toLowerCase()}</div></div>
       </section>
 
       <section className="surface-flat overflow-hidden">
         <div className="panel-header">
-          <div><h2 className="section-heading">Consultants</h2><p className="section-description">Ordered by won deals, then response speed.</p></div>
+          <div><h2 className="section-heading">Team members</h2><p className="section-description">Ordered by won {dealPlural.toLowerCase()}, then response speed.</p></div>
         </div>
 
         {leaderboard.length === 0 ? (
-          <div className="empty-state"><BarChart3 className="h-5 w-5 text-zinc-300" /><h2 className="empty-state-title mt-3">No consultant data yet</h2><p className="empty-state-description">Performance appears after leads are assigned and worked.</p></div>
+          <div className="empty-state"><BarChart3 className="h-5 w-5 text-zinc-300" /><h2 className="empty-state-title mt-3">No performance data yet</h2><p className="empty-state-description">Performance appears after {leadPlural.toLowerCase()} are assigned and worked.</p></div>
         ) : (
           <>
             <div className="hidden overflow-x-auto md:block">
               <table>
-                <thead><tr><th className="w-16">Rank</th><th>Consultant</th><th>Active</th><th>Won</th><th>Win rate</th><th>Avg reply</th><th>Late replies</th><th className="text-right">Won value</th></tr></thead>
+                <thead><tr><th className="w-16">Rank</th><th>Team member</th><th>Active</th><th>Won</th><th>Win rate</th><th>Avg reply</th><th>Late replies</th><th className="text-right">Won value</th></tr></thead>
                 <tbody>
                   {leaderboard.map((agent, index) => (
                     <tr key={agent.id}>
@@ -120,7 +125,7 @@ export default function AnalyticsPage() {
                   <div className="mt-3 grid grid-cols-3 gap-3 border-t border-line pt-3">
                     <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Win rate</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{agent.winRate}%</div></div>
                     <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Avg reply</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{agent.averageResponse == null ? '—' : `${agent.averageResponse}m`}</div></div>
-                    <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Won value</div><div className="mt-1 truncate font-mono text-xs font-semibold text-zinc-800">{formatCurrency(agent.wonValue)}</div></div>
+                    <div><div className="text-[10px] uppercase tracking-wide text-zinc-400">{dealLabel} value</div><div className="mt-1 truncate font-mono text-xs font-semibold text-zinc-800">{formatCurrency(agent.wonValue)}</div></div>
                   </div>
                 </article>
               ))}
