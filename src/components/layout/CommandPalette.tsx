@@ -25,6 +25,7 @@ import {
   ListChecks,
   LayoutDashboard,
   PlugZap,
+  Zap,
 } from 'lucide-react';
 
 interface CommandPaletteProps {
@@ -61,6 +62,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   const leadLabel = term('lead', 'Lead');
   const leadPlural = term('lead_plural', 'Leads');
   const contactLabel = term('contact', 'Contact');
+  const contactPlural = term('contact_plural', 'Contacts');
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -128,7 +130,10 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const agentNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    ...(inboxEnabled ? [{ label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare }] : []),
+    ...(inboxEnabled ? [
+      { label: 'Inbox', hint: 'Omnichannel customer conversations and work queues', path: '/inbox', icon: MessageSquare },
+      { label: contactPlural, hint: 'Customer identity, channels and lifecycle', path: '/contacts', icon: Users },
+    ] : []),
     ...(leadsEnabled ? [{ label: 'My Work', hint: `Your active ${leadPlural.toLowerCase()}`, path: '/my-work', icon: ListChecks }] : []),
     ...(tasksEnabled ? [{ label: 'Follow-ups', hint: `${contactLabel}s to contact again`, path: '/my-follow-ups', icon: CalendarClock }] : []),
     { label: 'Messages', hint: 'Saved message templates', path: '/templates', icon: MessageSquareQuote },
@@ -137,7 +142,11 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const managementNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    ...(inboxEnabled ? [{ label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare }] : []),
+    ...(inboxEnabled ? [
+      { label: 'Inbox', hint: 'Omnichannel customer conversations and work queues', path: '/inbox', icon: MessageSquare },
+      { label: contactPlural, hint: 'Customer identity, channels and lifecycle', path: '/contacts', icon: Users },
+      { label: 'Automations', hint: 'Routing and multi-step Inbox workflows', path: '/settings/automations', icon: Zap },
+    ] : []),
     ...(leadsEnabled ? [{ label: `All ${leadPlural}`, hint: `View every ${leadLabel.toLowerCase()} in one configured pipeline`, path: '/leads', icon: ArrowRight }] : []),
     { label: 'Connections', hint: 'Connect Facebook, Instagram, WhatsApp, TikTok, email and forms', path: '/connections', icon: PlugZap },
     ...(tasksEnabled ? [{ label: 'Follow-ups', hint: 'Upcoming and overdue follow-ups', path: '/follow-ups', icon: CalendarClock }] : []),
@@ -158,6 +167,10 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
     ? [{ label: `Add ${leadLabel}`, hint: `Create a new ${leadLabel.toLowerCase()}`, action: () => { onClose(); onOpenNewLead?.(); }, icon: Plus }]
     : [];
   const managementActions = [
+    ...(inboxEnabled ? [
+      { label: 'Open unassigned Inbox', hint: 'Work conversations that still need an owner', action: () => { onClose(); router.push('/inbox?view=unassigned'); }, icon: MessageSquare },
+      { label: 'Open SLA overdue', hint: 'See conversations that missed first response SLA', action: () => { onClose(); router.push('/inbox?view=sla_overdue'); }, icon: Zap },
+    ] : []),
     { label: 'Connect a lead source', hint: 'Open omnichannel connections', action: () => { onClose(); router.push('/connections'); }, icon: PlugZap },
     ...(leadsEnabled && isTravel ? [{ label: `Import ${leadPlural}`, hint: 'Upload a Travel CSV file', action: () => { onClose(); onOpenCsv?.(); }, icon: FileSpreadsheet }] : []),
     ...(leadsEnabled ? [{
