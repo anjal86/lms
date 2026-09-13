@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
+import { WorkspaceProvider } from '@/lib/platform/WorkspaceContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import MobileBottomNav from './MobileBottomNav';
@@ -15,6 +16,7 @@ const AGENT_REDIRECTS: Record<string, string> = {
   '/incentives': '/dashboard',
   '/team': '/dashboard',
   '/settings': '/dashboard',
+  '/settings/business': '/dashboard',
   '/audit': '/dashboard',
   '/connections': '/dashboard',
 };
@@ -78,25 +80,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isInbox = pathname === '/inbox';
 
   return (
-    <div className="app-shell flex h-screen overflow-hidden">
-      <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header />
-        <main
-          id="main-content"
-          tabIndex={-1}
-          className={
-            isInbox
-              ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden p-2 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-3 md:pb-3 lg:p-4 lg:pb-4 bg-zinc-100/70'
-              : 'app-main'
-          }
-        >
-          <div className={isInbox ? 'h-full w-full min-w-0 overflow-hidden' : 'app-page-frame'}>
-            {children}
-          </div>
-        </main>
-        <MobileBottomNav />
+    <WorkspaceProvider>
+      <div className="app-shell flex h-screen overflow-hidden">
+        <Sidebar />
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Header />
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className={
+              isInbox
+                ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden p-2 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-3 md:pb-3 lg:p-4 lg:pb-4 bg-zinc-100/70'
+                : 'app-main'
+            }
+          >
+            <div className={isInbox ? 'h-full w-full min-w-0 overflow-hidden' : 'app-page-frame'}>
+              {children}
+            </div>
+          </main>
+          <MobileBottomNav />
+        </div>
       </div>
-    </div>
+    </WorkspaceProvider>
   );
 }
