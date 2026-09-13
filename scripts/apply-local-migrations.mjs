@@ -68,70 +68,23 @@ const functionDefinitionContains = (signature, marker) => exists(
 );
 
 const migrations = [
-  {
-    file: '202609120009_management_audit_log.sql',
-    applied: () => exists("select to_regclass('public.audit_events') is not null"),
-  },
-  {
-    file: '202609120010_lead_readiness_score.sql',
-    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='lead_score')"),
-  },
-  {
-    file: '202609120011_normalized_operations_and_active_users.sql',
-    applied: () => exists("select to_regclass('public.lead_quotes') is not null and to_regprocedure('public.current_user_active()') is not null"),
-  },
-  {
-    file: '202609120012_server_dashboard_queries.sql',
-    applied: () => exists("select to_regprocedure('public.dashboard_operational_summary()') is not null and to_regprocedure('public.lead_pipeline_summary()') is not null"),
-  },
-  {
-    file: '202609120013_omnichannel_integrations.sql',
-    applied: () => exists("select to_regclass('public.integration_connections') is not null and to_regclass('public.lead_messages') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='source_channel')"),
-  },
-  {
-    file: '202609120014_inbox_and_lead_conversion.sql',
-    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='lead_id' and is_nullable='YES') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='customer_name')"),
-  },
-  {
-    file: '202609120015_full_unique_indexes_for_upsert.sql',
-    applied: () => exists("select to_regclass('public.idx_lead_messages_provider_ext_msg_full') is not null"),
-  },
-  {
-    file: '202609120016_inbox_security_and_integrity.sql',
-    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='delivery_status') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='converted_at')"),
-  },
-  {
-    file: '202609120017_omnichannel_delivery_and_retry.sql',
-    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='provider_message_id')"),
-  },
-  {
-    file: '202609120018_customer_profile_integrity.sql',
-    applied: () => exists("select to_regprocedure('public.update_conversation_location(uuid,text,text)') is not null"),
-  },
-  {
-    file: '202609120019_customer_profile_merge_protection.sql',
-    applied: () => exists("select to_regprocedure('public.merge_customer_profile_jsonb(jsonb,jsonb)') is not null and exists(select 1 from pg_trigger where tgname='trg_preserve_conversation_customer_metadata' and not tgisinternal)"),
-  },
-  {
-    file: '202609120020_sync_cursor_safety.sql',
-    applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_preserve_integration_cursor_on_error' and not tgisinternal)"),
-  },
-  {
-    file: '202609120021_customer_profile_merge_consistency.sql',
-    applied: () => functionDefinitionContains('public.merge_customer_profile_jsonb(jsonb,jsonb)', 'v_existing_country'),
-  },
-  {
-    file: '202609120022_profile_load_trigger_integrity.sql',
-    applied: () => functionDefinitionContains('public.protect_profile_privileged_fields()', 'pg_trigger_depth() > 1'),
-  },
-  {
-    file: '202609120023_phone_lead_index_integrity.sql',
-    applied: () => exists("select to_regprocedure('public.extract_phone_numbers_from_text(text)') is not null and exists(select 1 from pg_trigger where tgname='trg_index_phone_from_lead_message' and not tgisinternal)"),
-  },
-  {
-    file: '202609120024_dynamic_business_platform.sql',
-    applied: () => exists("select to_regclass('public.workspaces') is not null and to_regclass('public.field_definitions') is not null and to_regprocedure('public.apply_business_template(uuid,text)') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='custom_data')"),
-  },
+  { file: '202609120009_management_audit_log.sql', applied: () => exists("select to_regclass('public.audit_events') is not null") },
+  { file: '202609120010_lead_readiness_score.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='lead_score')") },
+  { file: '202609120011_normalized_operations_and_active_users.sql', applied: () => exists("select to_regclass('public.lead_quotes') is not null and to_regprocedure('public.current_user_active()') is not null") },
+  { file: '202609120012_server_dashboard_queries.sql', applied: () => exists("select to_regprocedure('public.dashboard_operational_summary()') is not null and to_regprocedure('public.lead_pipeline_summary()') is not null") },
+  { file: '202609120013_omnichannel_integrations.sql', applied: () => exists("select to_regclass('public.integration_connections') is not null and to_regclass('public.lead_messages') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='source_channel')") },
+  { file: '202609120014_inbox_and_lead_conversion.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='lead_id' and is_nullable='YES') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='customer_name')") },
+  { file: '202609120015_full_unique_indexes_for_upsert.sql', applied: () => exists("select to_regclass('public.idx_lead_messages_provider_ext_msg_full') is not null") },
+  { file: '202609120016_inbox_security_and_integrity.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='delivery_status') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='converted_at')") },
+  { file: '202609120017_omnichannel_delivery_and_retry.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_messages' and column_name='provider_message_id')") },
+  { file: '202609120018_customer_profile_integrity.sql', applied: () => exists("select to_regprocedure('public.update_conversation_location(uuid,text,text)') is not null") },
+  { file: '202609120019_customer_profile_merge_protection.sql', applied: () => exists("select to_regprocedure('public.merge_customer_profile_jsonb(jsonb,jsonb)') is not null and exists(select 1 from pg_trigger where tgname='trg_preserve_conversation_customer_metadata' and not tgisinternal)") },
+  { file: '202609120020_sync_cursor_safety.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_preserve_integration_cursor_on_error' and not tgisinternal)") },
+  { file: '202609120021_customer_profile_merge_consistency.sql', applied: () => functionDefinitionContains('public.merge_customer_profile_jsonb(jsonb,jsonb)', 'v_existing_country') },
+  { file: '202609120022_profile_load_trigger_integrity.sql', applied: () => functionDefinitionContains('public.protect_profile_privileged_fields()', 'pg_trigger_depth() > 1') },
+  { file: '202609120023_phone_lead_index_integrity.sql', applied: () => exists("select to_regprocedure('public.extract_phone_numbers_from_text(text)') is not null and exists(select 1 from pg_trigger where tgname='trg_index_phone_from_lead_message' and not tgisinternal)") },
+  { file: '202609120024_dynamic_business_platform.sql', applied: () => exists("select to_regclass('public.workspaces') is not null and to_regclass('public.field_definitions') is not null and to_regprocedure('public.apply_business_template(uuid,text)') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='leads' and column_name='custom_data')") },
+  { file: '202609120025_workspace_runtime_integrity.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_profiles_workspace_membership' and not tgisinternal) and position('v_business_type' in pg_get_functiondef(to_regprocedure('public.prepare_lead()'))) > 0") },
 ];
 
 console.log('\nChecking local Wanderlust database migrations...\n');
