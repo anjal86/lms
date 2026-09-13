@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const search = sanitizeSearch(url.searchParams.get('search') || '');
   const lifecycle = url.searchParams.get('lifecycle') || '';
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 100));
+  const limit = Math.min(300, Math.max(1, Number(url.searchParams.get('limit')) || 100));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
 
   let query = actor.supabase
@@ -33,7 +33,8 @@ export async function GET(request: Request) {
       last_seen_at,
       created_at,
       updated_at,
-      owner:profiles!contacts_owner_id_fkey(id,full_name,email,role,status)
+      owner:profiles!contacts_owner_id_fkey(id,full_name,email,role,status),
+      identities:contact_identities(provider,identity_type,identity_value,is_primary,created_at)
     `, { count: 'exact' })
     .eq('workspace_id', actor.profile.workspace_id);
 
