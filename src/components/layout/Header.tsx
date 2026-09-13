@@ -24,11 +24,11 @@ import {
   Trophy,
   MessageSquareQuote,
   MessageSquare,
-  Phone,
   Settings,
   LogOut,
   LayoutDashboard,
   ListChecks,
+  Zap,
 } from 'lucide-react';
 import LeadModal from '../leads/LeadModal';
 import CsvImportModal from '../leads/CsvImportModal';
@@ -59,6 +59,7 @@ export default function Header() {
   const tasksEnabled = moduleEnabled('tasks', true);
   const leadLabel = term('lead', 'Lead');
   const leadPlural = term('lead_plural', 'Leads');
+  const contactPlural = term('contact_plural', 'Contacts');
   const workspaceName = config.workspace.name || 'Workspace';
   const workspaceLabel = term('workspace_label', 'Business Workspace');
   const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'C';
@@ -68,7 +69,7 @@ export default function Header() {
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         ...(inboxEnabled ? [
           { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-          { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
+          { label: contactPlural, href: '/contacts', icon: Users },
         ] : []),
         ...(leadsEnabled ? [{ label: 'My Work', href: '/my-work', icon: ListChecks }] : []),
         ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock }] : []),
@@ -78,7 +79,8 @@ export default function Header() {
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         ...(inboxEnabled ? [
           { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-          { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
+          { label: contactPlural, href: '/contacts', icon: Users },
+          ...(canManage ? [{ label: 'Automations', href: '/settings/automations', icon: Zap }] : []),
         ] : []),
         ...(leadsEnabled ? [{ label: `All ${leadPlural}`, href: '/leads', icon: Kanban }] : []),
         ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock }] : []),
@@ -310,7 +312,7 @@ export default function Header() {
               <button type="button" onClick={() => setIsMobileNavOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-900 hover:text-white" aria-label="Close menu"><X className="h-5 w-5" /></button>
             </div>
 
-            <nav className="flex-1 space-y-1">
+            <nav className="flex-1 space-y-1 overflow-y-auto">
               {mobileNavItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
