@@ -11,7 +11,7 @@ const PUBLIC_PATHS = [
 ];
 
 const MODULE_PATHS: Array<{ moduleKey: string; paths: string[] }> = [
-  { moduleKey: 'inbox', paths: ['/inbox', '/api/conversations'] },
+  { moduleKey: 'inbox', paths: ['/inbox', '/contacts', '/settings/automations', '/api/conversations', '/api/contacts', '/api/automations'] },
   { moduleKey: 'leads', paths: ['/leads', '/my-work', '/api/leads'] },
   { moduleKey: 'tasks', paths: ['/follow-ups', '/my-follow-ups'] },
   { moduleKey: 'documents', paths: ['/api/documents'] },
@@ -102,8 +102,6 @@ export async function proxy(request: NextRequest) {
         return new NextResponse('Unable to verify module access.', { status: 503 });
       }
 
-      // Missing rows are treated as enabled for legacy workspaces. An explicit false
-      // is authoritative and cannot be bypassed by a deep link or direct API call.
       if (workspaceModule?.is_enabled === false) {
         if (pathname.startsWith('/api/')) {
           return NextResponse.json({ error: 'This module is disabled for the active workspace.' }, { status: 403 });
