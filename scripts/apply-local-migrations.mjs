@@ -89,6 +89,7 @@ const migrations = [
   { file: '202609120027_adaptive_inbox_conversion.sql', applied: () => exists("select to_regprocedure('public.convert_conversation_to_business_lead(uuid,text,text,text,text,text,text,uuid,text,jsonb)') is not null and to_regprocedure('public.repair_workspace_pipeline_assignments(uuid)') is not null") },
   { file: '202609120028_configurable_pipeline_editor.sql', applied: () => exists("select to_regprocedure('public.save_workspace_pipeline(uuid,text,jsonb)') is not null") },
   { file: '202609120029_pipeline_legacy_stage_sync.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_sync_lead_legacy_stage_from_pipeline' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_sync_pipeline_stage_legacy_leads' and not tgisinternal)") },
+  { file: '202609120030_conversation_operations_platform.sql', applied: () => exists("select to_regclass('public.contacts') is not null and to_regclass('public.conversation_events') is not null and to_regclass('public.automation_workflows') is not null and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='workflow_state') and to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)') is not null") },
 ];
 
 console.log('\nChecking local CRM database migrations...\n');
