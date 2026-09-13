@@ -2,7 +2,9 @@
 
 import React from 'react';
 import { useDialog } from '@/lib/useDialog';
-import { Keyboard, X, Command } from 'lucide-react';
+import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
+import { Keyboard, X } from 'lucide-react';
 
 interface KeyboardShortcutsModalProps {
   isOpen: boolean;
@@ -14,8 +16,23 @@ export default function KeyboardShortcutsModal({
   onClose,
 }: KeyboardShortcutsModalProps) {
   useDialog({ isOpen, onClose });
+  const { currentUser } = useApp();
+  const { term, moduleEnabled } = useWorkspace();
 
   if (!isOpen) return null;
+
+  const isAgent = currentUser.role === 'agent';
+  const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
+  const leadsEnabled = moduleEnabled('leads', true);
+  const tasksEnabled = moduleEnabled('tasks', true);
+  const leadLabel = term('lead', 'Lead');
+  const leadPlural = term('lead_plural', 'Leads');
+
+  const navigationItems = [
+    ...(leadsEnabled ? [{ keys: ['G', 'L'], desc: isAgent ? `Go to My ${leadPlural}` : `Go to ${leadPlural}` }] : []),
+    ...(tasksEnabled ? [{ keys: ['G', 'F'], desc: 'Go to Follow-Up Agenda' }] : []),
+    ...(canManage ? [{ keys: ['G', 'T'], desc: 'Go to Team Directory' }] : []),
+  ];
 
   const shortcutGroups = [
     {
@@ -26,21 +43,11 @@ export default function KeyboardShortcutsModal({
         { keys: ['Esc'], desc: 'Dismiss open modal, drawer, or menu' },
       ],
     },
-    {
-      title: 'Quick Page Navigation (Press G then...)',
-      items: [
-        { keys: ['G', 'L'], desc: 'Go to Leads Pipeline' },
-        { keys: ['G', 'F'], desc: 'Go to Follow-Up Agenda' },
-        { keys: ['G', 'T'], desc: 'Go to Team Directory' },
-        { keys: ['G', 'P'], desc: 'Go to Performance Analytics' },
-        { keys: ['G', 'I'], desc: 'Go to Incentives & Ledger' },
-        { keys: ['G', 'S'], desc: 'Go to Agency Settings' },
-      ],
-    },
+    ...(navigationItems.length > 0 ? [{ title: 'Quick Page Navigation (Press G then...)', items: navigationItems }] : []),
     {
       title: 'Actions & Ergonomics',
       items: [
-        { keys: ['N'], desc: 'Quick Open New Lead Intake' },
+        ...(leadsEnabled ? [{ keys: ['N'], desc: `Quick Open New ${leadLabel}` }] : []),
         { keys: ['Tab'], desc: 'Navigate between fields / buttons' },
         { keys: ['Enter'], desc: 'Submit dialog / Confirm action' },
       ],
@@ -60,7 +67,6 @@ export default function KeyboardShortcutsModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 backdrop-blur-xs p-4 overflow-y-auto animate-in fade-in duration-100"
     >
       <div className="bg-white rounded-lg border border-zinc-200 shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-100">
-        {/* Header */}
         <div className="px-4 py-3 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/70">
           <div className="flex items-center gap-2">
             <Keyboard className="w-4 h-4 text-zinc-700" />
@@ -78,7 +84,6 @@ export default function KeyboardShortcutsModal({
           </button>
         </div>
 
-        {/* Shortcuts List */}
         <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto text-xs">
           {shortcutGroups.map((group) => (
             <div key={group.title} className="space-y-2">
@@ -109,7 +114,6 @@ export default function KeyboardShortcutsModal({
           ))}
         </div>
 
-        {/* Footer tip */}
         <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between text-[11px] text-zinc-400">
           <span>Press <kbd className="font-mono text-[10px] px-1 rounded bg-zinc-200 text-zinc-700">?</kbd> anytime to open</span>
           <button
