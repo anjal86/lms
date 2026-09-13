@@ -74,8 +74,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     error,
     refresh,
     moduleEnabled: (moduleKey, fallback = false) => {
-      const module = config.modules.find((item) => item.module_key === moduleKey);
-      return module ? module.is_enabled : fallback;
+      const workspaceModule = config.modules.find((item) => item.module_key === moduleKey);
+      return workspaceModule ? workspaceModule.is_enabled : fallback;
     },
     term: (key, fallback) => config.workspace.terminology[key] || fallback || key,
   }), [config, error, isLoading, refresh]);
