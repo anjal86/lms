@@ -10,8 +10,21 @@ const PUBLIC_PATHS = [
   '/api/integrations/webhooks',
 ];
 
+const MODULE_PATHS: Array<{ moduleKey: string; paths: string[] }> = [
+  { moduleKey: 'inbox', paths: ['/inbox', '/api/conversations'] },
+  { moduleKey: 'leads', paths: ['/leads', '/my-work', '/api/leads'] },
+  { moduleKey: 'tasks', paths: ['/follow-ups', '/my-follow-ups'] },
+  { moduleKey: 'documents', paths: ['/api/documents'] },
+];
+
 const safeInternalPath = (value: string | null, fallback = '/leads') =>
   value && value.startsWith('/') && !value.startsWith('//') ? value : fallback;
+
+const pathMatches = (pathname: string, prefix: string) =>
+  pathname === prefix || pathname.startsWith(`${prefix}/`);
+
+const moduleForPath = (pathname: string) =>
+  MODULE_PATHS.find((rule) => rule.paths.some((prefix) => pathMatches(pathname, prefix)))?.moduleKey ?? null;
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -57,6 +70,51 @@ export async function proxy(request: NextRequest) {
     loginUrl.pathname = '/login';
     loginUrl.searchParams.set('returnUrl', `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(loginUrl);
+  }
+
+  if (user && !isPublic) {
+    const moduleKey = moduleForPath(pathname);
+    if (moduleKey) {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('workspace_id,is_active')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profileError || !profile?.workspace_id || !profile.is_active) {
+        if (pathname.startsWith('/api/')) {
+          return NextResponse.json({ error: 'Unable to verify workspace access.' }, { status: 403 });
+        }
+        return new NextResponse('Unable to verify workspace access.', { status: 403 });
+      }
+
+      const { data: workspaceModule, error: moduleError } = await supabase
+        .from('workspace_modules')
+        .select('is_enabled')
+        .eq('workspace_id', profile.workspace_id)
+        .eq('module_key', moduleKey)
+        .maybeSingle();
+
+      if (moduleError) {
+        if (pathname.startsWith('/api/')) {
+          return NextResponse.json({ error: 'Unable to verify module access.' }, { status: 503 });
+        }
+        return new NextResponse('Unable to verify module access.', { status: 503 });
+      }
+
+      // Missing rows are treated as enabled for legacy workspaces. An explicit false
+      // is authoritative and cannot be bypassed by a deep link or direct API call.
+      if (workspaceModule?.is_enabled === false) {
+        if (pathname.startsWith('/api/')) {
+          return NextResponse.json({ error: 'This module is disabled for the active workspace.' }, { status: 403 });
+        }
+        const dashboardUrl = request.nextUrl.clone();
+        dashboardUrl.pathname = '/dashboard';
+        dashboardUrl.search = '';
+        dashboardUrl.searchParams.set('moduleDisabled', moduleKey);
+        return NextResponse.redirect(dashboardUrl);
+      }
+    }
   }
 
   if (user && pathname === '/login') {
