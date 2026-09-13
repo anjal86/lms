@@ -21,7 +21,7 @@ function LoginContent() {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    document.title = 'Sign In · Wanderlust CRM';
+    document.title = 'Sign In · CRM Workspace';
   }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -70,8 +70,8 @@ function LoginContent() {
     <AuthShell
       eyebrow="Secure workspace"
       title="Welcome back"
-      description="Sign in with your agency account to continue to your pipeline and daily action queue."
-      footer={<span>Need access? Contact your agency administrator.</span>}
+      description="Sign in with your workspace account to continue to your CRM and daily action queue."
+      footer={<span>Need access? Contact your workspace administrator.</span>}
     >
       <form onSubmit={handleSubmit} className="space-y-5">
         <div>
@@ -87,7 +87,7 @@ function LoginContent() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               className="field pl-10"
-              placeholder="you@agency.com"
+              placeholder="you@company.com"
             />
           </div>
         </div>
@@ -113,7 +113,7 @@ function LoginContent() {
               type="button"
               onClick={() => setShowPassword((value) => !value)}
               className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-label={showPassword ? 'Conceal credential' : 'Reveal credential'}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
