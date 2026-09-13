@@ -22,6 +22,7 @@ import {
   ListChecks,
   PlugZap,
   Building2,
+  ListPlus,
 } from 'lucide-react';
 
 type NavTone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet' | 'rose';
@@ -121,6 +122,7 @@ export default function Sidebar() {
   const adminItems: NavItem[] = canManage
     ? [
         { label: 'Business Setup', href: '/settings/business', icon: Building2, tone: 'blue' },
+        { label: 'Custom Fields', href: '/settings/business/fields', icon: ListPlus, tone: 'cyan' },
         { label: 'Connections', href: '/connections', icon: PlugZap, tone: 'cyan' },
         { label: 'Users', href: '/team/users', icon: UserCog, tone: 'emerald' },
         { label: 'Activity Log', href: '/audit', icon: History, tone: 'violet' },
