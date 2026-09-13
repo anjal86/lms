@@ -3,6 +3,7 @@
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { CheckCircle2, Plus, Save, X } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import type { AgentStatus, Profile } from '@/lib/types';
 
 const COMMON_DESTINATIONS = [
@@ -16,12 +17,17 @@ function initials(name: string) {
 
 function ProfileForm({ profile }: { profile: Profile }) {
   const { updateProfile, updateUserPreferences } = useApp();
+  const { config, term } = useWorkspace();
+  const isTravel = config.workspace.business_type === 'travel' || config.workspace.template_key === 'travel';
+  const leadPlural = term('lead_plural', 'Leads');
   const [fullName, setFullName] = useState(profile.full_name);
   const [phone, setPhone] = useState(profile.phone || '');
   const [directExtension, setDirectExtension] = useState(profile.direct_extension || '');
   const [officeLocation, setOfficeLocation] = useState(profile.office_location || '');
   const [bio, setBio] = useState(profile.bio || '');
   const [languages, setLanguages] = useState((profile.languages || ['English']).join(', '));
+  // destination_tags is retained as a backwards-compatible storage field. In
+  // non-travel workspaces it represents general expertise/specialty tags.
   const [destinationTags, setDestinationTags] = useState<string[]>(profile.destination_tags || []);
   const [newDestination, setNewDestination] = useState('');
   const [status, setStatus] = useState<AgentStatus>(profile.status);
@@ -113,7 +119,7 @@ function ProfileForm({ profile }: { profile: Profile }) {
           </section>
 
           <section className="surface-flat">
-            <div className="panel-header"><div><h2 className="section-heading">Travel specialties</h2><p className="section-description">Used by managers when assigning destination-specific inquiries.</p></div></div>
+            <div className="panel-header"><div><h2 className="section-heading">{isTravel ? 'Travel specialties' : 'Expertise & specialties'}</h2><p className="section-description">{isTravel ? 'Used by managers when assigning destination-specific inquiries.' : `Used by managers when assigning ${leadPlural.toLowerCase()} that need specific expertise.`}</p></div></div>
             <div className="panel-body">
               <div className="flex flex-wrap gap-2">
                 {destinationTags.length === 0 && <span className="text-xs text-zinc-400">No specialties added yet.</span>}
@@ -122,14 +128,16 @@ function ProfileForm({ profile }: { profile: Profile }) {
                 ))}
               </div>
               <div className="mt-3 flex gap-2">
-                <input value={newDestination} onChange={(event) => setNewDestination(event.target.value)} onKeyDown={handleDestinationKey} className="field" placeholder="Add a destination" />
+                <input value={newDestination} onChange={(event) => setNewDestination(event.target.value)} onKeyDown={handleDestinationKey} className="field" placeholder={isTravel ? 'Add a destination' : 'Add a specialty'} />
                 <button type="button" onClick={() => addDestination(newDestination)} className="button-secondary"><Plus className="h-4 w-4" /> Add</button>
               </div>
-              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
-                {COMMON_DESTINATIONS.filter((destination) => !destinationTags.includes(destination)).slice(0, 12).map((destination) => (
-                  <button key={destination} type="button" onClick={() => addDestination(destination)} className="button-ghost button-sm">+ {destination}</button>
-                ))}
-              </div>
+              {isTravel && (
+                <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
+                  {COMMON_DESTINATIONS.filter((destination) => !destinationTags.includes(destination)).slice(0, 12).map((destination) => (
+                    <button key={destination} type="button" onClick={() => addDestination(destination)} className="button-ghost button-sm">+ {destination}</button>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
         </div>
@@ -140,7 +148,7 @@ function ProfileForm({ profile }: { profile: Profile }) {
             <div className="panel-body space-y-4">
               <label className="block text-xs font-semibold text-zinc-700">Status<select value={status} onChange={(event) => setStatus(event.target.value as AgentStatus)} className="select-field mt-1.5"><option value="available">Available</option><option value="in_call">In call</option><option value="on_break">On break</option><option value="offline">Offline</option></select></label>
               {profile.role === 'agent' && (
-                <label className="flex items-start gap-3 border-t border-line pt-4"><input type="checkbox" checked={acceptingLeads} onChange={(event) => setAcceptingLeads(event.target.checked)} className="mt-0.5" /><span><span className="block text-xs font-semibold text-zinc-800">Accept new leads</span><span className="mt-1 block text-[11px] leading-5 text-zinc-500">Pause this when you should not receive new assignments.</span></span></label>
+                <label className="flex items-start gap-3 border-t border-line pt-4"><input type="checkbox" checked={acceptingLeads} onChange={(event) => setAcceptingLeads(event.target.checked)} className="mt-0.5" /><span><span className="block text-xs font-semibold text-zinc-800">Accept new {leadPlural.toLowerCase()}</span><span className="mt-1 block text-[11px] leading-5 text-zinc-500">Pause this when you should not receive new assignments.</span></span></label>
               )}
             </div>
           </section>
