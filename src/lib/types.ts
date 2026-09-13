@@ -225,23 +225,69 @@ export interface FollowUp {
   agent?: Profile;
 }
 
-export type ActivityType = 'call' | 'whatsapp' | 'email' | 'note' | 'quote' | 'payment' | 'document' | 'stage_change' | 'reassignment' | 'sla_alert' | 'system';
+export interface EmployeeHealthScore {
+  agent_id: string;
+  overall_score: number;
+  grade: 'elite' | 'healthy' | 'attention_needed' | 'burnout_risk';
+  sla_score: number;
+  followup_score: number;
+  conversion_score: number;
+  workload_score: number;
+  avg_frt_minutes: number;
+  on_time_followup_pct: number;
+  active_leads_count: number;
+  overdue_tasks_count: number;
+  capacity_pct: number;
+  last_active_at?: string;
+  recommendations: string[];
+}
+
+export type ActivityType =
+  | 'call'
+  | 'whatsapp'
+  | 'email'
+  | 'note'
+  | 'quote'
+  | 'payment'
+  | 'document'
+  | 'stage_change'
+  | 'reassignment'
+  | 'sla_alert'
+  | 'system';
 
 export interface ActivityLog {
   id: string;
-  lead_id?: string | null;
-  agent_id?: string | null;
+  lead_id: string;
+  agent_id?: string;
   activity_type: ActivityType;
   title: string;
   outcome?: string;
   notes?: string;
-  call_duration_seconds?: number;
+  call_duration_seconds?: number | null;
   metadata?: Record<string, unknown>;
   created_at: string;
+  agent?: Profile;
 }
+
+export interface WhatsAppTemplate {
+  id: string;
+  name: string;
+  category: 'welcome' | 'quote_followup' | 'discount' | 'reminder' | 'custom';
+  message_body: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type CurrencyCode = 'USD' | 'EUR' | 'GBP' | 'INR' | 'AUD' | 'AED';
+export type DateFormat = 'YYYY-MM-DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY';
+export type RoutingStrategy = 'round_robin' | 'workload_balanced' | 'conversion_weighted';
+export type RoutingOverflowPolicy = 'unassigned_pool' | 'overflow_available' | 'queue_delay';
+export type SoundPreset = 'chime' | 'modern_bell' | 'radar' | 'subtle' | 'off';
 
 export interface AgencySettings {
   id: string;
+  // SLA & Business Hours
   frt_minutes: number;
   overdue_grace_minutes: number;
   escalate_to_manager: boolean;
@@ -252,126 +298,163 @@ export interface AgencySettings {
   freeze_sla_weekends: boolean;
   timezone: string;
   pre_breach_warning_minutes: number;
-  routing_strategy: string;
-  routing_overflow_policy: string;
+
+  // Routing Engine
+  auto_assign_enabled?: boolean;
+  routing_strategy: RoutingStrategy;
+  routing_overflow_policy: RoutingOverflowPolicy;
   vip_high_budget_threshold: number;
   vip_route_seniors_only: boolean;
   lead_cooldown_minutes: number;
+
+  // Currency & Financials
   currency: CurrencyCode;
   currency_symbol: string;
-  date_format: string;
+  date_format: DateFormat;
   commission_tds_pct: number;
   min_gross_margin_threshold: number;
-  payout_frequency: string;
+  payout_frequency: 'monthly' | 'bi-weekly' | 'weekly';
+
+  // Audio & Notifications
   notification_sound_enabled: boolean;
   notification_sound_preset: SoundPreset;
   notification_volume: number;
   mute_sound_in_call: boolean;
   browser_push_enabled: boolean;
   toast_duration_seconds: number;
+
+  // Taxonomies
   custom_lost_reasons: string[];
   custom_lead_sources: string[];
   auto_archive_days: number;
 }
 
-export type CurrencyCode = 'USD' | 'NPR' | 'EUR' | 'GBP' | 'AUD' | 'CAD' | 'JPY' | 'INR' | string;
-export type SoundPreset = 'chime' | 'bell' | 'pop' | 'none' | string;
+export type SlaSettings = AgencySettings;
 
 export interface AppNotification {
   id: string;
   user_id: string;
   title: string;
   message: string;
-  type: string;
+  type: 'lead_assigned' | 'sla_breach' | 'follow_up_due' | 'reassignment' | 'system';
   link?: string;
   is_read: boolean;
   created_at: string;
 }
 
+// Operational & Lifecycle Systems
+export type MealPlanCode = 'EP' | 'CP' | 'MAP' | 'AP' | 'AI';
+
+export interface ItineraryDay {
+  id: string;
+  day_number: number;
+  title: string;
+  description: string;
+  hotel_name?: string;
+  meal_plan: MealPlanCode;
+  morning_activity?: string;
+  afternoon_activity?: string;
+  evening_activity?: string;
+  activities: string[];
+}
+
+export type PaymentMethod = 'bank_transfer' | 'credit_card' | 'stripe' | 'cash' | 'upi' | 'cheque';
+
 export interface PaymentMilestone {
   id: string;
   lead_id: string;
   title: string;
-  due_date: string;
+  percentage: number;
   amount: number;
+  due_date: string;
   status: 'pending' | 'paid' | 'overdue';
+  paid_amount?: number;
+  paid_at?: string;
+  notes?: string;
 }
-
-export type PaymentMethod = 'cash' | 'bank_transfer' | 'card' | 'online' | 'other';
 
 export interface PaymentRecord {
   id: string;
   lead_id: string;
+  receipt_number: string;
   amount: number;
   method: PaymentMethod;
   reference_no?: string;
   notes?: string;
   received_at: string;
+  created_at: string;
 }
 
-export interface ItineraryDay {
-  id: string;
-  lead_id: string;
-  day_number: number;
-  title: string;
-  description?: string;
-  hotel?: string;
-  meals?: string;
-}
+export type VisaStatus = 'not_required' | 'visa_on_arrival' | 'applied' | 'approved' | 'rejected';
 
 export interface TravelerPassenger {
   id: string;
   lead_id: string;
   full_name: string;
-  age?: number;
-  passenger_type?: 'adult' | 'child' | 'infant';
+  type: 'adult' | 'child' | 'infant';
   passport_number?: string;
-  nationality?: string;
+  passport_country?: string;
+  passport_expiry_date?: string;
+  is_passport_valid_6months?: boolean;
+  visa_status: VisaStatus;
   date_of_birth?: string;
+  dietary_preference?: string;
+  special_notes?: string;
 }
 
 export interface TravelerDocument {
   id: string;
   lead_id: string;
-  name: string;
-  type: string;
-  url?: string;
+  passenger_id?: string;
+  title: string;
+  category: 'passport' | 'visa' | 'ticket' | 'hotel_voucher' | 'insurance' | 'other';
+  file_name: string;
+  file_size?: string;
   storage_path?: string;
   uploaded_at: string;
+}
+
+export type DmcPaymentStatus = 'unpaid' | 'advance_paid' | 'settled';
+
+export interface DmcSupplier {
+  id: string;
+  name: string;
+  destination: string;
+  contact_person: string;
+  phone: string;
+  email: string;
+  currency: string;
+  notes?: string;
 }
 
 export interface LeadSupplierPayable {
   id: string;
   lead_id: string;
   supplier_name: string;
-  category: string;
-  amount: number;
-  status: 'pending' | 'paid';
+  service_description: string;
+  amount_payable: number;
+  amount_paid: number;
+  status: DmcPaymentStatus;
+  confirmation_voucher_no?: string;
   due_date?: string;
-}
-
-export interface PreDepartureChecklist {
-  passport_verified?: boolean;
-  visa_verified?: boolean;
-  flights_confirmed?: boolean;
-  hotels_confirmed?: boolean;
-  insurance_confirmed?: boolean;
-  final_payment_received?: boolean;
-}
-
-export interface PostTripReview {
-  rating?: number;
-  feedback?: string;
-  reviewed_at?: string;
 }
 
 export type TripLifecycleStatus = 'planning' | 'booked' | 'pre_departure' | 'on_trip' | 'completed';
 
-export interface EmployeeHealthScore {
-  score: number;
-  band: 'excellent' | 'good' | 'watch' | 'risk';
-  active_load: number;
-  overdue_followups: number;
-  sla_breaches: number;
-  win_rate: number;
+export interface PreDepartureChecklist {
+  flights_ticketed: boolean;
+  hotel_vouchers_issued: boolean;
+  passports_verified_6months: boolean;
+  visas_confirmed: boolean;
+  travel_insurance_issued: boolean;
+  web_checkin_completed: boolean;
+  emergency_contacts_dispatched: boolean;
+}
+
+export interface PostTripReview {
+  rating: number;
+  nps_score: number;
+  feedback_notes?: string;
+  repeat_interest?: boolean;
+  reviewed_at?: string;
 }
