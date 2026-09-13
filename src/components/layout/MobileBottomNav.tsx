@@ -4,8 +4,16 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { CalendarClock, Kanban, LayoutDashboard, ListChecks, MessageSquare, MessageSquareQuote, Users } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 
 type Tone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet';
+
+type MobileNavItem = {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  tone: Tone;
+};
 
 const ACTIVE_TONE: Record<Tone, string> = {
   blue: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-100',
@@ -26,27 +34,35 @@ const ICON_TONE: Record<Tone, string> = {
 export default function MobileBottomNav() {
   const pathname = usePathname();
   const { currentUser } = useApp();
+  const { term, moduleEnabled } = useWorkspace();
   const isAgent = currentUser.role === 'agent';
+  const leadPlural = term('lead_plural', 'Leads');
+  const inboxEnabled = moduleEnabled('inbox', true);
+  const leadsEnabled = moduleEnabled('leads', true);
+  const tasksEnabled = moduleEnabled('tasks', true);
 
-  const items = isAgent
+  const items: MobileNavItem[] = isAgent
     ? [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' as const },
-        { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
-        { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const },
-        { label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' as const },
-        { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' as const },
+        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
+        ...(inboxEnabled ? [{ label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const }] : []),
+        ...(leadsEnabled ? [{ label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const }] : []),
+        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' as const }] : []),
+        { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' },
       ]
     : [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' as const },
-        { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
-        { label: 'All Leads', href: '/leads', icon: Kanban, tone: 'cyan' as const },
-        { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const },
-        { label: 'Team', href: '/team', icon: Users, tone: 'emerald' as const },
+        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
+        ...(inboxEnabled ? [{ label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const }] : []),
+        ...(leadsEnabled ? [{ label: leadPlural, href: '/leads', icon: Kanban, tone: 'cyan' as const }] : []),
+        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const }] : []),
+        { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },
       ];
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/80 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-10px_30px_rgba(37,99,235,0.08)] backdrop-blur md:hidden" aria-label="Primary navigation">
-      <div className="mx-auto grid max-w-lg grid-cols-5 gap-1">
+      <div
+        className="mx-auto grid max-w-lg gap-1"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, items.length)}, minmax(0, 1fr))` }}
+      >
         {items.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
           const Icon = item.icon;
@@ -60,7 +76,7 @@ export default function MobileBottomNav() {
               }`}
             >
               <Icon className={`h-[18px] w-[18px] ${isActive ? ICON_TONE[item.tone] : 'text-zinc-500'}`} />
-              <span>{item.label}</span>
+              <span className="max-w-full truncate">{item.label}</span>
             </Link>
           );
         })}
