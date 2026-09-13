@@ -87,6 +87,7 @@ const migrations = [
   { file: '202609120025_workspace_runtime_integrity.sql', applied: () => exists("select exists(select 1 from pg_trigger where tgname='trg_profiles_workspace_membership' and not tgisinternal) and position('v_business_type' in pg_get_functiondef(to_regprocedure('public.prepare_lead()'))) > 0") },
   { file: '202609120026_business_configuration_provenance.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='field_definitions' and column_name='definition_source') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='pipelines' and column_name='definition_source')") },
   { file: '202609120027_adaptive_inbox_conversion.sql', applied: () => exists("select to_regprocedure('public.convert_conversation_to_business_lead(uuid,text,text,text,text,text,text,uuid,text,jsonb)') is not null and to_regprocedure('public.repair_workspace_pipeline_assignments(uuid)') is not null") },
+  { file: '202609120028_configurable_pipeline_editor.sql', applied: () => exists("select to_regprocedure('public.save_workspace_pipeline(uuid,text,jsonb)') is not null") },
 ];
 
 console.log('\nChecking local CRM database migrations...\n');
