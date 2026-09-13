@@ -16,6 +16,8 @@ import {
   Users,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
+import GenericLeadWorkspace from '@/components/leads/GenericLeadWorkspace';
 import QuickLogModal from '@/components/leads/QuickLogModal';
 import WhatsAppModal from '@/components/leads/WhatsAppModal';
 
@@ -43,6 +45,7 @@ export default function MyWorkLeadPage() {
   const params = useParams();
   const leadId = params.id as string;
   const { allLeads, activities } = useApp();
+  const { config, isLoading: workspaceLoading } = useWorkspace();
   const [isLogOpen, setIsLogOpen] = useState(false);
   const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
 
@@ -54,6 +57,10 @@ export default function MyWorkLeadPage() {
       .slice(0, 6),
     [activities, leadId]
   );
+
+  if (!workspaceLoading && config.workspace.business_type !== 'travel') {
+    return <GenericLeadWorkspace />;
+  }
 
   if (!lead) {
     return (
