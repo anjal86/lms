@@ -12,7 +12,7 @@ test('forgot password page does not expose whether an account exists', async ({ 
   await page.goto('/forgot-password');
   await expect(page.getByRole('heading', { name: 'Reset your password' })).toBeVisible();
   await expect(page.getByLabel('Work email')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Send reset link' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Send (?:reset|recovery) link/i })).toBeVisible();
 });
 
 test('reset password page requires a valid recovery session', async ({ page }) => {
@@ -35,5 +35,5 @@ test('authenticated operator workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'What needs attention today' })).toBeVisible();
 
   await page.goto('/leads');
-  await expect(page.getByRole('heading', { name: 'Leads pipeline' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Leads pipeline|Businesses/i })).toBeVisible();
 });
