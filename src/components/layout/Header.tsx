@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { AgentStatus } from '@/lib/types';
 import {
   Bell,
@@ -48,9 +49,16 @@ export default function Header() {
     markAllNotificationsAsRead,
     showToast,
   } = useApp();
+  const { config, term } = useWorkspace();
 
   const isAgent = currentUser.role === 'agent';
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
+  const isTravel = config.workspace.business_type === 'travel';
+  const leadLabel = term('lead', 'Lead');
+  const leadPlural = term('lead_plural', 'Leads');
+  const workspaceName = config.workspace.name || 'Workspace';
+  const workspaceLabel = term('workspace_label', 'Business Workspace');
+  const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'C';
 
   const mobileNavItems = isAgent
     ? [
@@ -65,7 +73,7 @@ export default function Header() {
         { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
         { label: 'Inbox', href: '/inbox', icon: MessageSquare },
         { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone },
-        { label: 'All Leads', href: '/leads', icon: Kanban },
+        { label: `All ${leadPlural}`, href: '/leads', icon: Kanban },
         { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock },
         { label: 'Team', href: '/team', icon: Users },
         { label: 'Performance', href: '/analytics', icon: BarChart3 },
@@ -172,18 +180,18 @@ export default function Header() {
           </button>
 
           <button type="button" onClick={() => setIsLeadModalOpen(true)} className="button-primary whitespace-nowrap">
-            <Plus className="h-4 w-4" /> Add lead
+            <Plus className="h-4 w-4" /> Add {leadLabel}
           </button>
 
-          {canManage && (
-            <button type="button" onClick={() => setIsCsvModalOpen(true)} className="button-secondary hidden sm:inline-flex">
+          {canManage && isTravel && (
+            <button type="button" onClick={() => setIsCsvModalOpen(true)} className="button-secondary hidden sm:inline-flex" title="Travel CSV importer">
               <FileSpreadsheet className="h-4 w-4" /> Import
             </button>
           )}
 
-          <button type="button" onClick={() => setIsCommandPaletteOpen(true)} aria-label="Search leads" className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64">
+          <button type="button" onClick={() => setIsCommandPaletteOpen(true)} aria-label={`Search ${leadPlural}`} className="ml-1 hidden min-w-0 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 transition hover:border-zinc-300 hover:bg-white sm:flex md:w-64">
             <Search className="h-4 w-4 shrink-0" />
-            <span className="truncate">Search leads</span>
+            <span className="truncate">Search {leadPlural.toLowerCase()}</span>
             <kbd className="ml-auto hidden rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 lg:inline">⌘K</kbd>
           </button>
         </div>
@@ -286,9 +294,9 @@ export default function Header() {
           <button type="button" className="fixed inset-0" onClick={() => setIsMobileNavOpen(false)} aria-label="Close menu" />
           <div className="relative z-10 flex h-full w-72 max-w-[86vw] flex-col bg-zinc-950 p-4 text-zinc-300 shadow-2xl">
             <div className="mb-4 flex items-center justify-between border-b border-zinc-800 pb-4">
-              <Link href="/dashboard" onClick={() => setIsMobileNavOpen(false)} className="flex items-center gap-2.5">
-                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-xs font-bold text-zinc-950">W</span>
-                <span><span className="block text-sm font-semibold text-white">Wanderlust</span><span className="block text-[10px] text-zinc-500">Travel Workspace</span></span>
+              <Link href="/dashboard" onClick={() => setIsMobileNavOpen(false)} className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-bold text-zinc-950">{workspaceInitial}</span>
+                <span className="min-w-0"><span className="block truncate text-sm font-semibold text-white">{workspaceName}</span><span className="block truncate text-[10px] text-zinc-500">{workspaceLabel}</span></span>
               </Link>
               <button type="button" onClick={() => setIsMobileNavOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-900 hover:text-white" aria-label="Close menu"><X className="h-5 w-5" /></button>
             </div>
@@ -314,9 +322,9 @@ export default function Header() {
       )}
 
       <LeadModal isOpen={isLeadModalOpen} onClose={() => setIsLeadModalOpen(false)} />
-      {canManage && <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} />}
+      {canManage && isTravel && <CsvImportModal isOpen={isCsvModalOpen} onClose={() => setIsCsvModalOpen(false)} />}
       <KeyboardShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
-      <CommandPalette isOpen={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} onOpenNewLead={() => setIsLeadModalOpen(true)} onOpenCsv={() => canManage && setIsCsvModalOpen(true)} />
+      <CommandPalette isOpen={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} onOpenNewLead={() => setIsLeadModalOpen(true)} onOpenCsv={() => canManage && isTravel && setIsCsvModalOpen(true)} />
     </>
   );
 }
