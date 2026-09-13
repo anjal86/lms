@@ -45,7 +45,7 @@ type SearchResult = {
 export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenCsv }: CommandPaletteProps) {
   const router = useRouter();
   const { allLeads, exportCrmBackup, currentUser } = useApp();
-  const { config, term } = useWorkspace();
+  const { config, term, moduleEnabled } = useWorkspace();
   const [query, setQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -55,6 +55,9 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   const canManageStorage = currentUser.role === 'admin';
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const isTravel = config.workspace.business_type === 'travel';
+  const leadsEnabled = moduleEnabled('leads', true);
+  const inboxEnabled = moduleEnabled('inbox', true);
+  const tasksEnabled = moduleEnabled('tasks', true);
   const leadLabel = term('lead', 'Lead');
   const leadPlural = term('lead_plural', 'Leads');
   const contactLabel = term('contact', 'Contact');
@@ -125,19 +128,19 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const agentNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    { label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare },
-    { label: 'My Work', hint: `Your active ${leadPlural.toLowerCase()}`, path: '/my-work', icon: ListChecks },
-    { label: 'Follow-ups', hint: `${contactLabel}s to contact again`, path: '/my-follow-ups', icon: CalendarClock },
+    ...(inboxEnabled ? [{ label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare }] : []),
+    ...(leadsEnabled ? [{ label: 'My Work', hint: `Your active ${leadPlural.toLowerCase()}`, path: '/my-work', icon: ListChecks }] : []),
+    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: `${contactLabel}s to contact again`, path: '/my-follow-ups', icon: CalendarClock }] : []),
     { label: 'Messages', hint: 'Saved message templates', path: '/templates', icon: MessageSquareQuote },
     { label: 'My Profile', hint: 'Your profile and work status', path: '/profile', icon: User },
   ];
 
   const managementNavItems = [
     { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    { label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare },
-    { label: `All ${leadPlural}`, hint: `View every ${leadLabel.toLowerCase()} in one configured pipeline`, path: '/leads', icon: ArrowRight },
+    ...(inboxEnabled ? [{ label: 'Inbox', hint: 'Omnichannel customer conversations', path: '/inbox', icon: MessageSquare }] : []),
+    ...(leadsEnabled ? [{ label: `All ${leadPlural}`, hint: `View every ${leadLabel.toLowerCase()} in one configured pipeline`, path: '/leads', icon: ArrowRight }] : []),
     { label: 'Connections', hint: 'Connect Facebook, Instagram, WhatsApp, TikTok, email and forms', path: '/connections', icon: PlugZap },
-    { label: 'Follow-ups', hint: 'Upcoming and overdue follow-ups', path: '/follow-ups', icon: CalendarClock },
+    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: 'Upcoming and overdue follow-ups', path: '/follow-ups', icon: CalendarClock }] : []),
     { label: 'Team', hint: 'People, assignments and workloads', path: '/team', icon: Users },
     { label: 'Performance', hint: 'Team results and trends', path: '/analytics', icon: TrendingUp },
     { label: 'Incentives', hint: 'Targets, tiers and payouts', path: '/incentives', icon: Award },
@@ -148,14 +151,16 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   ];
 
   const navItems = (isAgent ? agentNavItems : managementNavItems).filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
-  const matchingLeads = searchResults.filter((result) => result.kind === 'lead').slice(0, 6);
+  const matchingLeads = leadsEnabled ? searchResults.filter((result) => result.kind === 'lead').slice(0, 6) : [];
   const matchingAgents = isAgent ? [] : searchResults.filter((result) => result.kind === 'profile').slice(0, 4);
 
-  const basicActions = [{ label: `Add ${leadLabel}`, hint: `Create a new ${leadLabel.toLowerCase()}`, action: () => { onClose(); onOpenNewLead?.(); }, icon: Plus }];
+  const basicActions = leadsEnabled
+    ? [{ label: `Add ${leadLabel}`, hint: `Create a new ${leadLabel.toLowerCase()}`, action: () => { onClose(); onOpenNewLead?.(); }, icon: Plus }]
+    : [];
   const managementActions = [
     { label: 'Connect a lead source', hint: 'Open omnichannel connections', action: () => { onClose(); router.push('/connections'); }, icon: PlugZap },
-    ...(isTravel ? [{ label: `Import ${leadPlural}`, hint: 'Upload a Travel CSV file', action: () => { onClose(); onOpenCsv?.(); }, icon: FileSpreadsheet }] : []),
-    {
+    ...(leadsEnabled && isTravel ? [{ label: `Import ${leadPlural}`, hint: 'Upload a Travel CSV file', action: () => { onClose(); onOpenCsv?.(); }, icon: FileSpreadsheet }] : []),
+    ...(leadsEnabled ? [{
       label: `Export ${leadPlural}`,
       hint: 'Download CRM records as CSV',
       action: () => {
@@ -187,7 +192,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
         ]);
       },
       icon: Download,
-    },
+    }] : []),
   ];
   const adminActions = canManageStorage ? [{ label: 'Download backup', hint: 'Download a JSON snapshot', action: () => { onClose(); exportCrmBackup(); }, icon: Database }] : [];
   const actionItems = [...basicActions, ...(canManage ? managementActions : []), ...adminActions].filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
