@@ -16,10 +16,14 @@ const AGENT_REDIRECTS: Record<string, string> = {
   '/incentives': '/dashboard',
   '/team': '/dashboard',
   '/settings': '/dashboard',
-  '/settings/business': '/dashboard',
   '/audit': '/dashboard',
   '/connections': '/dashboard',
 };
+
+function agentRedirect(pathname: string) {
+  if (pathname.startsWith('/settings/')) return '/dashboard';
+  return AGENT_REDIRECTS[pathname];
+}
 
 function legacyLeadTarget(pathname: string, role: string) {
   const match = pathname.match(/^\/leads\/([^/]+)$/);
@@ -33,7 +37,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isHydrated, currentUser } = useApp();
   const isPublicAuthPage = PUBLIC_AUTH_PATHS.has(pathname);
   const redirectTarget = isHydrated && isAuthenticated
-    ? (currentUser.role === 'agent' ? AGENT_REDIRECTS[pathname] : undefined) || legacyLeadTarget(pathname, currentUser.role)
+    ? (currentUser.role === 'agent' ? agentRedirect(pathname) : undefined) || legacyLeadTarget(pathname, currentUser.role)
     : undefined;
 
   useEffect(() => {
