@@ -9,6 +9,7 @@ export type ApiProfile = {
   role: 'admin' | 'manager' | 'agent';
   is_active: boolean;
   full_name: string | null;
+  workspace_id: string;
 };
 
 export type ApiActor = {
@@ -37,7 +38,7 @@ async function finalizeActor(user: User, supabase: SupabaseClient) {
   const admin = createSupabaseAdminClient();
   const { data: profile, error } = await admin
     .from('profiles')
-    .select('id,role,is_active,full_name')
+    .select('id,role,is_active,full_name,workspace_id')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -46,6 +47,9 @@ async function finalizeActor(user: User, supabase: SupabaseClient) {
   }
   if (!profile.is_active) {
     return { error: NextResponse.json({ error: 'Account disabled.' }, { status: 403 }) } as const;
+  }
+  if (!profile.workspace_id) {
+    return { error: NextResponse.json({ error: 'Workspace is not configured for this account.' }, { status: 403 }) } as const;
   }
 
   return {
