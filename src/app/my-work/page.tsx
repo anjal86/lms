@@ -12,6 +12,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import type { Lead } from '@/lib/types';
 
 type WorkState = 'reply' | 'follow_up' | 'active';
@@ -35,10 +36,28 @@ function formatNextDate(value?: string | null) {
   return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+function displayValue(value: unknown) {
+  if (value == null || value === '') return '';
+  if (Array.isArray(value)) return value.join(', ');
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+}
+
 export default function MyWorkPage() {
   const { leads, followUps, currentUser } = useApp();
+  const { config, term } = useWorkspace();
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
+
+  const leadPlural = term('lead_plural', 'Leads');
+  const contactPlural = term('contact_plural', 'Contacts');
+  const contactLabel = term('contact', 'Contact');
+  const primaryField = useMemo(
+    () => config.fields
+      .filter((field) => field.entity_type === 'lead' && field.is_active)
+      .sort((a, b) => a.sort_order - b.sort_order)[0],
+    [config.fields]
+  );
 
   const myLeads = useMemo(() => {
     const pendingLeadIds = new Set(
@@ -65,9 +84,10 @@ export default function MyWorkPage() {
     return myLeads.filter(({ lead, state }) => {
       if (!showAll && state === 'active') return false;
       if (!q) return true;
-      return [lead.customer_name, lead.destination, lead.customer_phone, lead.lead_code]
+      const customValues = Object.values(lead.custom_data || {});
+      return [lead.customer_name, lead.customer_phone, lead.customer_email, lead.lead_code, ...customValues]
         .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(q));
+        .some((value) => displayValue(value).toLowerCase().includes(q));
     });
   }, [myLeads, query, showAll]);
 
@@ -77,7 +97,7 @@ export default function MyWorkPage() {
         <div>
           <p className="workspace-eyebrow">My Work</p>
           <h1 className="workspace-title">What should I do next?</h1>
-          <p className="workspace-description">Only your active leads, ordered by what needs attention first.</p>
+          <p className="workspace-description">Only your active {leadPlural.toLowerCase()}, ordered by what needs attention first.</p>
         </div>
         <Link href="/dashboard" className="button-secondary">Today</Link>
       </div>
@@ -91,10 +111,10 @@ export default function MyWorkPage() {
         <button type="button" onClick={() => setShowAll(false)} className="panel p-4 text-left transition hover:border-zinc-300">
           <div className="text-xs font-medium text-zinc-500">Follow-ups</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{followUpCount}</div>
-          <div className="mt-1 text-xs text-zinc-500">People to contact again</div>
+          <div className="mt-1 text-xs text-zinc-500">{contactPlural} to contact again</div>
         </button>
         <button type="button" onClick={() => setShowAll(true)} className="panel p-4 text-left transition hover:border-zinc-300">
-          <div className="text-xs font-medium text-zinc-500">All my active leads</div>
+          <div className="text-xs font-medium text-zinc-500">All my active {leadPlural.toLowerCase()}</div>
           <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{myLeads.length}</div>
           <div className="mt-1 text-xs text-zinc-500">Everything assigned to you</div>
         </button>
@@ -103,12 +123,12 @@ export default function MyWorkPage() {
       <section className="panel overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-zinc-100 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-zinc-950">{showAll ? 'All my leads' : 'Needs action'}</h2>
-            <p className="mt-1 text-xs text-zinc-500">Open a lead, contact the traveler, then continue to the next one.</p>
+            <h2 className="text-sm font-semibold text-zinc-950">{showAll ? `All my ${leadPlural.toLowerCase()}` : 'Needs action'}</h2>
+            <p className="mt-1 text-xs text-zinc-500">Open a record, contact the {contactLabel.toLowerCase()}, then continue to the next one.</p>
           </div>
           <div className="relative w-full sm:w-64">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search my leads" className="field pl-9" />
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search my ${leadPlural.toLowerCase()}`} className="field pl-9" />
           </div>
         </div>
 
@@ -116,14 +136,17 @@ export default function MyWorkPage() {
           <div className="px-6 py-16 text-center">
             <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><CheckCircle2 className="h-5 w-5" /></span>
             <h3 className="mt-3 text-sm font-semibold text-zinc-900">You’re caught up</h3>
-            <p className="mt-1 text-xs text-zinc-500">There are no leads needing action in this view.</p>
-            {!showAll && myLeads.length > 0 && <button type="button" onClick={() => setShowAll(true)} className="button-secondary mt-4">Show all my leads</button>}
+            <p className="mt-1 text-xs text-zinc-500">There are no {leadPlural.toLowerCase()} needing action in this view.</p>
+            {!showAll && myLeads.length > 0 && <button type="button" onClick={() => setShowAll(true)} className="button-secondary mt-4">Show all my {leadPlural.toLowerCase()}</button>}
           </div>
         ) : (
           <div className="divide-y divide-zinc-100">
             {visible.map(({ lead, state }) => {
               const stateInfo = stateCopy(state);
               const whatsappPhone = (lead.customer_phone || '').replace(/[^0-9]/g, '');
+              const businessSummary = config.workspace.business_type === 'travel'
+                ? lead.destination
+                : primaryField ? displayValue(lead.custom_data?.[primaryField.field_key]) : '';
               return (
                 <div key={lead.id} className="flex flex-col gap-4 px-4 py-4 transition hover:bg-zinc-50/60 lg:flex-row lg:items-center">
                   <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -133,7 +156,7 @@ export default function MyWorkPage() {
                         <Link href={`/my-work/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">{lead.customer_name}</Link>
                         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateInfo.className}`}>{stateInfo.label}</span>
                       </div>
-                      <p className="mt-1 text-xs text-zinc-500">{lead.destination} · {lead.customer_phone}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{[businessSummary, lead.customer_phone].filter(Boolean).join(' · ')}</p>
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
                         <span className="inline-flex items-center gap-1.5"><CalendarClock className="h-3.5 w-3.5" /> {formatNextDate(lead.next_follow_up_at)}</span>
                         <span className="capitalize">Status: {lead.stage.replaceAll('_', ' ')}</span>
