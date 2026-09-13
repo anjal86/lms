@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Activity, Search, UserPlus, Users } from 'lucide-react';
+import { Search, UserPlus, Users } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import type { AgentStatus, Profile, Role } from '@/lib/types';
 import TeamMemberDrawer from '@/components/team/TeamMemberDrawer';
 import InviteMemberModal from '@/components/team/InviteMemberModal';
@@ -35,6 +36,11 @@ function statusDot(status: AgentStatus) {
 
 export default function TeamPage() {
   const { allProfiles, allLeads, currentUser, getAgentMetrics, getAgentHealthScore } = useApp();
+  const { config, term } = useWorkspace();
+  const isTravel = config.workspace.business_type === 'travel' || config.workspace.template_key === 'travel';
+  const leadPlural = term('lead_plural', 'Leads');
+  const agentLabel = isTravel ? 'Consultant' : 'Agent';
+  const agentLabelPlural = isTravel ? 'Consultants' : 'Agents';
   const [role, setRole] = useState<'ALL' | Role>('ALL');
   const [status, setStatus] = useState<'ALL' | AgentStatus>('ALL');
   const [query, setQuery] = useState('');
@@ -45,7 +51,7 @@ export default function TeamPage() {
   const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    document.title = 'Team — Wanderlust CRM';
+    document.title = `Team — ${config.workspace.name} CRM`;
     const update = () => setNow(Date.now());
     const initial = window.setTimeout(update, 0);
     const timer = window.setInterval(update, 60_000);
@@ -53,7 +59,7 @@ export default function TeamPage() {
       window.clearTimeout(initial);
       window.clearInterval(timer);
     };
-  }, []);
+  }, [config.workspace.name]);
 
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const agents = allProfiles.filter((profile) => profile.role === 'agent');
@@ -102,9 +108,9 @@ export default function TeamPage() {
       </header>
 
       <section className="metric-grid" aria-label="Team summary">
-        <div className="metric"><div className="metric-label">Team members</div><div className="metric-value">{allProfiles.length}</div><div className="metric-hint">{agents.length} consultants</div></div>
-        <div className="metric"><div className="metric-label">Active workload</div><div className="metric-value">{activeLeads}/{totalCapacity}</div><div className="metric-hint">{totalCapacity ? Math.round((activeLeads / totalCapacity) * 100) : 0}% of consultant capacity</div></div>
-        <div className="metric"><div className="metric-label">Available now</div><div className="metric-value">{availableAgents}</div><div className="metric-hint">Consultants accepting new leads</div></div>
+        <div className="metric"><div className="metric-label">Team members</div><div className="metric-value">{allProfiles.length}</div><div className="metric-hint">{agents.length} {agentLabelPlural.toLowerCase()}</div></div>
+        <div className="metric"><div className="metric-label">Active workload</div><div className="metric-value">{activeLeads}/{totalCapacity}</div><div className="metric-hint">{totalCapacity ? Math.round((activeLeads / totalCapacity) * 100) : 0}% of {agentLabel.toLowerCase()} capacity</div></div>
+        <div className="metric"><div className="metric-label">Available now</div><div className="metric-value">{availableAgents}</div><div className="metric-hint">{agentLabelPlural} accepting new {leadPlural.toLowerCase()}</div></div>
         <div className="metric"><div className="metric-label">Team health</div><div className="metric-value">{averageHealth || '—'}</div><div className="metric-hint">{needsAttention ? `${needsAttention} need attention` : 'No active health warnings'}</div></div>
       </section>
 
@@ -113,7 +119,7 @@ export default function TeamPage() {
           <div className="flex gap-1 overflow-x-auto">
             {[
               { id: 'ALL', label: 'All', count: allProfiles.length },
-              { id: 'agent', label: 'Consultants', count: agents.length },
+              { id: 'agent', label: agentLabelPlural, count: agents.length },
               { id: 'manager', label: 'Managers', count: allProfiles.filter((profile) => profile.role === 'manager').length },
               { id: 'admin', label: 'Admins', count: allProfiles.filter((profile) => profile.role === 'admin').length },
             ].map((item) => (
@@ -158,11 +164,11 @@ export default function TeamPage() {
                             <div><div className="font-semibold text-zinc-900">{member.full_name}</div><div className="mt-0.5 text-[10px] text-zinc-400">{member.email} · {member.employee_code || 'No code'}</div></div>
                           </div>
                         </td>
-                        <td><div className="text-xs font-medium capitalize text-zinc-700">{member.role === 'agent' ? 'Consultant' : member.role}</div><div className="mt-0.5 text-[10px] text-zinc-400">{member.destination_tags.slice(0, 2).join(' · ') || 'General'}</div></td>
-                        <td><span className="status-line"><span className={`status-dot ${statusDot(member.status)}`} />{member.status.replace('_', ' ')}</span>{member.role === 'agent' && <div className="mt-1 text-[10px] text-zinc-400">{member.accepting_leads ? 'Accepting new leads' : 'Routing paused'}</div>}</td>
+                        <td><div className="text-xs font-medium capitalize text-zinc-700">{member.role === 'agent' ? agentLabel : member.role}</div><div className="mt-0.5 text-[10px] text-zinc-400">{member.destination_tags.slice(0, 2).join(' · ') || 'General'}</div></td>
+                        <td><span className="status-line"><span className={`status-dot ${statusDot(member.status)}`} />{member.status.replace('_', ' ')}</span>{member.role === 'agent' && <div className="mt-1 text-[10px] text-zinc-400">{member.accepting_leads ? `Accepting new ${leadPlural.toLowerCase()}` : 'Routing paused'}</div>}</td>
                         <td><div className="font-mono text-[11px] font-semibold text-zinc-800">{metrics.activeLeads}/{member.max_capacity}</div><div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-zinc-100"><div className={`h-full ${metrics.capacityPct >= 90 ? 'bg-red-500' : metrics.capacityPct >= 70 ? 'bg-amber-500' : 'bg-zinc-700'}`} style={{ width: `${Math.min(metrics.capacityPct, 100)}%` }} /></div></td>
                         <td onClick={(event) => event.stopPropagation()}>{member.role === 'agent' ? <button type="button" onClick={() => setSelectedHealthMember(member)} className="button-ghost button-sm"><span className={`status-dot ${health.overall_score >= 80 ? 'status-dot-success' : health.overall_score >= 60 ? 'status-dot-warning' : 'status-dot-danger'}`} /><span className="font-mono">{health.overall_score}</span><span>{heartbeat(health.last_active_at, now)}</span></button> : <span className="text-zinc-400">—</span>}</td>
-                        <td><div className="font-mono text-[11px] font-semibold text-zinc-800">{metrics.wonCount} won · {metrics.winRate}%</div><div className="mt-0.5 text-[10px] text-zinc-400">{metrics.activeLeads} active leads</div></td>
+                        <td><div className="font-mono text-[11px] font-semibold text-zinc-800">{metrics.wonCount} won · {metrics.winRate}%</div><div className="mt-0.5 text-[10px] text-zinc-400">{metrics.activeLeads} active {leadPlural.toLowerCase()}</div></td>
                         <td onClick={(event) => event.stopPropagation()}>
                           <div className="flex justify-end gap-1">
                             {canManage && member.role === 'agent' && metrics.activeLeads > 0 && <button type="button" onClick={() => setReassignSourceAgent(member)} className="button-ghost button-sm">Reassign</button>}
@@ -183,7 +189,7 @@ export default function TeamPage() {
                 const health = getAgentHealthScore(member.id);
                 return (
                   <article key={member.id} className="p-4" onClick={() => setSelectedMember(member)}>
-                    <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600">{initials(member.full_name)}</span><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-zinc-900">{member.full_name}</div><div className="mt-1 flex items-center gap-2 text-xs text-zinc-500"><span className="capitalize">{member.role === 'agent' ? 'Consultant' : member.role}</span><span className="status-line"><span className={`status-dot ${statusDot(member.status)}`} />{member.status.replace('_', ' ')}</span></div></div></div>
+                    <div className="flex items-start gap-3"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600">{initials(member.full_name)}</span><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-zinc-900">{member.full_name}</div><div className="mt-1 flex items-center gap-2 text-xs text-zinc-500"><span className="capitalize">{member.role === 'agent' ? agentLabel : member.role}</span><span className="status-line"><span className={`status-dot ${statusDot(member.status)}`} />{member.status.replace('_', ' ')}</span></div></div></div>
                     <div className="mt-3 grid grid-cols-3 gap-3 border-t border-line pt-3"><div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Workload</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{metrics.activeLeads}/{member.max_capacity}</div></div><div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Won</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{metrics.wonCount}</div></div><div><div className="text-[10px] uppercase tracking-wide text-zinc-400">Health</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{member.role === 'agent' ? health.overall_score : '—'}</div></div></div>
                   </article>
                 );
