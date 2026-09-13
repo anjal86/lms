@@ -14,7 +14,6 @@ import {
   Users,
   MessageSquareQuote,
   MessageSquare,
-  Phone,
   Settings,
   History,
   LogOut,
@@ -23,6 +22,7 @@ import {
   PlugZap,
   Building2,
   ListPlus,
+  Zap,
 } from 'lucide-react';
 
 type NavTone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet' | 'rose';
@@ -91,6 +91,7 @@ export default function Sidebar() {
   const canManage = canAccessSettings(currentUser.role);
   const isAgent = currentUser.role === 'agent';
   const leadPlural = term('lead_plural', 'Leads');
+  const contactPlural = term('contact_plural', 'Contacts');
   const workspaceName = config.workspace.name || 'Workspace';
   const workspaceLabel = term('workspace_label', 'Business Workspace');
   const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'W';
@@ -102,8 +103,7 @@ export default function Sidebar() {
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     ...(inboxEnabled ? [
       { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const },
-      { label: 'Work Queue', href: '/inbox/operations', icon: ListChecks, tone: 'blue' as const },
-      { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
+      { label: contactPlural, href: '/contacts', icon: Users, tone: 'emerald' as const },
     ] : []),
     ...(leadsEnabled ? [
       { label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const },
@@ -118,8 +118,7 @@ export default function Sidebar() {
     { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
     ...(inboxEnabled ? [
       { label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'blue' as const },
-      { label: 'Work Queue', href: '/inbox/operations', icon: ListChecks, tone: 'cyan' as const },
-      { label: 'Phone Leads', href: '/inbox/phone-leads', icon: Phone, tone: 'emerald' as const },
+      { label: contactPlural, href: '/contacts', icon: Users, tone: 'emerald' as const },
     ] : []),
     ...(leadsEnabled ? [
       { label: `All ${leadPlural}`, href: '/leads', icon: Kanban, tone: 'cyan' as const },
@@ -127,7 +126,7 @@ export default function Sidebar() {
     ...(tasksEnabled ? [
       { label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const },
     ] : []),
-    { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },
+    { label: 'Team', href: '/team', icon: UserCog, tone: 'emerald' },
   ];
 
   const insightItems: NavItem[] = [
@@ -138,6 +137,7 @@ export default function Sidebar() {
 
   const adminItems: NavItem[] = canManage
     ? [
+        ...(inboxEnabled ? [{ label: 'Automations', href: '/settings/automations', icon: Zap, tone: 'violet' as const }] : []),
         { label: 'Business Setup', href: '/settings/business', icon: Building2, tone: 'blue' },
         { label: 'Custom Fields', href: '/settings/business/fields', icon: ListPlus, tone: 'cyan' },
         { label: 'Connections', href: '/connections', icon: PlugZap, tone: 'cyan' },
