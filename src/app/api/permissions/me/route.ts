@@ -19,6 +19,8 @@ const PERMISSIONS: WorkspacePermission[] = [
   'reports.view',
   'permissions.view',
   'permissions.manage',
+  'service_levels.view',
+  'service_levels.edit',
 ];
 
 export async function GET(request: Request) {
@@ -30,10 +32,7 @@ export async function GET(request: Request) {
   );
 
   return NextResponse.json(
-    {
-      role: actor.profile.role,
-      permissions: Object.fromEntries(values),
-    },
+    { role: actor.profile.role, permissions: Object.fromEntries(values) },
     { headers: { 'Cache-Control': 'private, no-store' } }
   );
 }
