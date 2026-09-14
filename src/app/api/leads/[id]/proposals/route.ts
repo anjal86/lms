@@ -42,16 +42,14 @@ export async function POST(request: Request, context: Context) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'Invalid proposal.' }, { status: 400 });
   const input = parsed.data;
 
-  let version = 1;
-  if (input.parentRevisionId) {
-    const { data: parent } = await actor.supabase
-      .from('lead_quotes')
-      .select('version')
-      .eq('lead_id', id)
-      .eq('id', input.parentRevisionId)
-      .maybeSingle();
-    if (parent) version = Number(parent.version || 1) + 1;
-  }
+  const { data: lead, error: leadError } = await actor.supabase
+    .from('leads')
+    .select('id')
+    .eq('id', id)
+    .eq('workspace_id', actor.profile.workspace_id)
+    .maybeSingle();
+  if (leadError) return NextResponse.json({ error: 'Unable to validate opportunity.' }, { status: 500 });
+  if (!lead) return NextResponse.json({ error: 'Opportunity not found or unavailable.' }, { status: 404 });
 
   const recordId = crypto.randomUUID();
   const selling = input.totalSellingPrice ?? null;
@@ -68,11 +66,35 @@ export async function POST(request: Request, context: Context) {
     total_supplier_cost: supplier,
     gross_profit: grossProfit,
     profit_margin_pct: margin,
-    version,
     parent_revision_id: input.parentRevisionId || null,
     terms: input.terms || null,
     created_at: now,
   };
+
+  if (input.parentRevisionId) {
+    const { data, error } = await actor.supabase.rpc('create_proposal_revision', {
+      p_lead_id: id,
+      p_parent_revision_id: input.parentRevisionId,
+      p_id: recordId,
+      p_quote_number: input.quoteNumber || null,
+      p_package_title: input.packageTitle,
+      p_total_selling_price: selling,
+      p_total_supplier_cost: supplier,
+      p_terms: input.terms || null,
+      p_payload: payload,
+    });
+
+    if (error) {
+      if (error.code === 'P0002') return NextResponse.json({ error: 'Parent proposal not found.' }, { status: 404 });
+      if (error.code === '23505') return NextResponse.json({ error: 'This proposal already has a newer revision.' }, { status: 409 });
+      if (error.code === '23514') return NextResponse.json({ error: error.message || 'This proposal cannot be revised.' }, { status: 409 });
+      if (error.code === '42501') return NextResponse.json({ error: 'Opportunity not found or unavailable.' }, { status: 404 });
+      console.error('Proposal revision create failed:', error.message);
+      return NextResponse.json({ error: 'Unable to create proposal revision.' }, { status: 500 });
+    }
+
+    return NextResponse.json({ proposal: data }, { status: 201 });
+  }
 
   const { data, error } = await actor.supabase
     .from('lead_quotes')
@@ -86,15 +108,18 @@ export async function POST(request: Request, context: Context) {
       total_supplier_cost: supplier,
       gross_profit: grossProfit,
       profit_margin_pct: margin,
-      version,
-      parent_revision_id: input.parentRevisionId || null,
+      version: 1,
+      parent_revision_id: null,
       terms: input.terms || null,
       created_at: now,
       updated_at: now,
-      payload,
+      payload: { ...payload, version: 1 },
     })
     .select('*')
     .single();
-  if (error) return NextResponse.json({ error: 'Unable to create proposal.' }, { status: 500 });
+  if (error) {
+    console.error('Proposal create failed:', error.message);
+    return NextResponse.json({ error: 'Unable to create proposal.' }, { status: 500 });
+  }
   return NextResponse.json({ proposal: data }, { status: 201 });
 }
