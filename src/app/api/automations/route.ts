@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { getApiActor } from '@/lib/auth/api-actor';
+import { actorHasPermission } from '@/lib/auth/permissions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ const WorkflowSchema = z.object({
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required.' }, { status: 403 });
+  if (!(await actorHasPermission(actor, 'automations.view'))) return NextResponse.json({ error: 'Automation access required.' }, { status: 403 });
 
   const { data, error } = await actor.supabase
     .from('automation_workflows')
@@ -35,9 +36,7 @@ export async function GET(request: Request) {
     .limit(100);
 
   const latestRuns = new Map<string, unknown>();
-  for (const run of runRows || []) {
-    if (!latestRuns.has(run.workflow_id)) latestRuns.set(run.workflow_id, run);
-  }
+  for (const run of runRows || []) if (!latestRuns.has(run.workflow_id)) latestRuns.set(run.workflow_id, run);
 
   return NextResponse.json({
     workflows: (data || []).map((workflow) => ({ ...workflow, latest_run: latestRuns.get(workflow.id) || null })),
@@ -47,20 +46,19 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required.' }, { status: 403 });
+  if (!(await actorHasPermission(actor, 'automations.edit'))) return NextResponse.json({ error: 'Automation edit permission required.' }, { status: 403 });
 
   let raw: unknown;
   try { raw = await request.json(); } catch { return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }); }
   const parsed = WorkflowSchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: 'Validation failed.', details: parsed.error.flatten() }, { status: 400 });
+  if (parsed.data.is_enabled && !(await actorHasPermission(actor, 'automations.publish'))) {
+    return NextResponse.json({ error: 'Automation publish permission required to enable a workflow.' }, { status: 403 });
+  }
 
   const { data, error } = await actor.supabase
     .from('automation_workflows')
-    .insert({
-      workspace_id: actor.profile.workspace_id,
-      ...parsed.data,
-      created_by: actor.user.id,
-    })
+    .insert({ workspace_id: actor.profile.workspace_id, ...parsed.data, created_by: actor.user.id })
     .select()
     .single();
   if (error) {
