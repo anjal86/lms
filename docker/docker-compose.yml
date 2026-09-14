@@ -56,6 +56,39 @@ services:
       PGRST_JWT_SECRET: ${JWT_SECRET}
       PGRST_DB_USE_LEGACY_GUCS: "false"
 
+  supabase-storage:
+    image: supabase/storage-api:v1.74.0
+    container_name: travel-lms-storage
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+      supabase-rest:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    environment:
+      ANON_KEY: ${ANON_KEY:?ANON_KEY is required}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY is required}
+      POSTGREST_URL: http://supabase-rest:3000
+      AUTH_JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@supabase-db:5432/${POSTGRES_DB:-postgres}
+      STORAGE_PUBLIC_URL: ${PUBLIC_SUPABASE_URL:-http://localhost:8000}
+      REQUEST_ALLOW_X_FORWARDED_PATH: "true"
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      GLOBAL_S3_BUCKET: local
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: local
+      REGION: local
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    volumes:
+      - storage-data:/var/lib/storage
+
   supabase-realtime:
     image: supabase/realtime:v2.34.47
     container_name: realtime-dev.supabase-realtime
@@ -120,6 +153,8 @@ services:
         condition: service_started
       supabase-rest:
         condition: service_started
+      supabase-storage:
+        condition: service_healthy
       supabase-realtime:
         condition: service_healthy
 
@@ -182,8 +217,12 @@ services:
       SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
       NODE_ENV: production
     depends_on:
-      - supabase-kong
-      - supabase-db
+      supabase-kong:
+        condition: service_started
+      supabase-db:
+        condition: service_healthy
+      supabase-storage:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
       interval: 15s
@@ -212,3 +251,4 @@ services:
 
 volumes:
   db-data:
+  storage-data:
