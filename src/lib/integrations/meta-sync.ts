@@ -625,6 +625,10 @@ export async function syncMetaConversations(options?: {
   const isLive = options?.liveMode ?? false;
   const pageSize = isLive ? 15 : 25;
   const maxPages = isLive ? 1 : 2;
+  // Live polling must inspect the provider's current recent window. The stored
+  // connection timestamp is shared by every Page on a connection, so using it
+  // as a per-Page cursor can skip fresh messages on a quieter selected Page.
+  const liveSince = isLive ? null : undefined;
 
   let query = admin
     .from('integration_connections')
@@ -675,7 +679,7 @@ export async function syncMetaConversations(options?: {
               accountName: String(instagramAccount.username || page.name || connection.display_name || 'Instagram'),
               token,
               version,
-              since: connection.last_external_timestamp,
+              since: liveSince === null ? null : connection.last_external_timestamp,
               pageSize,
               maxPages,
             });
@@ -686,7 +690,7 @@ export async function syncMetaConversations(options?: {
               pageName: String(page.name || connection.display_name || 'Facebook Page'),
               token,
               version,
-              since: connection.last_external_timestamp,
+              since: liveSince === null ? null : connection.last_external_timestamp,
               pageSize,
               maxPages,
             });
