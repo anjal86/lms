@@ -15,7 +15,9 @@ export type WorkspacePermission =
   | 'automations.publish'
   | 'reports.view'
   | 'permissions.view'
-  | 'permissions.manage';
+  | 'permissions.manage'
+  | 'service_levels.view'
+  | 'service_levels.edit';
 
 type PermissionMap = Record<WorkspacePermission, boolean>;
 
@@ -33,6 +35,8 @@ const EMPTY: PermissionMap = {
   'reports.view': false,
   'permissions.view': false,
   'permissions.manage': false,
+  'service_levels.view': false,
+  'service_levels.edit': false,
 };
 
 let cached: PermissionMap | null = null;
