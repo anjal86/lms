@@ -61,37 +61,32 @@ const configuredFieldValue = (lead: Lead, fieldKey: string) => {
   return lead.custom_data?.[fieldKey];
 };
 
+// These fallback definitions mirror the default qualification flags seeded in the
+// workspace schema. They exist only for older workspaces that have not refreshed
+// their field-definition metadata yet.
 const travelFields: FieldDefinition[] = [
   { key: 'destination', label: 'Destination', read: (lead) => lead.destination },
-  { key: 'travel_month', label: 'Travel month', read: (lead) => lead.travel_dates },
-  { key: 'nationality', label: 'Nationality', read: (lead) => customValue(lead, 'nationality') ?? lead.customer_country },
-  { key: 'pax', label: 'Travelers', read: (lead) => lead.pax_adults + lead.pax_children + lead.pax_infants },
-  { key: 'budget', label: 'Budget', read: (lead) => lead.budget_range },
-  { key: 'trip_type', label: 'Trip type', read: (lead) => lead.travel_type },
-  { key: 'hotel_level', label: 'Hotel level', read: (lead) => lead.hotel_category },
-  { key: 'flight_required', label: 'Flight required', read: (lead) => lead.flight_required },
-  { key: 'special_requirements', label: 'Special requirements', read: (lead) => lead.special_notes },
+  { key: 'travel_dates', label: 'Travel dates', read: (lead) => lead.travel_dates },
+  { key: 'pax_adults', label: 'Travelers', read: (lead) => lead.pax_adults + lead.pax_children + lead.pax_infants },
+  { key: 'budget_range', label: 'Budget', read: (lead) => lead.budget_range },
+  { key: 'travel_type', label: 'Trip type', read: (lead) => lead.travel_type },
+  { key: 'hotel_category', label: 'Hotel level', read: (lead) => lead.hotel_category },
 ];
 
 const educationFields: FieldDefinition[] = [
-  { key: 'education_level', label: 'Education level', read: (lead) => customValue(lead, 'education_level', 'qualification') },
-  { key: 'graduation_year', label: 'Graduation year', read: (lead) => customValue(lead, 'graduation_year') },
-  { key: 'gap_years', label: 'Study gap', read: (lead) => customValue(lead, 'gap_years', 'gap') },
-  { key: 'japanese_level', label: 'Japanese level', read: (lead) => customValue(lead, 'japanese_level', 'language_level', 'language_score') },
-  { key: 'preferred_intake', label: 'Preferred intake', read: (lead) => customValue(lead, 'preferred_intake', 'intake') },
-  { key: 'preferred_city', label: 'Preferred city', read: (lead) => customValue(lead, 'preferred_city', 'city') },
-  { key: 'budget', label: 'Budget', read: (lead) => customValue(lead, 'budget') ?? lead.budget_range },
-  { key: 'passport_status', label: 'Passport', read: (lead) => customValue(lead, 'passport_status') },
-  { key: 'academic_documents_status', label: 'Academic documents', read: (lead) => customValue(lead, 'academic_documents_status', 'academic_docs_status') },
+  { key: 'study_destination', label: 'Study destination', read: (lead) => customValue(lead, 'study_destination', 'preferred_country') },
+  { key: 'intake', label: 'Intake', read: (lead) => customValue(lead, 'intake', 'preferred_intake') },
+  { key: 'qualification', label: 'Academic qualification', read: (lead) => customValue(lead, 'qualification', 'education_level') },
+  { key: 'language_test', label: 'Language test', read: (lead) => customValue(lead, 'language_test') },
+  { key: 'language_score', label: 'Language score / level', read: (lead) => customValue(lead, 'language_score', 'japanese_level', 'language_level') },
+  { key: 'course', label: 'Course', read: (lead) => customValue(lead, 'course') },
 ];
 
 const servicesFields: FieldDefinition[] = [
-  { key: 'service_required', label: 'Service required', read: (lead) => customValue(lead, 'service_required', 'service', 'service_interest', 'interest') },
-  { key: 'budget', label: 'Budget', read: (lead) => customValue(lead, 'budget', 'project_budget') ?? lead.budget_range },
-  { key: 'deadline', label: 'Deadline', read: (lead) => customValue(lead, 'deadline', 'project_deadline', 'target_date') },
-  { key: 'decision_maker', label: 'Decision maker', read: (lead) => customValue(lead, 'decision_maker') },
-  { key: 'scope', label: 'Scope', read: (lead) => customValue(lead, 'scope', 'project_scope', 'brief', 'notes') },
-  { key: 'proposal_required', label: 'Proposal required', read: (lead) => customValue(lead, 'proposal_required') },
+  { key: 'service_interest', label: 'Service required', read: (lead) => customValue(lead, 'service_interest', 'service_required', 'interest') },
+  { key: 'project_budget', label: 'Budget', read: (lead) => customValue(lead, 'project_budget', 'budget') ?? lead.budget_range },
+  { key: 'project_deadline', label: 'Deadline', read: (lead) => customValue(lead, 'project_deadline', 'deadline', 'target_date') },
+  { key: 'brief', label: 'Requirements', read: (lead) => customValue(lead, 'brief', 'scope', 'notes') },
 ];
 
 const packFields: Record<IndustryPack, FieldDefinition[]> = {
@@ -104,6 +99,16 @@ const packLabels: Record<IndustryPack, string> = {
   education: 'Education',
   travel: 'Travel',
   services: 'Agency / Services',
+};
+
+const configuredQualificationKeys: Record<string, Set<string>> = {
+  travel: new Set(['destination', 'travel_dates', 'pax_adults', 'budget_range', 'travel_type', 'hotel_category']),
+  consultancy: new Set(['study_destination', 'intake', 'qualification', 'language_test', 'language_score', 'course']),
+  education: new Set(['study_destination', 'intake', 'qualification', 'language_test', 'language_score', 'course']),
+  agency: new Set(['service_interest', 'project_budget', 'project_deadline', 'brief']),
+  services: new Set(['service_interest', 'project_budget', 'project_deadline', 'brief']),
+  health: new Set(['service_interest', 'consultation_date', 'client_goal', 'consultation_status']),
+  generic: new Set(['interest', 'budget', 'target_date', 'notes']),
 };
 
 const suggestedActions: Record<Lead['stage'], string> = {
@@ -199,7 +204,12 @@ export function buildConfiguredQualificationSummary(
   fields: Array<{ key: string; label: string }>
 ): QualificationSummary {
   const pack = inferIndustryPack(lead, workspaceBusinessType);
-  const items = fields.map((field) => {
+  const defaultKeys = configuredQualificationKeys[workspaceBusinessType];
+  const qualificationFields = defaultKeys
+    ? fields.filter((field) => defaultKeys.has(field.key))
+    : [];
+  const selectedFields = qualificationFields.length > 0 ? qualificationFields : fields;
+  const items = selectedFields.map((field) => {
     const rawValue = configuredFieldValue(lead, field.key);
     return {
       key: field.key,
