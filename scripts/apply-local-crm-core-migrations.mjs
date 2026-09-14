@@ -73,6 +73,10 @@ const migrations = [
     file: '202609120047_realtime_assignment_notifications.sql',
     applied: () => exists("select to_regprocedure('public.notify_staff_assignment()') is not null and exists(select 1 from pg_trigger where tgname='trg_leads_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_conversations_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_work_items_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_post_sale_cases_assignment_notification' and not tgisinternal)"),
   },
+  {
+    file: '202609120048_inbox_collaboration_media.sql',
+    applied: () => exists("select to_regprocedure('public.notify_conversation_collaborator_added()') is not null and exists(select 1 from pg_trigger where tgname='trg_conversation_collaborator_notification' and not tgisinternal) and exists(select 1 from storage.buckets where id='conversation-media')"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
