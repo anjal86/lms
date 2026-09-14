@@ -114,17 +114,12 @@ values
   ('44444444-4444-4444-4444-444444444444','other@test.local','{"full_name":"Other Agent"}'::jsonb,now(),now())
 on conflict (id) do nothing;
 
--- Supabase service-role requests carry role=service_role in request.jwt.claims. Set the
--- same context here so SECURITY DEFINER protection triggers exercise the production path
--- instead of falling back to their function-owner current_user.
 set role service_role;
 set request.jwt.claims = '{"role":"service_role"}';
 update public.profiles set role='admin', is_active=true where id='11111111-1111-1111-1111-111111111111';
 update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
 update public.profiles set role='agent', is_active=false where id='33333333-3333-3333-3333-333333333333';
 update public.profiles set role='agent', is_active=true where id='44444444-4444-4444-4444-444444444444';
--- Custom PostgreSQL GUCs reset to an empty string, which is not valid JSON. Keep the
--- emulated Supabase claim value syntactically valid before returning to the owner role.
 set request.jwt.claims = '{}';
 reset role;
 
@@ -172,4 +167,108 @@ agent_load="$(query_as '11111111-1111-1111-1111-111111111111' "select current_lo
 [[ "$other_chat_access" == "f" ]] || { echo "Agent unexpectedly accessed another agent's conversation"; exit 1; }
 [[ "$agent_load" == "1" ]] || { echo "Expected database-maintained current_load=1 for agent, got '$agent_load'"; exit 1; }
 
-echo "==> Migration chain and RLS smoke tests passed."
+echo "==> Exercising CRM core integrity paths..."
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
+do $$
+declare
+  v_workspace uuid;
+  v_other_workspace uuid := '99999999-9999-9999-9999-999999999999';
+begin
+  select workspace_id into v_workspace from public.leads where id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1';
+
+  insert into public.workspaces(id,name,slug,business_type)
+  values (v_other_workspace,'Other Workspace','migration-test-other','generic')
+  on conflict (id) do nothing;
+
+  insert into public.leads(id,workspace_id,customer_name,customer_phone,destination,stage)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9',v_other_workspace,'Other Workspace Lead','+19999999999','Test','new')
+  on conflict (id) do nothing;
+
+  begin
+    insert into public.work_items(workspace_id,lead_id,title)
+    values (v_workspace,'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9','Must fail');
+    raise exception 'Cross-workspace work item reference was accepted';
+  exception when check_violation then
+    null;
+  end;
+
+  insert into public.pipelines(id,workspace_id,entity_type,pipeline_key,name,is_default,is_active)
+  values ('77777777-7777-7777-7777-777777777770',v_workspace,'lead','integrity_test','Integrity Test',false,true)
+  on conflict (id) do nothing;
+  insert into public.pipeline_stages(id,pipeline_id,stage_key,name,stage_type,probability,sort_order)
+  values
+    ('77777777-7777-7777-7777-777777777771','77777777-7777-7777-7777-777777777770','qualify','Qualify','open',25,10),
+    ('77777777-7777-7777-7777-777777777772','77777777-7777-7777-7777-777777777770','proposal','Proposal','open',50,20)
+  on conflict (id) do nothing;
+  insert into public.pipeline_stage_requirements(workspace_id,pipeline_stage_id,requirement_type,requirement_key,label,is_required,sort_order)
+  values (v_workspace,'77777777-7777-7777-7777-777777777771','field','customer_city','Customer city',true,10)
+  on conflict (pipeline_stage_id,requirement_type,requirement_key) do nothing;
+
+  insert into public.lead_quotes(lead_id,id,package_title,status,total_selling_price,total_supplier_cost,payload)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','integrity-quote','Integrity Quote','draft',1000,700,'{}'::jsonb)
+  on conflict (lead_id,id) do nothing;
+  update public.lead_quotes set status='sent' where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' and id='integrity-quote';
+
+  begin
+    update public.lead_quotes set package_title='Illegal sent edit'
+    where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' and id='integrity-quote';
+    raise exception 'Sent proposal commercial edit was accepted';
+  exception when check_violation then
+    null;
+  end;
+
+  begin
+    update public.lead_quotes set status='draft'
+    where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' and id='integrity-quote';
+    raise exception 'Invalid proposal lifecycle transition was accepted';
+  exception when check_violation then
+    null;
+  end;
+
+  insert into public.lead_documents(lead_id,id,title,category,document_type,lifecycle_status,payload)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','integrity-doc','Integrity Document','passport','passport','requested','{}'::jsonb)
+  on conflict (lead_id,id) do nothing;
+  begin
+    update public.lead_documents set lifecycle_status='verified'
+    where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' and id='integrity-doc';
+    raise exception 'Document without an uploaded file was verified';
+  exception when check_violation then
+    null;
+  end;
+
+  insert into public.automation_workflows(id,workspace_id,name,trigger_key,conditions,actions,is_enabled,sort_order)
+  values (
+    '88888888-8888-8888-8888-888888888888',v_workspace,'Integrity automation','opportunity.updated','{}'::jsonb,
+    '[{"type":"set_next_action","minutes":15,"title":"Integrity follow-up"}]'::jsonb,true,10
+  ) on conflict (id) do update set is_enabled=true,trigger_key=excluded.trigger_key,conditions=excluded.conditions,actions=excluded.actions;
+
+  update public.leads set priority='urgent'
+  where id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1';
+
+  if (select count(*) from public.work_items where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1' and source='automation' and title='Integrity follow-up') <> 1 then
+    raise exception 'Business event automation did not create exactly one canonical Work Item';
+  end if;
+  if not exists (
+    select 1 from public.automation_runs
+    where workflow_id='88888888-8888-8888-8888-888888888888'
+      and business_event_id is not null
+      and status='succeeded'
+  ) then
+    raise exception 'Business event automation did not record a successful run';
+  end if;
+  if exists (
+    select 1 from public.business_events
+    where lead_id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1'
+      and event_type='opportunity.updated'
+      and status <> 'processed'
+  ) then
+    raise exception 'Opportunity business event did not reach processed state';
+  end if;
+end
+$$;
+SQL
+
+cumulative_missing="$(query_as '11111111-1111-1111-1111-111111111111' "select count(*) from public.lead_stage_missing_requirements('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','77777777-7777-7777-7777-777777777772') where requirement_key='customer_city';")"
+[[ "$cumulative_missing" == "1" ]] || { echo "Expected cumulative stage gate to include prior-stage customer_city requirement, got $cumulative_missing"; exit 1; }
+
+echo "==> Migration chain, RLS and CRM core integrity tests passed."
