@@ -554,13 +554,24 @@ export default function StableInbox() {
     const id = selectedIdRef.current;
     if (!id || !userId) return;
     const response = await fetch(`/api/conversations/${id}/collaborators`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }) });
-    if (response.ok) { secondaryCache.current.delete(id); await loadSecondary(id, true); }
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(payload.error || 'Unable to add collaborator.', 'error');
+      return;
+    }
+    secondaryCache.current.delete(id);
+    await loadSecondary(id, true);
   };
 
   const removeCollaborator = async (userId: string) => {
     const id = selectedIdRef.current;
     if (!id) return;
-    await fetch(`/api/conversations/${id}/collaborators?userId=${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    const response = await fetch(`/api/conversations/${id}/collaborators?userId=${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(payload.error || 'Unable to remove collaborator.', 'error');
+      return;
+    }
     secondaryCache.current.delete(id);
     await loadSecondary(id, true);
   };
@@ -599,7 +610,12 @@ export default function StableInbox() {
 
   const metadata = asRecord(selected?.metadata);
   const canReply = metadata.can_reply !== false;
-  const availableCollaborators = allProfiles.filter((profile) => profile.is_active && !collaborators.some((row) => row.user_id === profile.id));
+  const canManageCollaborators = can('inbox.assign');
+  const availableCollaborators = allProfiles.filter((profile) =>
+    profile.is_active
+    && !collaborators.some((row) => row.user_id === profile.id)
+    && (canManageCollaborators || profile.id === currentUser?.id)
+  );
 
   const context = selected ? <section aria-label="Conversation details" className="flex h-full min-h-0 flex-col bg-white">
     <div data-context-tabs="true">{(['details','history','assist','crm'] as ContextTab[]).map((tab) => <button key={tab} type="button" aria-selected={contextTab === tab} onClick={() => setContextTab(tab)}>{tab === 'crm' ? 'CRM' : label(tab)}</button>)}</div>
@@ -609,7 +625,7 @@ export default function StableInbox() {
         <div data-customer-summary="true" className="flex items-center gap-3">{selected.customer_avatar_url ? <img data-customer-avatar="true" src={selected.customer_avatar_url} alt="" /> : <div data-customer-avatar="true" className="flex items-center justify-center bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div className="truncate text-base font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div className="truncate text-xs text-zinc-500">{selected.customer_phone || selectedContact?.primary_phone || selected.customer_email || selectedContact?.primary_email || 'No direct contact detail'}</div></div></div>
         <dl className="space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-zinc-500">Channel</dt><dd className="font-semibold capitalize">{selected.provider}</dd></div><div className="flex justify-between gap-3"><dt className="text-zinc-500">Priority</dt><dd className="font-semibold capitalize">{selected.priority}</dd></div><div className="flex justify-between gap-3"><dt className="text-zinc-500">Lifecycle</dt><dd className="font-semibold">{label(selectedContact?.lifecycle_key || 'new')}</dd></div></dl>
         <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Assignment</div>{can('inbox.assign') ? <select value={selected.assigned_to || ''} onChange={(e) => void patchConversation({ assigned_to: e.target.value || null })} className="select-field mt-2 h-9 w-full text-xs"><option value="">Unassigned</option>{allProfiles.filter((p) => p.is_active).map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select> : <div className="mt-2 text-xs font-semibold">{selected.assigned_profile?.full_name || 'Unassigned'}</div>}</section>
-        <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Collaborators</div><div className="mt-2 flex flex-wrap gap-1.5">{collaborators.map((item) => <button key={item.user_id} type="button" onClick={() => void removeCollaborator(item.user_id)} className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-semibold">{item.user?.full_name || 'Member'} ×</button>)}</div><select defaultValue="" onChange={(e) => { const value = e.target.value; e.target.value = ''; if (value) void addCollaborator(value); }} className="select-field mt-2 h-8 w-full text-xs"><option value="">Add collaborator…</option>{availableCollaborators.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></section>
+        <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Collaborators</div><div className="mt-2 flex flex-wrap gap-1.5">{collaborators.map((item) => { const removable = canManageCollaborators || item.user_id === currentUser?.id; return removable ? <button key={item.user_id} type="button" onClick={() => void removeCollaborator(item.user_id)} className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-semibold">{item.user?.full_name || 'Member'} ×</button> : <span key={item.user_id} className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-semibold text-zinc-600">{item.user?.full_name || 'Member'}</span>; })}</div>{availableCollaborators.length > 0 && <select defaultValue="" onChange={(e) => { const value = e.target.value; e.target.value = ''; if (value) void addCollaborator(value); }} className="select-field mt-2 h-8 w-full text-xs"><option value="">Add collaborator…</option>{availableCollaborators.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select>}</section>
         <Link href={selectedContact ? `/contacts/${selectedContact.id}` : '/contacts'} className="button-secondary w-full">Open contact profile</Link>
       </div>}
 
