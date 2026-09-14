@@ -5,7 +5,7 @@ import { BookOpen, FileText, Image as ImageIcon, Loader2, Paperclip, Plus, Send,
 
 type ReplyMode = 'outbound' | 'internal';
 
-type StagedAttachment = {
+export type InboxComposerAttachment = {
   storagePath: string;
   url: string;
   providerUrl?: string;
@@ -29,7 +29,7 @@ type Props = {
   sending?: boolean;
   composerRef?: React.RefObject<HTMLTextAreaElement | null>;
   onTyping?: (typing: boolean) => void;
-  onSend: (payload: { body: string; attachment?: StagedAttachment | null; mode: ReplyMode }) => Promise<boolean>;
+  onSend: (payload: { body: string; attachment?: InboxComposerAttachment | null; mode: ReplyMode }) => Promise<boolean>;
 };
 
 const DEFAULT_REPLIES: QuickReply[] = [
@@ -46,7 +46,7 @@ function sizeLabel(bytes: number) {
 }
 
 export default function InboxComposer({ workspaceId, conversationId, mode, onModeChange, value, onChange, canReply, loading, sending, composerRef, onTyping, onSend }: Props) {
-  const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
+  const [attachment, setAttachment] = useState<InboxComposerAttachment | null>(null);
   const [uploading, setUploading] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -87,7 +87,7 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
       const form = new FormData();
       form.set('file', file);
       const response = await fetch(`/api/conversations/${conversationId}/attachments`, { method: 'POST', body: form });
-      const payload = await response.json().catch(() => ({})) as { error?: string; attachment?: StagedAttachment };
+      const payload = await response.json().catch(() => ({})) as { error?: string; attachment?: InboxComposerAttachment };
       if (!response.ok || !payload.attachment) throw new Error(payload.error || 'Unable to upload attachment.');
       setAttachment(payload.attachment);
     } catch (error) {
