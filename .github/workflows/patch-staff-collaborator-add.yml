@@ -1,0 +1,31 @@
+name: Patch Staff Collaborator Add
+
+on:
+  push:
+    branches: [fix/staff-add-collaborators]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[staff-collaborator-add-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/staff-add-collaborators
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Apply staff collaborator patch
+        run: node scripts/patch-staff-collaborator-add.mjs
+      - name: Commit staff collaborator patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+anjal86@users.noreply.github.com"
+          git add src/app/api/conversations/[id]/collaborators/route.ts src/components/inbox/StableInbox.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: let staff add other staff as collaborators [staff-collaborator-add-patched]"
+          git push origin fix/staff-add-collaborators
