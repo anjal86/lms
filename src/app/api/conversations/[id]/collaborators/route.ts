@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement, type ApiActor } from '@/lib/auth/api-actor';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -11,7 +12,7 @@ const CollaboratorSchema = z.object({ user_id: uuidSchema });
 async function conversationExists(actor: ApiActor, id: string) {
   const { data } = await actor.supabase
     .from('lead_conversations')
-    .select('id,assigned_to')
+    .select('id,assigned_to,contact_id')
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', id)
     .maybeSingle();
@@ -51,21 +52,44 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
   const { data: member } = await actor.supabase
     .from('profiles')
-    .select('id')
+    .select('id,full_name,email')
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', parsed.data.user_id)
     .eq('is_active', true)
     .maybeSingle();
   if (!member) return NextResponse.json({ error: 'Collaborator is not an active workspace member.' }, { status: 400 });
 
-  const { error } = await actor.supabase.from('conversation_collaborators').upsert({
+  const { data: existingCollaborator } = await actor.supabase
+    .from('conversation_collaborators')
+    .select('user_id')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('conversation_id', id)
+    .eq('user_id', parsed.data.user_id)
+    .maybeSingle();
+  if (existingCollaborator) return NextResponse.json({ ok: true, changed: false });
+
+  const { error } = await actor.supabase.from('conversation_collaborators').insert({
     workspace_id: actor.profile.workspace_id,
     conversation_id: id,
     user_id: parsed.data.user_id,
     created_by: actor.user.id,
-  }, { onConflict: 'conversation_id,user_id' });
+  });
   if (error) return NextResponse.json({ error: 'Unable to add collaborator.' }, { status: 500 });
-  return NextResponse.json({ ok: true });
+
+  const admin = createSupabaseAdminClient();
+  const { error: eventError } = await admin.from('conversation_events').insert({
+    workspace_id: actor.profile.workspace_id,
+    conversation_id: id,
+    contact_id: conversation.contact_id,
+    event_type: 'collaborator_added',
+    actor_id: actor.user.id,
+    payload: {
+      collaborator_id: member.id,
+      collaborator_name: member.full_name || member.email || 'Team member',
+    },
+  });
+  if (eventError) console.error('Unable to log collaborator addition:', eventError.message);
+  return NextResponse.json({ ok: true, changed: true });
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -80,6 +104,22 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     return NextResponse.json({ error: 'Agents may only remove themselves as collaborators.' }, { status: 403 });
   }
 
+  const { data: existingCollaborator } = await actor.supabase
+    .from('conversation_collaborators')
+    .select('user_id')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('conversation_id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!existingCollaborator) return NextResponse.json({ ok: true, changed: false });
+
+  const { data: member } = await actor.supabase
+    .from('profiles')
+    .select('id,full_name,email')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', userId)
+    .maybeSingle();
+
   const { error } = await actor.supabase
     .from('conversation_collaborators')
     .delete()
@@ -87,5 +127,20 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     .eq('conversation_id', id)
     .eq('user_id', userId);
   if (error) return NextResponse.json({ error: 'Unable to remove collaborator.' }, { status: 500 });
-  return NextResponse.json({ ok: true });
+
+  const conversation = await conversationExists(actor, id);
+  const admin = createSupabaseAdminClient();
+  const { error: eventError } = await admin.from('conversation_events').insert({
+    workspace_id: actor.profile.workspace_id,
+    conversation_id: id,
+    contact_id: conversation?.contact_id || null,
+    event_type: 'collaborator_removed',
+    actor_id: actor.user.id,
+    payload: {
+      collaborator_id: userId,
+      collaborator_name: member?.full_name || member?.email || 'Team member',
+    },
+  });
+  if (eventError) console.error('Unable to log collaborator removal:', eventError.message);
+  return NextResponse.json({ ok: true, changed: true });
 }
