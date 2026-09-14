@@ -46,6 +46,14 @@ services:
         paths:
           - /rest/v1/
 
+  - name: storage-v1
+    url: http://supabase-storage:5000/
+    routes:
+      - name: storage-v1-all
+        strip_path: true
+        paths:
+          - /storage/v1/
+
   - name: realtime-v1
     url: http://realtime-dev.supabase-realtime:4000/socket
     routes:
