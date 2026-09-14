@@ -2,39 +2,22 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
-  ArrowRight,
-  CalendarClock,
-  CheckCircle2,
-  MessageCircle,
-  Phone,
-  Search,
-  UserRound,
-} from 'lucide-react';
+import { ArrowRight, CalendarClock, MessageCircle, Search, UserRound } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
-import type { Lead } from '@/lib/types';
+import { buildQualificationSummary, getCanonicalNextAction } from '@/lib/opportunity-workspace';
+import type { LeadStage } from '@/lib/types';
 
-type WorkState = 'reply' | 'follow_up' | 'active';
-
-function getWorkState(lead: Lead, hasPendingFollowUp: boolean): WorkState {
-  if (!lead.first_contacted_at || lead.is_first_response_breached) return 'reply';
-  if (hasPendingFollowUp || lead.next_follow_up_at) return 'follow_up';
-  return 'active';
-}
-
-function stateCopy(state: WorkState) {
-  if (state === 'reply') return { label: 'Reply needed', className: 'bg-red-50 text-red-700 border-red-100' };
-  if (state === 'follow_up') return { label: 'Follow up', className: 'bg-amber-50 text-amber-700 border-amber-100' };
-  return { label: 'In progress', className: 'bg-blue-50 text-blue-700 border-blue-100' };
-}
-
-function formatNextDate(value?: string | null) {
-  if (!value) return 'No follow-up set';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Follow-up set';
-  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
+const ACTIVE_STAGES: LeadStage[] = ['new', 'contacted', 'quote_sent', 'in_negotiation'];
+const STAGE_LABELS: Record<LeadStage, string> = {
+  new: 'New',
+  contacted: 'Contacted',
+  quote_sent: 'Proposal sent',
+  in_negotiation: 'Negotiation',
+  won: 'Won',
+  lost: 'Lost',
+  junk: 'Junk',
+};
 
 function displayValue(value: unknown) {
   if (value == null || value === '') return '';
@@ -43,15 +26,20 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
+function formatNextDate(value?: string | null) {
+  if (!value) return 'No due date';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Scheduled';
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 export default function MyWorkPage() {
   const { leads, followUps, currentUser } = useApp();
   const { config, term } = useWorkspace();
   const [query, setQuery] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [stage, setStage] = useState<'all' | LeadStage>('all');
 
-  const leadPlural = term('lead_plural', 'Leads');
-  const contactPlural = term('contact_plural', 'Contacts');
-  const contactLabel = term('contact', 'Contact');
+  const leadPlural = term('lead_plural', 'Opportunities');
   const primaryField = useMemo(
     () => config.fields
       .filter((field) => field.entity_type === 'lead' && field.is_active)
@@ -59,74 +47,73 @@ export default function MyWorkPage() {
     [config.fields]
   );
 
-  const myLeads = useMemo(() => {
-    const pendingLeadIds = new Set(
-      followUps
-        .filter((item) => item.assigned_to === currentUser.id && (item.status === 'pending' || item.status === 'missed'))
-        .map((item) => item.lead_id)
-    );
+  const myOpportunities = useMemo(() => leads
+    .filter((lead) => lead.assigned_to === currentUser.id && ACTIVE_STAGES.includes(lead.stage))
+    .map((lead) => ({
+      lead,
+      qualification: buildQualificationSummary(lead, config.workspace.business_type),
+      nextAction: getCanonicalNextAction(lead, followUps),
+    }))
+    .sort((left, right) => {
+      const leftDue = left.nextAction.scheduledAt ? new Date(left.nextAction.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      const rightDue = right.nextAction.scheduledAt ? new Date(right.nextAction.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+      return right.lead.updated_at.localeCompare(left.lead.updated_at);
+    }), [config.workspace.business_type, currentUser.id, followUps, leads]);
 
-    return leads
-      .filter((lead) => lead.assigned_to === currentUser.id && !['won', 'lost', 'junk'].includes(lead.stage))
-      .map((lead) => ({ lead, state: getWorkState(lead, pendingLeadIds.has(lead.id)) }))
-      .sort((a, b) => {
-        const order: Record<WorkState, number> = { reply: 0, follow_up: 1, active: 2 };
-        if (order[a.state] !== order[b.state]) return order[a.state] - order[b.state];
-        return b.lead.created_at.localeCompare(a.lead.created_at);
-      });
-  }, [currentUser.id, followUps, leads]);
-
-  const replyCount = myLeads.filter((item) => item.state === 'reply').length;
-  const followUpCount = myLeads.filter((item) => item.state === 'follow_up').length;
+  const stageCounts = useMemo(() => myOpportunities.reduce((result, item) => {
+    result[item.lead.stage] = (result[item.lead.stage] || 0) + 1;
+    return result;
+  }, {} as Partial<Record<LeadStage, number>>), [myOpportunities]);
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return myLeads.filter(({ lead, state }) => {
-      if (!showAll && state === 'active') return false;
-      if (!q) return true;
+    const searchTerm = query.trim().toLowerCase();
+    return myOpportunities.filter(({ lead }) => {
+      if (stage !== 'all' && lead.stage !== stage) return false;
+      if (!searchTerm) return true;
       const customValues = Object.values(lead.custom_data || {});
       return [lead.customer_name, lead.customer_phone, lead.customer_email, lead.lead_code, ...customValues]
         .filter(Boolean)
-        .some((value) => displayValue(value).toLowerCase().includes(q));
+        .some((value) => displayValue(value).toLowerCase().includes(searchTerm));
     });
-  }, [myLeads, query, showAll]);
+  }, [myOpportunities, query, stage]);
 
   return (
     <div className="workspace-page">
       <div className="workspace-header">
         <div>
-          <p className="workspace-eyebrow">My Work</p>
-          <h1 className="workspace-title">What should I do next?</h1>
-          <p className="workspace-description">Only your active {leadPlural.toLowerCase()}, ordered by what needs attention first.</p>
+          <p className="workspace-eyebrow">Opportunities</p>
+          <h1 className="workspace-title">My {leadPlural}</h1>
+          <p className="workspace-description">Commercial work you own. Scheduled actions live in Due Work; customer replies live in Inbox.</p>
         </div>
-        <Link href="/dashboard" className="button-secondary">Today</Link>
+        <div className="flex gap-2">
+          <Link href="/work?owner=me" className="button-secondary">Due Work</Link>
+          <Link href="/inbox?view=mine" className="button-secondary">Inbox</Link>
+        </div>
       </div>
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        <button type="button" onClick={() => setShowAll(false)} className="panel p-4 text-left transition hover:border-zinc-300">
-          <div className="text-xs font-medium text-zinc-500">Needs a reply</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{replyCount}</div>
-          <div className="mt-1 text-xs text-zinc-500">Start here</div>
-        </button>
-        <button type="button" onClick={() => setShowAll(false)} className="panel p-4 text-left transition hover:border-zinc-300">
-          <div className="text-xs font-medium text-zinc-500">Follow-ups</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{followUpCount}</div>
-          <div className="mt-1 text-xs text-zinc-500">{contactPlural} to contact again</div>
-        </button>
-        <button type="button" onClick={() => setShowAll(true)} className="panel p-4 text-left transition hover:border-zinc-300">
-          <div className="text-xs font-medium text-zinc-500">All my active {leadPlural.toLowerCase()}</div>
-          <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{myLeads.length}</div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <button type="button" onClick={() => setStage('all')} className={`panel p-4 text-left transition hover:border-zinc-300 ${stage === 'all' ? 'border-zinc-400' : ''}`}>
+          <div className="text-xs font-medium text-zinc-500">Active</div>
+          <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{myOpportunities.length}</div>
           <div className="mt-1 text-xs text-zinc-500">Everything assigned to you</div>
         </button>
+        {(['new', 'contacted', 'quote_sent'] as LeadStage[]).map((key) => (
+          <button key={key} type="button" onClick={() => setStage(key)} className={`panel p-4 text-left transition hover:border-zinc-300 ${stage === key ? 'border-zinc-400' : ''}`}>
+            <div className="text-xs font-medium text-zinc-500">{STAGE_LABELS[key]}</div>
+            <div className="mt-1 text-3xl font-semibold tracking-tight text-zinc-950">{stageCounts[key] || 0}</div>
+            <div className="mt-1 text-xs text-zinc-500">{key === 'new' ? 'Needs qualification' : key === 'contacted' ? 'In discovery' : 'Commercial follow-through'}</div>
+          </button>
+        ))}
       </section>
 
       <section className="panel overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-zinc-100 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-zinc-950">{showAll ? `All my ${leadPlural.toLowerCase()}` : 'Needs action'}</h2>
-            <p className="mt-1 text-xs text-zinc-500">Open a record, contact the {contactLabel.toLowerCase()}, then continue to the next one.</p>
+            <h2 className="text-sm font-semibold text-zinc-950">{stage === 'all' ? `Active ${leadPlural.toLowerCase()}` : STAGE_LABELS[stage]}</h2>
+            <p className="mt-1 text-xs text-zinc-500">Open an opportunity to progress qualification, commercial work and handoff.</p>
           </div>
-          <div className="relative w-full sm:w-64">
+          <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search my ${leadPlural.toLowerCase()}`} className="field pl-9" />
           </div>
@@ -134,43 +121,37 @@ export default function MyWorkPage() {
 
         {visible.length === 0 ? (
           <div className="px-6 py-16 text-center">
-            <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><CheckCircle2 className="h-5 w-5" /></span>
-            <h3 className="mt-3 text-sm font-semibold text-zinc-900">You’re caught up</h3>
-            <p className="mt-1 text-xs text-zinc-500">There are no {leadPlural.toLowerCase()} needing action in this view.</p>
-            {!showAll && myLeads.length > 0 && <button type="button" onClick={() => setShowAll(true)} className="button-secondary mt-4">Show all my {leadPlural.toLowerCase()}</button>}
+            <UserRound className="mx-auto h-6 w-6 text-zinc-300" />
+            <h3 className="mt-3 text-sm font-semibold text-zinc-900">No opportunities in this view</h3>
+            <p className="mt-1 text-xs text-zinc-500">Try another stage or clear the search.</p>
           </div>
         ) : (
           <div className="divide-y divide-zinc-100">
-            {visible.map(({ lead, state }) => {
-              const stateInfo = stateCopy(state);
-              const whatsappPhone = (lead.customer_phone || '').replace(/[^0-9]/g, '');
+            {visible.map(({ lead, qualification, nextAction }) => {
               const businessSummary = config.workspace.business_type === 'travel'
                 ? lead.destination
                 : primaryField ? displayValue(lead.custom_data?.[primaryField.field_key]) : '';
               return (
-                <div key={lead.id} className="flex flex-col gap-4 px-4 py-4 transition hover:bg-zinc-50/60 lg:flex-row lg:items-center">
-                  <div className="flex min-w-0 flex-1 items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-600"><UserRound className="h-4 w-4" /></span>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link href={`/my-work/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">{lead.customer_name}</Link>
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stateInfo.className}`}>{stateInfo.label}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-zinc-500">{[businessSummary, lead.customer_phone].filter(Boolean).join(' · ')}</p>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                        <span className="inline-flex items-center gap-1.5"><CalendarClock className="h-3.5 w-3.5" /> {formatNextDate(lead.next_follow_up_at)}</span>
-                        <span className="capitalize">Status: {lead.stage.replaceAll('_', ' ')}</span>
-                      </div>
-                    </div>
+                <div key={lead.id} className="grid gap-3 px-4 py-4 transition hover:bg-zinc-50/60 lg:grid-cols-[minmax(0,1.3fr)_8rem_8rem_minmax(12rem,0.8fr)_auto] lg:items-center">
+                  <div className="min-w-0">
+                    <Link href={`/my-work/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">{lead.customer_name}</Link>
+                    <p className="mt-1 truncate text-xs text-zinc-500">{[businessSummary, lead.customer_phone].filter(Boolean).join(' · ')}</p>
                   </div>
-
-                  <div className="flex items-center gap-2 pl-13 lg:pl-0">
-                    {lead.customer_phone && <a href={`tel:${lead.customer_phone}`} className="button-secondary px-3" aria-label={`Call ${lead.customer_name}`}><Phone className="h-4 w-4" /> <span className="hidden sm:inline">Call</span></a>}
-                    {whatsappPhone && (
-                      <a href={`https://wa.me/${whatsappPhone}`} target="_blank" rel="noreferrer" className="button-secondary px-3" aria-label={`Message ${lead.customer_name} on WhatsApp`}>
-                        <MessageCircle className="h-4 w-4" /> <span className="hidden sm:inline">WhatsApp</span>
-                      </a>
-                    )}
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Stage</div>
+                    <div className="mt-1 text-xs font-semibold text-zinc-800">{STAGE_LABELS[lead.stage]}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Qualified</div>
+                    <div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{qualification.percent}%</div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Next action</div>
+                    <div className="mt-1 truncate text-xs font-semibold text-zinc-800">{nextAction.title}</div>
+                    <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-zinc-500"><CalendarClock className="h-3 w-3" /> {formatNextDate(nextAction.scheduledAt)}</div>
+                  </div>
+                  <div className="flex items-center gap-2 lg:justify-end">
+                    <Link href={`/inbox/lead/${lead.id}`} className="button-secondary px-3"><MessageCircle className="h-4 w-4" /> Message</Link>
                     <Link href={`/my-work/${lead.id}`} className="button-primary px-3">Open <ArrowRight className="h-4 w-4" /></Link>
                   </div>
                 </div>
