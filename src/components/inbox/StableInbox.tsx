@@ -10,14 +10,9 @@ import {
   AtSign,
   CheckCircle2,
   Clock3,
-  Facebook,
-  Globe,
   History,
   Inbox as InboxIcon,
-  Instagram,
   Loader2,
-  Mail,
-  MessageCircle,
   MessageSquare,
   MoreHorizontal,
   PanelRight,
@@ -25,7 +20,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Send,
   ShieldAlert,
   Sparkles,
   UserCheck,
@@ -40,6 +34,10 @@ import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
 import { getSupabaseBrowserClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import ConvertToLeadDrawer, { type ConversationForConversion } from '@/components/inbox/ConvertToLeadDrawer';
 import MetaConversationTimeline from '@/components/inbox/MetaConversationTimeline';
+import InboxComposer, { type InboxComposerAttachment } from '@/components/inbox/InboxComposer';
+import InboxConversationListItem from '@/components/inbox/InboxConversationListItem';
+import InboxContextExtras from '@/components/inbox/InboxContextExtras';
+import { useConversationPresence } from '@/lib/inbox/use-conversation-presence';
 
 type QueueKey = 'all' | 'mine' | 'unassigned' | 'collaborations' | 'unread' | 'needs_reply' | 'sla_overdue' | 'high_priority' | 'has_phone' | 'waiting' | 'snoozed' | 'closed';
 type WorkflowState = 'open' | 'waiting' | 'snoozed' | 'closed';
@@ -105,10 +103,10 @@ type Message = {
   delivery_status?: string | null;
   failure_message?: string | null;
   sent_at: string;
-  author_profile?: { full_name: string | null } | null;
+  author_profile?: { full_name?: string | null } | null;
 };
 
-type TimelineEvent = { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; actor: { full_name: string | null } | null };
+type TimelineEvent = { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; actor_id?: string | null; actor: { full_name: string | null } | null };
 type Collaborator = { user_id: string; user: { id: string; full_name: string | null; email: string; role: string } | null };
 type Metrics = { totalOpen: number; unassigned: number; collaborations: number; waiting: number; snoozed: number; unread: number; needsReply: number; slaOverdue: number; highPriority: number; hasPhone: number };
 type SavedView = { id: string; name: string; filters: { filter?: QueueKey; provider?: string; state?: string; priority?: string; sort?: SortKey; search?: string }; is_shared: boolean; owner_id: string; sort_order: number };
@@ -118,7 +116,6 @@ type ThreadSnapshot = { conversation: Conversation; messages: Message[]; message
 type SecondarySnapshot = { events: TimelineEvent[]; collaborators: Collaborator[]; fetchedAt: number };
 
 const EMPTY_METRICS: Metrics = { totalOpen: 0, unassigned: 0, collaborations: 0, waiting: 0, snoozed: 0, unread: 0, needsReply: 0, slaOverdue: 0, highPriority: 0, hasPhone: 0 };
-const PROVIDER_ICONS: Record<string, typeof MessageSquare> = { facebook: Facebook, instagram: Instagram, whatsapp: MessageCircle, email: Mail, website: Globe };
 const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed', 'collaborator_added', 'collaborator_removed']);
 const THREAD_TTL_MS = 30_000;
 const SECONDARY_TTL_MS = 60_000;
@@ -197,9 +194,22 @@ export default function StableInbox() {
 
   const selectedContact = contactOf(selected);
   const selectedLead = leadOf(selected);
+  const presence = useConversationPresence({
+    workspaceId: config.workspace.id,
+    conversationId: selectedId,
+    user: { id: currentUser.id, full_name: currentUser.full_name, avatar_url: currentUser.avatar_url },
+  });
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 220); return () => window.clearTimeout(timer); }, [search]);
+  useEffect(() => {
+    const onComposerError = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      showToast(detail || 'Composer action failed.', 'error');
+    };
+    window.addEventListener('inbox-composer-error', onComposerError);
+    return () => window.removeEventListener('inbox-composer-error', onComposerError);
+  }, [showToast]);
 
   const scrollToBottom = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -422,6 +432,24 @@ export default function StableInbox() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_messages', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
         const changed = payload.new as UnknownRecord;
         const conversationId = typeof changed.conversation_id === 'string' ? changed.conversation_id : null;
+        if (conversationId && payload.eventType === 'INSERT') {
+          setConversations((rows) => {
+            const current = rows.find((row) => row.id === conversationId);
+            if (!current) return rows;
+            const inbound = changed.direction === 'inbound';
+            const selectedNow = selectedIdRef.current === conversationId;
+            const body = typeof changed.body === 'string' && changed.body.trim() ? changed.body : current.last_message_preview;
+            const updated = {
+              ...current,
+              last_message_at: typeof changed.sent_at === 'string' ? changed.sent_at : new Date().toISOString(),
+              last_message_preview: body || current.last_message_preview,
+              needs_reply: inbound ? true : current.needs_reply,
+              unread_count: inbound && !selectedNow ? current.unread_count + 1 : current.unread_count,
+            };
+            if (sort === 'newest') return [updated, ...rows.filter((row) => row.id !== conversationId)];
+            return rows.map((row) => row.id === conversationId ? updated : row);
+          });
+        }
         scheduleListRefresh();
         if (conversationId && conversationId === selectedIdRef.current) scheduleThreadRefresh(conversationId);
       })
@@ -436,7 +464,7 @@ export default function StableInbox() {
       if (listRefreshTimer.current) window.clearTimeout(listRefreshTimer.current);
       if (threadRefreshTimer.current) window.clearTimeout(threadRefreshTimer.current);
     };
-  }, [config.workspace.id, loadSecondary, scheduleListRefresh, scheduleThreadRefresh]);
+  }, [config.workspace.id, loadSecondary, scheduleListRefresh, scheduleThreadRefresh, sort]);
 
   useEffect(() => {
     const reconcile = window.setInterval(() => { if (document.visibilityState === 'visible') void loadList(true); }, 120_000);
@@ -499,31 +527,102 @@ export default function StableInbox() {
     } finally { setSaving(false); }
   };
 
-  const send = async () => {
+  const sendPayload = async ({ body, attachment, mode }: { body: string; attachment?: InboxComposerAttachment | null; mode: ReplyMode }) => {
     const id = selectedIdRef.current;
-    if (!id || !replyBody.trim() || sending) return;
-    const body = replyBody.trim();
+    if (!id || sending || (!body.trim() && !attachment)) return false;
     const requestId = `${currentUser.id}:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    const optimistic: Message = { id: `optimistic:${requestId}`, conversation_id: id, direction: replyMode, message_type: replyMode === 'internal' ? 'internal_note' : 'text', body, delivery_status: 'sending', sent_at: new Date().toISOString() };
+    const optimisticBody = attachment
+      ? `[${attachment.kind === 'image' ? 'Photo' : attachment.kind === 'video' ? 'Video' : attachment.kind === 'audio' ? 'Voice message' : `File:${attachment.fileName}`}]`
+      : body.trim();
+    const optimistic: Message = {
+      id: `optimistic:${requestId}`,
+      conversation_id: id,
+      direction: mode,
+      message_type: mode === 'internal' ? 'internal_note' : attachment?.kind || 'text',
+      body: optimisticBody,
+      metadata: attachment ? { attachment_url: attachment.url, storage_path: attachment.storagePath, file_name: attachment.fileName, mime_type: attachment.mimeType, size: attachment.size } : {},
+      delivery_status: 'sending',
+      sent_at: new Date().toISOString(),
+      author_profile: { full_name: currentUser.full_name },
+    };
     setSending(true);
-    setReplyBody('');
     setMessages((rows) => [...rows, optimistic]);
     scrollToBottom();
     try {
-      const response = await fetch(`/api/conversations/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId }, body: JSON.stringify({ body, direction: replyMode, clientRequestId: requestId }) });
+      const response = await fetch(`/api/conversations/${id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
+        body: JSON.stringify({ body: body.trim(), direction: mode, clientRequestId: requestId, attachment: attachment ? { storagePath: attachment.storagePath, fileName: attachment.fileName, mimeType: attachment.mimeType, size: attachment.size } : undefined }),
+      });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || 'Message delivery failed.');
-      if (selectedIdRef.current === id && payload.message) {
-        setMessages((rows) => rows.map((row) => row.id === optimistic.id ? payload.message as Message : row));
+      if (!response.ok) {
+        if (payload.message) setMessages((rows) => rows.map((row) => row.id === optimistic.id ? payload.message as Message : row));
+        else setMessages((rows) => rows.map((row) => row.id === optimistic.id ? { ...row, delivery_status: 'failed', failure_message: payload.error || 'Message delivery failed.' } : row));
+        throw new Error(payload.error || 'Message delivery failed.');
       }
+      if (selectedIdRef.current === id && payload.message) setMessages((rows) => rows.map((row) => row.id === optimistic.id ? payload.message as Message : row));
       threadCache.current.delete(id);
       await loadCoreThread(id, { force: true, quiet: true });
       void loadList(true);
+      return true;
     } catch (error) {
-      setMessages((rows) => rows.filter((row) => row.id !== optimistic.id));
-      setReplyBody(body);
       showToast(error instanceof Error ? error.message : 'Message delivery failed.', 'error');
+      return false;
     } finally { setSending(false); }
+  };
+
+  const retryMessage = async (message: Message) => {
+    const metadata = asRecord(message.metadata);
+    const storagePath = typeof metadata.storage_path === 'string' ? metadata.storage_path : null;
+    const fileName = typeof metadata.file_name === 'string' ? metadata.file_name : null;
+    const mimeType = typeof metadata.mime_type === 'string' ? metadata.mime_type : null;
+    const size = typeof metadata.size === 'number' ? metadata.size : Number(metadata.size || 0);
+    const attachment = storagePath && fileName && mimeType && size > 0 ? {
+      storagePath,
+      url: typeof metadata.attachment_url === 'string' ? metadata.attachment_url : '',
+      fileName,
+      mimeType,
+      size,
+      kind: message.message_type,
+    } satisfies InboxComposerAttachment : null;
+    await sendPayload({ body: attachment ? '' : message.body || '', attachment, mode: 'outbound' });
+  };
+
+  const quoteMessage = (message: Message) => {
+    const quote = (message.body || 'Attachment').split('\n').slice(0, 3).join(' ');
+    setReplyMode('outbound');
+    setReplyBody((current) => `> ${quote.slice(0, 180)}\n\n${current}`);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const noteFromMessage = (message: Message) => {
+    setReplyMode('internal');
+    setReplyBody(`Context from message: ${message.body || 'Attachment'}`);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const createTaskFromMessage = async (message: Message) => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    const text = (message.body || 'Conversation attachment').replace(/\s+/g, ' ').trim();
+    try {
+      const response = await fetch('/api/work-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: id,
+          ownerId: currentUser.id,
+          type: 'custom',
+          title: `Follow up: ${text.slice(0, 90)}`,
+          description: `Created from Inbox message: ${text.slice(0, 500)}`,
+          priority: selected?.priority === 'urgent' ? 'urgent' : selected?.priority === 'high' ? 'high' : 'normal',
+          metadata: { source_message_id: message.id },
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to create task.');
+      showToast('Task created from message.', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to create task.', 'error'); }
   };
 
   const loadOlder = async () => {
@@ -625,6 +724,7 @@ export default function StableInbox() {
         <dl className="space-y-3 text-xs"><div className="flex justify-between gap-3"><dt className="text-zinc-500">Channel</dt><dd className="font-semibold capitalize">{selected.provider}</dd></div><div className="flex justify-between gap-3"><dt className="text-zinc-500">Priority</dt><dd className="font-semibold capitalize">{selected.priority}</dd></div><div className="flex justify-between gap-3"><dt className="text-zinc-500">Lifecycle</dt><dd className="font-semibold">{label(selectedContact?.lifecycle_key || 'new')}</dd></div></dl>
         <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Assignment</div>{can('inbox.assign') ? <select value={selected.assigned_to || ''} onChange={(e) => void patchConversation({ assigned_to: e.target.value || null })} className="select-field mt-2 h-9 w-full text-xs"><option value="">Unassigned</option>{allProfiles.filter((p) => p.is_active).map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select> : <div className="mt-2 text-xs font-semibold">{selected.assigned_profile?.full_name || 'Unassigned'}</div>}</section>
         <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Collaborators</div><div className="mt-2 flex flex-wrap gap-1.5">{collaborators.map((item) => { const removable = canManageCollaborators || item.user_id === currentUser?.id; return removable ? <button key={item.user_id} type="button" onClick={() => void removeCollaborator(item.user_id)} className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-semibold">{item.user?.full_name || 'Member'} ×</button> : <span key={item.user_id} className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-semibold text-zinc-600">{item.user?.full_name || 'Member'}</span>; })}</div>{availableCollaborators.length > 0 && <select defaultValue="" onChange={(e) => { const value = e.target.value; e.target.value = ''; if (value) void addCollaborator(value); }} className="select-field mt-2 h-8 w-full text-xs"><option value="">Add collaborator…</option>{availableCollaborators.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select>}</section>
+        <InboxContextExtras conversationId={selected.id} tags={selectedContact?.tags} nextActionAt={selected.next_action_at} lastInboundAt={selected.last_inbound_at} />
         <Link href={selectedContact ? `/contacts/${selectedContact.id}` : '/contacts'} className="button-secondary w-full">Open contact profile</Link>
       </div>}
 
@@ -650,43 +750,45 @@ export default function StableInbox() {
         </div>
       </aside>
 
-      <section aria-label="Inbox conversations" className={`${selectedId ? 'hidden md:flex' : 'flex'} min-h-0 min-w-0 flex-col border-r border-zinc-200`}>
+      <section aria-label="Inbox conversations" className={`${selectedId ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col border-r border-zinc-200`}>
         <div className="shrink-0 border-b border-zinc-200 p-3">
           <div className="flex gap-2 lg:hidden"><select aria-label="Inbox view" value={queue} onChange={(e) => { setActiveSavedView(null); setQueue(e.target.value as QueueKey); }} className="select-field h-9 flex-1 text-xs">{[...standardViews, ...exceptionViews].map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><button type="button" aria-label="Sync inbox" onClick={() => void syncProvider()} className="button-secondary button-sm" disabled={syncing}><RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /></button></div>
           <div className="mt-2 flex gap-2 lg:mt-0"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" /><input aria-label="Search conversations" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${contactLabel.toLowerCase()} or message`} className="field h-9 pl-8 text-xs" /></div><button type="button" aria-label="Sync inbox" onClick={() => void syncProvider()} className="button-secondary button-sm hidden lg:inline-flex" disabled={syncing}><RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /></button></div>
           <div className="mt-2 grid grid-cols-2 gap-2"><select aria-label="Filter by channel" value={provider} onChange={(e) => setProvider(e.target.value)} className="select-field h-8 text-xs"><option value="all">All channels</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="website">Website</option></select><select aria-label="Sort conversations" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="select-field h-8 text-xs"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="waiting">Longest waiting</option><option value="sla">SLA soonest</option></select></div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-zinc-100">{loadingList ? <div className="flex h-32 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Inbox…</div> : conversations.length === 0 ? <div className="px-6 py-16 text-center"><InboxIcon className="mx-auto h-6 w-6 text-zinc-300" /><div className="mt-2 text-sm font-semibold">Nothing here</div><p className="mt-1 text-xs text-zinc-500">This view is clear.</p></div> : conversations.map((conversation) => { const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare; const info = sla(conversation); return <button key={conversation.id} type="button" data-conversation-item="true" aria-current={selectedId === conversation.id ? 'true' : undefined} aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages`} onClick={() => selectConversation(conversation)} className={`w-full px-3.5 py-3 text-left hover:bg-zinc-50 ${selectedId === conversation.id ? 'bg-zinc-100/90' : ''}`}><div className="flex items-start gap-2.5"><div className="relative">{conversation.customer_avatar_url ? <img src={conversation.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover ring-1 ring-zinc-200" /> : <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold ring-1 ring-zinc-200">{initials(conversation.customer_name)}</div>}<span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-white"><Icon className="h-2.5 w-2.5" /></span></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-sm font-semibold text-zinc-950">{conversation.customer_name || contactLabel}</span>{conversation.unread_count > 0 && <span data-unread="true" className="rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white">{conversation.unread_count}</span>}<span className="ml-auto font-mono text-[10px] text-zinc-500">{shortTime(conversation.last_message_at)}</span></div><p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-600">{conversation.last_message_preview || 'No message preview'}</p><div className="mt-2 flex items-center gap-1.5 text-[10px] text-zinc-500"><span className="max-w-24 truncate font-semibold text-zinc-700">{conversation.assigned_profile?.full_name || 'Unassigned'}</span><span>·</span><span>{label(contactOf(conversation)?.lifecycle_key || 'new')}</span><span className="ml-auto" />{conversation.priority !== 'normal' && <span className="rounded bg-amber-50 px-1.5 py-0.5 font-bold uppercase text-amber-700">{conversation.priority}</span>}<span className={`font-semibold ${info.danger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : ''}`}>{info.text}</span></div></div></div></button>; })}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-zinc-100">{loadingList ? <div className="flex h-32 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Inbox…</div> : conversations.length === 0 ? <div className="px-6 py-16 text-center"><InboxIcon className="mx-auto h-6 w-6 text-zinc-300" /><div className="mt-2 text-sm font-semibold">Nothing here</div><p className="mt-1 text-xs text-zinc-500">This view is clear.</p></div> : conversations.map((conversation) => { const info = sla(conversation); return <InboxConversationListItem key={conversation.id} conversation={conversation} selected={selectedId === conversation.id} contactLabel={contactLabel} statusText={info.text} statusDanger={info.danger} onSelect={() => selectConversation(conversation)} />; })}</div>
       </section>
 
-      <section aria-label="Conversation thread" className={`${selectedId ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-col bg-zinc-50/50`}>
+      <section aria-label="Conversation thread" className={`${selectedId ? 'flex' : 'hidden lg:flex'} min-h-0 min-w-0 flex-col bg-zinc-50/50`}>
         {!selected ? <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a conversation to start working.</div> : <>
           <header className="relative flex min-h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3">
             {refreshingThread && <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-zinc-100"><div className="h-full w-1/3 animate-pulse bg-blue-500" /></div>}
-            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div></div></div>
+            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className={`truncate text-[11px] ${presence.typingMembers.length ? 'font-semibold text-blue-600' : 'text-zinc-500'}`}>{presence.typingMembers.length ? `${presence.typingMembers.map((member) => member.name).join(', ')} typing…` : presence.members.length ? `${presence.members.map((member) => member.name).slice(0, 2).join(', ')} ${presence.members.length === 1 ? 'is' : 'are'} viewing` : <><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</>}</div></div></div>
             <div className="flex items-center gap-1.5">{!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}<button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>{selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}<div className="relative"><button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>{moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}</div></div>
           </header>
 
           <div ref={messagePaneRef} aria-label="Message history" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
             <div className="mx-auto max-w-3xl">
               {hasOlderMessages && <div className="mb-5 flex justify-center"><button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="button-secondary button-sm">{loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />} Load older messages <span className="font-mono text-[10px] text-zinc-400">{messages.length}/{messageTotal}</span></button></div>}
-              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} />}
+              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} onQuote={quoteMessage} onAddNote={noteFromMessage} onCreateTask={(message) => void createTaskFromMessage(message)} onRetry={(message) => void retryMessage(message)} />}
             </div>
           </div>
 
-          <footer className="shrink-0 border-t border-zinc-200 bg-white p-3">
-            <div data-chat-composer="true">
-              <div data-composer-tabs="true">
-                <button type="button" aria-pressed={replyMode === 'outbound'} onClick={() => setReplyMode('outbound')} className={replyMode === 'outbound' ? 'bg-white text-zinc-950 shadow-sm ring-1 ring-zinc-200' : 'text-zinc-500 hover:text-zinc-900'}>Reply</button>
-                <button type="button" aria-pressed={replyMode === 'internal'} onClick={() => setReplyMode('internal')} className={replyMode === 'internal' ? 'bg-amber-100 text-amber-950' : 'text-zinc-500 hover:text-zinc-900'}>Internal note</button>
-                {replyMode === 'outbound' && !canReply && <span className="ml-auto text-[10px] font-semibold text-amber-700">Provider reply window closed</span>}
-              </div>
-              <textarea aria-label={replyMode === 'internal' ? 'Internal note' : 'Reply'} ref={composerRef} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} rows={3} disabled={(replyMode === 'outbound' && !canReply) || loadingThread} placeholder={replyMode === 'internal' ? 'Leave context for your team…' : 'Write a reply…'} className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none disabled:bg-zinc-50" />
-              <div data-composer-actions="true" className="flex items-center justify-between px-3 py-1.5">
-                <div className="text-[10px] text-zinc-400">Enter to send · Shift+Enter for a new line</div>
-                <button type="button" onClick={() => void send()} disabled={sending || loadingThread || !replyBody.trim() || (replyMode === 'outbound' && !canReply)} className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[#0866ff] px-3 text-xs font-semibold text-white hover:bg-[#075ee5] disabled:cursor-not-allowed disabled:opacity-40">{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{replyMode === 'internal' ? 'Add note' : 'Send'}</button>
-              </div>
-            </div>
+          <footer className="shrink-0 border-t border-zinc-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <InboxComposer
+              workspaceId={config.workspace.id}
+              conversationId={selected.id}
+              mode={replyMode}
+              onModeChange={(mode) => { presence.setTyping(false); setReplyMode(mode); }}
+              value={replyBody}
+              onChange={setReplyBody}
+              canReply={canReply}
+              loading={loadingThread}
+              sending={sending}
+              composerRef={composerRef}
+              onTyping={presence.setTyping}
+              onSend={sendPayload}
+            />
           </footer>
         </>}
       </section>

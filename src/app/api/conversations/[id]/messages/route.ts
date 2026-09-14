@@ -3,15 +3,27 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { ChannelDeliveryError, sendChannelText } from '@/lib/integrations/channel-sender';
+import { ChannelDeliveryError, sendChannelAttachment, sendChannelText } from '@/lib/integrations/channel-sender';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const AttachmentSchema = z.object({
+  storagePath: z.string().trim().min(8).max(1000),
+  fileName: z.string().trim().min(1).max(240),
+  mimeType: z.string().trim().min(3).max(160),
+  size: z.number().int().positive().max(15 * 1024 * 1024),
+});
+
 const OutboundMessageSchema = z.object({
-  body: z.string().trim().min(1).max(4000),
+  body: z.string().trim().max(4000).default(''),
   direction: z.enum(['outbound', 'internal']).default('outbound'),
   clientRequestId: z.string().trim().min(8).max(160).optional(),
+  attachment: AttachmentSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (!value.body && !value.attachment) ctx.addIssue({ code: 'custom', path: ['body'], message: 'Message body cannot be empty.' });
+  if (value.direction === 'internal' && value.attachment) ctx.addIssue({ code: 'custom', path: ['attachment'], message: 'Internal note attachments are not supported yet.' });
+  if (value.attachment && value.body) ctx.addIssue({ code: 'custom', path: ['body'], message: 'Send the text and attachment separately.' });
 });
 
 const MESSAGE_SELECT = `
@@ -37,6 +49,13 @@ const MESSAGE_SELECT = `
   created_at,
   author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
 `;
+
+function messageType(mimeType: string) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'file';
+}
 
 async function findExistingRequest(conversationId: string, clientRequestId: string) {
   const admin = createSupabaseAdminClient();
@@ -116,14 +135,12 @@ export async function POST(
 
   const parsed = OutboundMessageSchema.safeParse(raw);
   if (!parsed.success) {
-    return NextResponse.json({ error: 'Message body cannot be empty.', details: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ error: parsed.error.issues[0]?.message || 'Invalid message.', details: parsed.error.flatten() }, { status: 400 });
   }
 
-  // This user-scoped query is the authorization boundary. Service-role work only happens
-  // after RLS has proved that the actor can access this exact conversation.
   const { data: conversation, error: convError } = await actor.supabase
     .from('lead_conversations')
-    .select('id,lead_id,provider,connection_id,external_thread_id,external_contact_id,status')
+    .select('id,workspace_id,lead_id,provider,connection_id,external_thread_id,external_contact_id,status')
     .eq('id', conversationId)
     .maybeSingle();
 
@@ -139,9 +156,7 @@ export async function POST(
   }
 
   const existing = await findExistingRequest(conversationId, clientRequestId);
-  if (existing) {
-    return NextResponse.json({ message: existing, duplicate: true }, { status: 200 });
-  }
+  if (existing) return NextResponse.json({ message: existing, duplicate: true }, { status: 200 });
 
   if (parsed.data.direction === 'internal') {
     const { data: message, error } = await admin
@@ -185,6 +200,31 @@ export async function POST(
     return NextResponse.json({ message }, { status: 201 });
   }
 
+  let providerAttachmentUrl: string | null = null;
+  let attachmentMetadata: Record<string, unknown> = { sent_via: 'travel_lms' };
+  let outboundBody = parsed.data.body;
+  let outboundType = 'text';
+
+  if (parsed.data.attachment) {
+    const expectedPrefix = `${actor.profile.workspace_id}/${conversation.id}/`;
+    if (!parsed.data.attachment.storagePath.startsWith(expectedPrefix)) {
+      return NextResponse.json({ error: 'Attachment does not belong to this conversation.' }, { status: 400 });
+    }
+    const { data: signed, error: signError } = await admin.storage.from('conversation-media').createSignedUrl(parsed.data.attachment.storagePath, 15 * 60);
+    if (signError || !signed?.signedUrl) return NextResponse.json({ error: 'Unable to prepare attachment for delivery.' }, { status: 500 });
+    providerAttachmentUrl = signed.signedUrl;
+    outboundType = messageType(parsed.data.attachment.mimeType);
+    outboundBody = `[${outboundType === 'image' ? 'Photo' : outboundType === 'audio' ? 'Voice message' : outboundType === 'video' ? 'Video' : `File:${parsed.data.attachment.fileName}`}]`;
+    attachmentMetadata = {
+      sent_via: 'travel_lms',
+      storage_path: parsed.data.attachment.storagePath,
+      attachment_url: `/api/conversations/${conversation.id}/attachments?path=${encodeURIComponent(parsed.data.attachment.storagePath)}`,
+      file_name: parsed.data.attachment.fileName,
+      mime_type: parsed.data.attachment.mimeType,
+      size: parsed.data.attachment.size,
+    };
+  }
+
   const { data: pending, error: pendingError } = await admin
     .from('lead_messages')
     .insert({
@@ -193,9 +233,9 @@ export async function POST(
       connection_id: conversation.connection_id || null,
       provider: conversation.provider,
       direction: 'outbound',
-      message_type: 'text',
-      body: parsed.data.body,
-      metadata: { sent_via: 'travel_lms' },
+      message_type: outboundType,
+      body: outboundBody,
+      metadata: attachmentMetadata,
       delivery_status: 'sending',
       client_request_id: clientRequestId,
       created_by: actor.user.id,
@@ -214,13 +254,25 @@ export async function POST(
   }
 
   try {
-    const delivered = await sendChannelText({
-      provider: conversation.provider,
-      connectionId: conversation.connection_id,
-      externalThreadId: conversation.external_thread_id,
-      externalContactId: conversation.external_contact_id,
-      body: parsed.data.body,
-    });
+    const delivered = parsed.data.attachment && providerAttachmentUrl
+      ? await sendChannelAttachment({
+          provider: conversation.provider,
+          connectionId: conversation.connection_id,
+          externalThreadId: conversation.external_thread_id,
+          externalContactId: conversation.external_contact_id,
+          attachment: {
+            url: providerAttachmentUrl,
+            fileName: parsed.data.attachment.fileName,
+            mimeType: parsed.data.attachment.mimeType,
+          },
+        })
+      : await sendChannelText({
+          provider: conversation.provider,
+          connectionId: conversation.connection_id,
+          externalThreadId: conversation.external_thread_id,
+          externalContactId: conversation.external_contact_id,
+          body: parsed.data.body,
+        });
 
     const { data: finalizedId, error: finalizeError } = await admin.rpc('finalize_outbound_message', {
       p_message_id: pending.id,
@@ -252,7 +304,7 @@ export async function POST(
       leadId: conversation.lead_id,
       actorId: actor.user.id,
       provider: conversation.provider,
-      body: parsed.data.body,
+      body: parsed.data.attachment ? `${parsed.data.attachment.fileName}` : parsed.data.body,
       direction: 'outbound',
       externalMessageId: delivered.externalMessageId,
       now,
@@ -270,17 +322,13 @@ export async function POST(
         delivery_status: 'failed',
         failure_code: deliveryError.code,
         failure_message: deliveryError.message.slice(0, 1000),
-        metadata: { sent_via: 'travel_lms', delivery_error: deliveryError.message },
+        metadata: { ...attachmentMetadata, delivery_error: deliveryError.message },
       })
       .eq('id', pending.id);
 
     const failedMessage = await findExistingRequest(conversationId, clientRequestId);
     return NextResponse.json(
-      {
-        error: deliveryError.message,
-        code: deliveryError.code,
-        message: failedMessage,
-      },
+      { error: deliveryError.message, code: deliveryError.code, message: failedMessage },
       { status: deliveryError.status }
     );
   }

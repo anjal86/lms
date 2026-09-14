@@ -25,6 +25,18 @@ type SendTextInput = {
   body: string;
 };
 
+type SendAttachmentInput = {
+  provider: string;
+  connectionId: string | null;
+  externalThreadId: string | null;
+  externalContactId: string | null;
+  attachment: {
+    url: string;
+    fileName: string;
+    mimeType: string;
+  };
+};
+
 type ConnectionConfig = {
   pages?: Array<{
     id?: string;
@@ -95,11 +107,7 @@ function pageAccessToken(
   return typeof match?.access_token === 'string' ? match.access_token : null;
 }
 
-async function sendFacebookOrInstagram(
-  provider: 'facebook' | 'instagram',
-  input: SendTextInput,
-  material: Awaited<ReturnType<typeof connectionMaterial>>
-) {
+function requireProviderIdentifiers(input: { externalThreadId: string | null; externalContactId: string | null }) {
   const accountId = providerAccountId(input.externalThreadId);
   if (!accountId || !input.externalContactId) {
     throw new ChannelDeliveryError('This conversation is missing its provider contact identifiers.', {
@@ -107,7 +115,15 @@ async function sendFacebookOrInstagram(
       code: 'provider_identifiers_missing',
     });
   }
+  return accountId;
+}
 
+async function sendFacebookOrInstagram(
+  provider: 'facebook' | 'instagram',
+  input: SendTextInput,
+  material: Awaited<ReturnType<typeof connectionMaterial>>
+) {
+  const accountId = requireProviderIdentifiers(input);
   const token = pageAccessToken(material.secretPayload, material.config, accountId, provider) || material.accessToken;
   if (!token) {
     throw new ChannelDeliveryError('No provider access token is available.', { status: 409, code: 'credentials_missing' });
@@ -148,6 +164,73 @@ async function sendFacebookOrInstagram(
   return { externalMessageId, provider };
 }
 
+async function sendFacebookOrInstagramAttachment(
+  provider: 'facebook' | 'instagram',
+  input: SendAttachmentInput,
+  material: Awaited<ReturnType<typeof connectionMaterial>>
+) {
+  const accountId = requireProviderIdentifiers(input);
+  const token = pageAccessToken(material.secretPayload, material.config, accountId, provider) || material.accessToken;
+  if (!token) {
+    throw new ChannelDeliveryError('No provider access token is available.', { status: 409, code: 'credentials_missing' });
+  }
+
+  const type = input.attachment.mimeType.startsWith('image/')
+    ? 'image'
+    : input.attachment.mimeType.startsWith('video/')
+      ? 'video'
+      : input.attachment.mimeType.startsWith('audio/')
+        ? 'audio'
+        : 'file';
+  const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+  const endpoint = provider === 'facebook'
+    ? `https://graph.facebook.com/${version}/me/messages`
+    : `https://graph.facebook.com/${version}/${accountId}/messages`;
+
+  const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      recipient: { id: input.externalContactId },
+      message: {
+        attachment: {
+          type,
+          payload: { url: input.attachment.url, is_reusable: true },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const providerError = data.error as Record<string, unknown> | undefined;
+    throw new ChannelDeliveryError(
+      typeof providerError?.message === 'string' ? providerError.message : `${provider} rejected the attachment.`,
+      { status: response.status === 429 ? 429 : 502, code: String(providerError?.code || 'meta_attachment_send_failed') }
+    );
+  }
+
+  const externalMessageId = String(data.message_id || data.id || '');
+  if (!externalMessageId) throw new ChannelDeliveryError(`${provider} accepted the attachment without returning a message ID.`);
+  return { externalMessageId, provider };
+}
+
+function whatsappSender(material: Awaited<ReturnType<typeof connectionMaterial>>, input: { externalThreadId: string | null }) {
+  const wabaId = providerAccountId(input.externalThreadId);
+  const account = material.config.whatsapp_business_accounts?.find((item) => item.id === wabaId)
+    || material.config.whatsapp_business_accounts?.[0];
+  const phoneNumberId = account?.phone_numbers?.find((item) => item.id)?.id;
+  if (!phoneNumberId) {
+    throw new ChannelDeliveryError('No WhatsApp sender phone number is configured.', {
+      status: 409,
+      code: 'whatsapp_sender_missing',
+    });
+  }
+  return phoneNumberId;
+}
+
 async function sendWhatsApp(input: SendTextInput, material: Awaited<ReturnType<typeof connectionMaterial>>) {
   if (!input.externalContactId) {
     throw new ChannelDeliveryError('This WhatsApp conversation is missing the traveler number.', {
@@ -159,17 +242,7 @@ async function sendWhatsApp(input: SendTextInput, material: Awaited<ReturnType<t
     throw new ChannelDeliveryError('No WhatsApp access token is available.', { status: 409, code: 'credentials_missing' });
   }
 
-  const wabaId = providerAccountId(input.externalThreadId);
-  const account = material.config.whatsapp_business_accounts?.find((item) => item.id === wabaId)
-    || material.config.whatsapp_business_accounts?.[0];
-  const phoneNumberId = account?.phone_numbers?.find((item) => item.id)?.id;
-  if (!phoneNumberId) {
-    throw new ChannelDeliveryError('No WhatsApp sender phone number is configured.', {
-      status: 409,
-      code: 'whatsapp_sender_missing',
-    });
-  }
-
+  const phoneNumberId = whatsappSender(material, input);
   const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
   const endpoint = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
   const recipient = input.externalContactId.replace(/^\+/, '');
@@ -207,24 +280,89 @@ async function sendWhatsApp(input: SendTextInput, material: Awaited<ReturnType<t
   return { externalMessageId, provider: 'whatsapp' as const };
 }
 
-export async function sendChannelText(input: SendTextInput) {
+async function sendWhatsAppAttachment(input: SendAttachmentInput, material: Awaited<ReturnType<typeof connectionMaterial>>) {
+  if (!input.externalContactId) {
+    throw new ChannelDeliveryError('This WhatsApp conversation is missing the traveler number.', {
+      status: 409,
+      code: 'provider_identifiers_missing',
+    });
+  }
+  if (!material.accessToken) {
+    throw new ChannelDeliveryError('No WhatsApp access token is available.', { status: 409, code: 'credentials_missing' });
+  }
+
+  const phoneNumberId = whatsappSender(material, input);
+  const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+  const endpoint = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+  const recipient = input.externalContactId.replace(/^\+/, '');
+  const type = input.attachment.mimeType.startsWith('image/')
+    ? 'image'
+    : input.attachment.mimeType.startsWith('video/')
+      ? 'video'
+      : input.attachment.mimeType.startsWith('audio/')
+        ? 'audio'
+        : 'document';
+  const media = type === 'document'
+    ? { link: input.attachment.url, filename: input.attachment.fileName }
+    : { link: input.attachment.url };
+
+  const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${material.accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type,
+      [type]: media,
+    }),
+  });
+
+  if (!response.ok) {
+    const providerError = data.error as Record<string, unknown> | undefined;
+    throw new ChannelDeliveryError(
+      typeof providerError?.message === 'string' ? providerError.message : 'WhatsApp rejected the attachment.',
+      { status: response.status === 429 ? 429 : 502, code: String(providerError?.code || 'whatsapp_attachment_send_failed') }
+    );
+  }
+  const messages = Array.isArray(data.messages) ? data.messages as Array<Record<string, unknown>> : [];
+  const externalMessageId = String(messages[0]?.id || '');
+  if (!externalMessageId) throw new ChannelDeliveryError('WhatsApp accepted the attachment without returning a message ID.');
+  return { externalMessageId, provider: 'whatsapp' as const };
+}
+
+function validateProvider(input: { provider: string; connectionId: string | null }) {
   if (!input.connectionId) {
     throw new ChannelDeliveryError('This conversation is not attached to a connected channel.', {
       status: 409,
       code: 'connection_missing',
     });
   }
-
   if (!['facebook', 'instagram', 'whatsapp'].includes(input.provider)) {
     throw new ChannelDeliveryError(`Outbound ${input.provider} messaging is not configured.`, {
       status: 501,
       code: 'provider_not_implemented',
     });
   }
+}
 
-  const material = await connectionMaterial(input.connectionId);
+export async function sendChannelText(input: SendTextInput) {
+  validateProvider(input);
+  const material = await connectionMaterial(input.connectionId!);
   if (input.provider === 'facebook' || input.provider === 'instagram') {
     return sendFacebookOrInstagram(input.provider, input, material);
   }
   return sendWhatsApp(input, material);
+}
+
+export async function sendChannelAttachment(input: SendAttachmentInput) {
+  validateProvider(input);
+  const material = await connectionMaterial(input.connectionId!);
+  if (input.provider === 'facebook' || input.provider === 'instagram') {
+    return sendFacebookOrInstagramAttachment(input.provider, input, material);
+  }
+  return sendWhatsAppAttachment(input, material);
 }

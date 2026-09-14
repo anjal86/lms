@@ -17,6 +17,18 @@ describe('messageMedia', () => {
     });
   });
 
+  it('accepts authenticated same-origin conversation media urls', () => {
+    expect(messageMedia('image', {
+      attachment_url: '/api/conversations/abc/attachments?path=workspace%2Fabc%2Fphoto.jpg',
+      file_name: 'photo.jpg',
+      mime_type: 'image/jpeg',
+    })).toMatchObject({
+      kind: 'image',
+      url: '/api/conversations/abc/attachments?path=workspace%2Fabc%2Fphoto.jpg',
+      previewUrl: '/api/conversations/abc/attachments?path=workspace%2Fabc%2Fphoto.jpg',
+    });
+  });
+
   it('falls back to nested Meta attachment data', () => {
     expect(messageMedia('text', {
       attachments: {
