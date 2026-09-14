@@ -22,10 +22,12 @@ describe('workflow graph adapter', () => {
     expect(workflowGraphToRuntime(graph)).toEqual(runtime);
   });
 
-  it('omits the condition node when no conditions are configured', () => {
-    const graph = runtimeWorkflowToGraph({ trigger_key: 'message_received', conditions: {}, actions: [{ type: 'assign', strategy: 'least_open' }] });
-    expect(graph.nodes.map((node) => node.kind)).toEqual(['trigger', 'action']);
+  it('keeps an empty optional condition step visible without changing runtime data', () => {
+    const definition = { trigger_key: 'message_received', conditions: {}, actions: [{ type: 'assign', strategy: 'least_open' }] };
+    const graph = runtimeWorkflowToGraph(definition);
+    expect(graph.nodes.map((node) => node.kind)).toEqual(['trigger', 'condition', 'action']);
     expect(validateWorkflowGraph(graph).valid).toBe(true);
+    expect(workflowGraphToRuntime(graph)).toEqual(definition);
   });
 
   it('rejects dangling edges and unreachable nodes', () => {
