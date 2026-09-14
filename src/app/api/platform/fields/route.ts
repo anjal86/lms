@@ -21,6 +21,7 @@ const FieldSchema = z.object({
   description: z.string().trim().max(240).optional().default(''),
   options: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
   required: z.boolean().default(false),
+  qualification: z.boolean().default(false),
   searchable: z.boolean().default(false),
   filterable: z.boolean().default(false),
   sortOrder: z.number().int().min(0).max(10000).default(100),
@@ -92,6 +93,7 @@ export async function POST(request: Request) {
       section_key: input.sectionKey,
       description: input.description || null,
       options: needsOptions ? input.options : [],
+      validation: { qualification: input.qualification },
       is_required: input.required,
       is_searchable: input.searchable,
       is_filterable: input.filterable,
@@ -130,7 +132,7 @@ export async function PATCH(request: Request) {
 
   const { data: existing, error: existingError } = await actor.supabase
     .from('field_definitions')
-    .select('id,definition_source,field_key')
+    .select('id,definition_source,field_key,validation')
     .eq('id', input.id)
     .eq('workspace_id', actor.profile.workspace_id)
     .maybeSingle();
@@ -140,6 +142,10 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Template fields are managed by the active business model. Add a custom field instead.' }, { status: 409 });
   }
 
+  const validation = existing.validation && typeof existing.validation === 'object' && !Array.isArray(existing.validation)
+    ? existing.validation as Record<string, unknown>
+    : {};
+
   const { data, error } = await actor.supabase
     .from('field_definitions')
     .update({
@@ -148,6 +154,7 @@ export async function PATCH(request: Request) {
       section_key: input.sectionKey,
       description: input.description || null,
       options: needsOptions ? input.options : [],
+      validation: { ...validation, qualification: input.qualification },
       is_required: input.required,
       is_searchable: input.searchable,
       is_filterable: input.filterable,
@@ -184,7 +191,6 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Template fields cannot be deleted individually.' }, { status: 409 });
   }
 
-  // Soft-disable so historical custom_data remains interpretable and recoverable.
   const { error } = await actor.supabase
     .from('field_definitions')
     .update({ is_active: false })
