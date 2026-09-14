@@ -30,6 +30,16 @@ describe('workflow graph adapter', () => {
     expect(workflowGraphToRuntime(graph)).toEqual(definition);
   });
 
+  it('rejects conversation-only actions for CRM and wildcard triggers', () => {
+    for (const trigger_key of ['opportunity.created', '*']) {
+      const graph = runtimeWorkflowToGraph({ trigger_key, conditions: {}, actions: [{ type: 'assign', strategy: 'least_open' }] });
+      const result = validateWorkflowGraph(graph);
+      expect(result.valid).toBe(false);
+      expect(result.issues.some((issue) => issue.code === 'unsupported_action_for_trigger')).toBe(true);
+      expect(() => workflowGraphToRuntime(graph)).toThrow(/conversation context/);
+    }
+  });
+
   it('rejects dangling edges and unreachable nodes', () => {
     const graph: WorkflowGraphDefinition = {
       version: 1,
