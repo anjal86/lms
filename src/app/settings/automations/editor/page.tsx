@@ -92,18 +92,25 @@ export default function AutomationEditorPage() {
         showToast={showToast}
       />
       <style>{`
+        .automation-editor-page [role="dialog"][aria-labelledby="workflow-builder-title"] {
+          background: rgb(250 250 250) !important;
+        }
         .automation-editor-page [role="dialog"][aria-labelledby="workflow-builder-title"] > div {
           margin-left: 0 !important;
           max-width: none !important;
           width: 100% !important;
+          box-shadow: none !important;
         }
         .automation-editor-page [role="dialog"][aria-labelledby="workflow-builder-title"] main > div {
           max-width: none !important;
         }
         @media (min-width: 1024px) {
+          .automation-editor-page [role="dialog"][aria-labelledby="workflow-builder-title"] > div > div:last-child > div {
+            grid-template-columns: minmax(0, 1fr) 380px !important;
+          }
           .automation-editor-page [aria-label="Visual workflow canvas"] {
             height: calc(100vh - 19rem) !important;
-            min-height: 500px !important;
+            min-height: 520px !important;
           }
         }
       `}</style>
