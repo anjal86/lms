@@ -57,7 +57,7 @@ export default function ServiceLevelsPage() {
     return () => window.clearTimeout(timer);
   }, [can, load, permissionLoading]);
 
-  const update = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings((current) => ({ ...current, [key]: value }));
+  const update = <K extends keyof Settings,>(key: K, value: Settings[K]) => setSettings((current) => ({ ...current, [key]: value }));
 
   const save = async () => {
     setSaving(true);
