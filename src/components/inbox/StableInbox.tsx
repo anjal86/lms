@@ -103,7 +103,7 @@ type Message = {
   delivery_status?: string | null;
   failure_message?: string | null;
   sent_at: string;
-  author_profile?: { full_name: string | null } | null;
+  author_profile?: { full_name?: string | null } | null;
 };
 
 type TimelineEvent = { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; actor_id?: string | null; actor: { full_name: string | null } | null };
@@ -203,7 +203,10 @@ export default function StableInbox() {
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
   useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 220); return () => window.clearTimeout(timer); }, [search]);
   useEffect(() => {
-    const onComposerError = (event) => showToast(event.detail || 'Composer action failed.', 'error');
+    const onComposerError = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      showToast(detail || 'Composer action failed.', 'error');
+    };
     window.addEventListener('inbox-composer-error', onComposerError);
     return () => window.removeEventListener('inbox-composer-error', onComposerError);
   }, [showToast]);
