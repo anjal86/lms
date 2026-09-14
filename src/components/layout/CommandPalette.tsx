@@ -10,9 +10,9 @@ import {
   Download,
   FileSpreadsheet,
   Inbox,
+  Kanban,
   LayoutDashboard,
   ListFilter,
-  ListChecks,
   LoaderCircle,
   MessageSquareQuote,
   Plus,
@@ -62,8 +62,8 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   const leadsEnabled = moduleEnabled('leads', true);
   const inboxEnabled = moduleEnabled('inbox', true);
   const tasksEnabled = moduleEnabled('tasks', true);
-  const leadLabel = term('lead', 'Lead');
-  const leadPlural = term('lead_plural', 'Leads');
+  const leadLabel = term('lead', 'Opportunity');
+  const leadPlural = term('lead_plural', 'Opportunities');
   const contactPlural = term('contact_plural', 'Contacts');
 
   useEffect(() => {
@@ -112,17 +112,20 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
   const pageItems: PaletteItem[] = [
     { label: 'Today', hint: 'Urgent work and exceptions', icon: LayoutDashboard, action: () => navigate('/dashboard') },
     ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', hint: 'Customer conversations', icon: Inbox, action: () => navigate('/inbox') }] : []),
+    ...(leadsEnabled ? [{ label: leadPlural, hint: 'Active opportunities and pipeline', icon: Kanban, action: () => navigate(isAgent ? '/my-work' : '/leads') }] : []),
+    ...(tasksEnabled ? [{ label: 'Due Work', hint: 'Overdue, today and upcoming actions', icon: CalendarClock, action: () => navigate('/work') }] : []),
     ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, hint: 'Customer identities and lifecycle', icon: Users, action: () => navigate('/contacts') }] : []),
-    ...(leadsEnabled ? [{ label: isAgent ? 'My Work' : `All ${leadPlural}`, hint: 'CRM pipeline', icon: ListChecks, action: () => navigate(isAgent ? '/my-work' : '/leads') }] : []),
-    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: 'Due and scheduled work', icon: CalendarClock, action: () => navigate(isAgent ? '/my-follow-ups' : '/follow-ups') }] : []),
-    { label: 'Messages', hint: 'Saved response templates', icon: MessageSquareQuote, action: () => navigate('/templates') },
-    ...(can('reports.view') ? [{ label: 'Conversation Ops', hint: 'Response, resolution and SLA analytics', icon: BarChart3, action: () => navigate('/analytics/conversations') }] : []),
+    ...(!isAgent && can('reports.view') ? [{ label: 'Reports', hint: 'Performance and operational reporting', icon: BarChart3, action: () => navigate('/reports') }] : []),
+    ...(!isAgent ? [{ label: 'Settings', hint: 'Workspace configuration', icon: Settings, action: () => navigate('/settings/workspace') }] : []),
+    { label: 'My Profile', hint: 'Status and account', icon: User, action: () => navigate('/profile') },
+  ];
+
+  const advancedPages: PaletteItem[] = [
+    { label: 'Message templates', hint: 'Saved response templates', icon: MessageSquareQuote, action: () => navigate('/templates') },
     ...(can('inbox.saved_views.manage') ? [{ label: 'Saved Inboxes', hint: 'Reusable Inbox filters', icon: ListFilter, action: () => navigate('/inbox/views') }] : []),
     ...(can('automations.view') ? [{ label: 'Automations', hint: 'Routing and workflow rules', icon: Zap, action: () => navigate('/settings/automations') }] : []),
     ...(can('permissions.view') ? [{ label: 'Permissions', hint: 'Role capability matrix', icon: ShieldCheck, action: () => navigate('/settings/permissions') }] : []),
-    ...(!isAgent ? [{ label: 'Service Levels', hint: 'Conversation SLA and recovery rules', icon: Sparkles, action: () => navigate('/settings/service-levels') }] : []),
-    ...(!isAgent ? [{ label: 'Settings', hint: 'Workspace configuration', icon: Settings, action: () => navigate('/settings') }] : []),
-    { label: 'My Profile', hint: 'Status and account', icon: User, action: () => navigate('/profile') },
+    ...(!isAgent && can('service_levels.view') ? [{ label: 'Service Levels', hint: 'Conversation SLA and recovery rules', icon: Sparkles, action: () => navigate('/settings/service-levels') }] : []),
   ];
 
   const actions: PaletteItem[] = [
@@ -154,6 +157,7 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
 
   const q = query.trim().toLowerCase();
   const visiblePages = pageItems.filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
+  const visibleAdvanced = q ? advancedPages.filter((item) => item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q)) : [];
   const visibleActions = actions.filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
   const matchingLeads = leadsEnabled ? results.filter((result) => result.kind === 'lead').slice(0, 6) : [];
   const matchingPeople = isAgent ? [] : results.filter((result) => result.kind === 'profile').slice(0, 4);
@@ -174,7 +178,8 @@ export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenC
           {matchingLeads.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{leadPlural}</div>{matchingLeads.map((result) => <button key={result.id} type="button" onClick={() => navigate(isAgent ? `/my-work/${result.id}` : `/leads/${result.id}/workspace`)} className="flex min-h-11 w-full items-center justify-between rounded-md px-3 text-left hover:bg-zinc-100"><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-900">{result.title}</div><div className="truncate text-[11px] text-zinc-400">{result.subtitle}</div></div><ArrowRight className="h-3.5 w-3.5 text-zinc-300" /></button>)}</section>}
           {matchingPeople.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Team</div>{matchingPeople.map((result) => <button key={result.id} type="button" onClick={() => navigate(`/team/${result.id}`)} className="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left hover:bg-zinc-100"><User className="h-4 w-4 text-zinc-400" /><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-900">{result.title}</div><div className="truncate text-[11px] text-zinc-400">{result.subtitle}</div></div></button>)}</section>}
           {visiblePages.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Pages</div>{renderItems(visiblePages)}</section>}
-          {visibleActions.length + visiblePages.length + matchingLeads.length + matchingPeople.length === 0 && <div className="py-12 text-center text-sm text-zinc-500">No matching commands.</div>}
+          {visibleAdvanced.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">More</div>{renderItems(visibleAdvanced)}</section>}
+          {visibleActions.length + visiblePages.length + visibleAdvanced.length + matchingLeads.length + matchingPeople.length === 0 && <div className="py-12 text-center text-sm text-zinc-500">No matching commands.</div>}
         </div>
       </div>
     </div>
