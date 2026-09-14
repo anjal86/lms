@@ -82,14 +82,76 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'A work item must belong to an opportunity, contact, or conversation.' }, { status: 400 });
   }
 
+  let leadId = input.leadId ?? null;
+  let contactId = input.contactId ?? null;
+  const conversationId = input.conversationId ?? null;
   const ownerId = input.ownerId ?? actor.user.id;
+  const workspaceId = actor.profile.workspace_id;
+
+  if (leadId) {
+    const { data: lead, error } = await actor.supabase
+      .from('leads')
+      .select('id,contact_id')
+      .eq('id', leadId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: 'Unable to validate opportunity.' }, { status: 500 });
+    if (!lead) return NextResponse.json({ error: 'Opportunity is not available in this workspace.' }, { status: 400 });
+    if (contactId && lead.contact_id && contactId !== lead.contact_id) {
+      return NextResponse.json({ error: 'Contact does not match the opportunity.' }, { status: 400 });
+    }
+    contactId = contactId ?? lead.contact_id ?? null;
+  }
+
+  if (contactId) {
+    const { data: contact, error } = await actor.supabase
+      .from('contacts')
+      .select('id')
+      .eq('id', contactId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: 'Unable to validate contact.' }, { status: 500 });
+    if (!contact) return NextResponse.json({ error: 'Contact is not available in this workspace.' }, { status: 400 });
+  }
+
+  if (conversationId) {
+    const { data: conversation, error } = await actor.supabase
+      .from('lead_conversations')
+      .select('id,lead_id,contact_id')
+      .eq('id', conversationId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: 'Unable to validate conversation.' }, { status: 500 });
+    if (!conversation) return NextResponse.json({ error: 'Conversation is not available in this workspace.' }, { status: 400 });
+    if (leadId && conversation.lead_id && leadId !== conversation.lead_id) {
+      return NextResponse.json({ error: 'Opportunity does not match the conversation.' }, { status: 400 });
+    }
+    if (contactId && conversation.contact_id && contactId !== conversation.contact_id) {
+      return NextResponse.json({ error: 'Contact does not match the conversation.' }, { status: 400 });
+    }
+    leadId = leadId ?? conversation.lead_id ?? null;
+    contactId = contactId ?? conversation.contact_id ?? null;
+  }
+
+  if (ownerId) {
+    const { data: owner, error } = await actor.supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', ownerId)
+      .eq('workspace_id', workspaceId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: 'Unable to validate owner.' }, { status: 500 });
+    if (!owner) return NextResponse.json({ error: 'Owner is not an active member of this workspace.' }, { status: 400 });
+  }
+
   const { data, error } = await actor.supabase
     .from('work_items')
     .insert({
-      workspace_id: actor.profile.workspace_id,
-      lead_id: input.leadId ?? null,
-      contact_id: input.contactId ?? null,
-      conversation_id: input.conversationId ?? null,
+      workspace_id: workspaceId,
+      lead_id: leadId,
+      contact_id: contactId,
+      conversation_id: conversationId,
       owner_id: ownerId,
       type: input.type,
       title: input.title,
