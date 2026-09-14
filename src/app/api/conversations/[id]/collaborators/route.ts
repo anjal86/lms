@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getApiActor, isManagement, type ApiActor } from '@/lib/auth/api-actor';
+import { getApiActor, type ApiActor } from '@/lib/auth/api-actor';
+import { actorHasPermission } from '@/lib/auth/permissions';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { uuidSchema } from '@/lib/validation';
 
@@ -17,6 +18,10 @@ async function conversationExists(actor: ApiActor, id: string) {
     .eq('id', id)
     .maybeSingle();
   return data;
+}
+
+async function canManageOtherCollaborators(actor: ApiActor) {
+  return actorHasPermission(actor, 'inbox.assign');
 }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -46,8 +51,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try { raw = await request.json(); } catch { return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 }); }
   const parsed = CollaboratorSchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: 'Invalid collaborator.' }, { status: 400 });
-  if (!isManagement(actor.profile) && parsed.data.user_id !== actor.user.id) {
-    return NextResponse.json({ error: 'Agents may only add themselves as collaborators.' }, { status: 403 });
+
+  if (parsed.data.user_id !== actor.user.id && !(await canManageOtherCollaborators(actor))) {
+    return NextResponse.json({ error: 'You do not have permission to add another staff member as a collaborator.' }, { status: 403 });
   }
 
   const { data: member } = await actor.supabase
@@ -96,12 +102,13 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
   const { id } = await context.params;
-  if (!(await conversationExists(actor, id))) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+  const conversation = await conversationExists(actor, id);
+  if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
 
   const url = new URL(request.url);
   const userId = url.searchParams.get('userId') || actor.user.id;
-  if (!isManagement(actor.profile) && userId !== actor.user.id) {
-    return NextResponse.json({ error: 'Agents may only remove themselves as collaborators.' }, { status: 403 });
+  if (userId !== actor.user.id && !(await canManageOtherCollaborators(actor))) {
+    return NextResponse.json({ error: 'You do not have permission to remove another staff member from collaborators.' }, { status: 403 });
   }
 
   const { data: existingCollaborator } = await actor.supabase
@@ -128,12 +135,11 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     .eq('user_id', userId);
   if (error) return NextResponse.json({ error: 'Unable to remove collaborator.' }, { status: 500 });
 
-  const conversation = await conversationExists(actor, id);
   const admin = createSupabaseAdminClient();
   const { error: eventError } = await admin.from('conversation_events').insert({
     workspace_id: actor.profile.workspace_id,
     conversation_id: id,
-    contact_id: conversation?.contact_id || null,
+    contact_id: conversation.contact_id,
     event_type: 'collaborator_removed',
     actor_id: actor.user.id,
     payload: {
