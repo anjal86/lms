@@ -5,6 +5,15 @@ import { actorHasPermission } from '@/lib/auth/permissions';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type AgentAggregate = {
+  id: string;
+  name: string;
+  sessions: number;
+  resolved: number;
+  response: number[];
+  resolution: number[];
+};
+
 function average(values: number[]) {
   if (!values.length) return null;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
@@ -84,11 +93,11 @@ export async function GET(request: Request) {
     resolutionMap.set(reason, (resolutionMap.get(reason) || 0) + 1);
   }
 
-  const byAgent = new Map<string, { id: string; name: string; sessions: number; resolved: number; response: number[]; resolution: number[] }>();
+  const byAgent = new Map<string, AgentAggregate>();
   for (const row of rows) {
     if (!row.owner_id) continue;
     const profile = profileById.get(row.owner_id);
-    const current = byAgent.get(row.owner_id) || {
+    const current: AgentAggregate = byAgent.get(row.owner_id) || {
       id: row.owner_id,
       name: profile?.full_name || profile?.email || 'Unknown user',
       sessions: 0,
