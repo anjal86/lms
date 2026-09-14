@@ -14,7 +14,9 @@ export type WorkspacePermission =
   | 'automations.publish'
   | 'reports.view'
   | 'permissions.view'
-  | 'permissions.manage';
+  | 'permissions.manage'
+  | 'service_levels.view'
+  | 'service_levels.edit';
 
 export async function actorHasPermission(actor: ApiActor, permission: WorkspacePermission) {
   if (actor.profile.role === 'admin') return true;
