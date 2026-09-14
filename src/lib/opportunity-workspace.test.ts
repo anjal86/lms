@@ -33,68 +33,69 @@ const baseLead: Lead = {
 };
 
 describe('opportunity workspace domain', () => {
-  it('uses the travel pack by default and counts explicit boolean answers as complete', () => {
+  it('uses the travel pack by default and mirrors the default travel qualification schema', () => {
     expect(inferIndustryPack(baseLead)).toBe('travel');
 
     const summary = buildQualificationSummary(baseLead);
 
     expect(summary.pack).toBe('travel');
-    expect(summary.items.find((item) => item.key === 'flight_required')).toMatchObject({
-      complete: true,
-      value: 'No',
-    });
-    expect(summary.completed).toBe(8);
-    expect(summary.total).toBe(9);
-    expect(summary.missing).toEqual(['Special requirements']);
-    expect(summary.percent).toBe(89);
+    expect(summary.total).toBe(6);
+    expect(summary.completed).toBe(6);
+    expect(summary.missing).toEqual([]);
+    expect(summary.percent).toBe(100);
+    expect(summary.items.map((item) => item.key)).toEqual([
+      'destination',
+      'travel_dates',
+      'pax_adults',
+      'budget_range',
+      'travel_type',
+      'hotel_category',
+    ]);
   });
 
-  it('maps consultancy configuration to education qualification fields', () => {
+  it('maps consultancy configuration to the education qualification schema', () => {
     const lead: Lead = {
       ...baseLead,
       custom_data: {
-        qualification: "Bachelor's degree",
-        graduation_year: 2024,
-        gap_years: 1,
-        language_score: 'N4',
+        study_destination: 'Japan',
         intake: 'April 2027',
-        preferred_city: 'Tokyo',
-        passport_status: 'Received',
-        academic_docs_status: 'Requested',
+        qualification: "Bachelor's degree",
+        language_test: 'JLPT',
+        language_score: 'N4',
+        course: 'Business Management',
       },
     };
 
     const summary = buildQualificationSummary(lead, 'consultancy');
 
     expect(summary.pack).toBe('education');
-    expect(summary.completed).toBe(9);
-    expect(summary.total).toBe(9);
+    expect(summary.completed).toBe(6);
+    expect(summary.total).toBe(6);
     expect(summary.percent).toBe(100);
     expect(summary.missing).toEqual([]);
   });
 
-  it('maps agency configuration to service qualification fields', () => {
+  it('maps agency configuration to the service qualification schema', () => {
     const lead: Lead = {
       ...baseLead,
       custom_data: {
         service_interest: 'Brand strategy',
         project_budget: 7500,
         project_deadline: '2026-11-30',
-        decision_maker: 'Founder',
         brief: 'Reposition the company for a new market.',
-        proposal_required: false,
       },
     };
 
     const summary = buildQualificationSummary(lead, 'agency');
 
     expect(summary.pack).toBe('services');
-    expect(summary.completed).toBe(6);
+    expect(summary.completed).toBe(4);
+    expect(summary.total).toBe(4);
     expect(summary.percent).toBe(100);
-    expect(summary.items.find((item) => item.key === 'proposal_required')?.value).toBe('No');
+    expect(summary.missing).toEqual([]);
   });
 
-  it('limits configured workspace qualification to fields users can actually edit', () => {
+  it('limits configured workspace qualification to fields included in the business qualification schema', () => {
     const lead: Lead = {
       ...baseLead,
       custom_data: {
@@ -112,10 +113,10 @@ describe('opportunity workspace domain', () => {
     ]);
 
     expect(summary.pack).toBe('education');
-    expect(summary.total).toBe(4);
+    expect(summary.total).toBe(3);
     expect(summary.completed).toBe(3);
-    expect(summary.missing).toEqual(['GPA / Percentage']);
-    expect(summary.percent).toBe(75);
+    expect(summary.missing).toEqual([]);
+    expect(summary.percent).toBe(100);
   });
 
   it('selects the earliest open follow-up as the canonical next action', () => {
