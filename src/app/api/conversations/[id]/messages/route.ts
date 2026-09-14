@@ -217,6 +217,7 @@ export async function POST(
     outboundBody = `[${outboundType === 'image' ? 'Photo' : outboundType === 'audio' ? 'Voice message' : outboundType === 'video' ? 'Video' : `File:${parsed.data.attachment.fileName}`}]`;
     attachmentMetadata = {
       sent_via: 'travel_lms',
+      media_source: 'staging',
       storage_path: parsed.data.attachment.storagePath,
       attachment_url: `/api/conversations/${conversation.id}/attachments?path=${encodeURIComponent(parsed.data.attachment.storagePath)}`,
       file_name: parsed.data.attachment.fileName,
@@ -282,6 +283,23 @@ export async function POST(
     if (finalizeError) throw finalizeError;
 
     const messageId = String(finalizedId || pending.id);
+    let finalizedMetadata = attachmentMetadata;
+
+    if (parsed.data.attachment && (conversation.provider === 'facebook' || conversation.provider === 'instagram')) {
+      const { error: releaseError } = await admin.storage
+        .from('conversation-media')
+        .remove([parsed.data.attachment.storagePath]);
+      if (releaseError) {
+        console.warn('Unable to release staged Meta attachment:', releaseError.message);
+      } else {
+        finalizedMetadata = {
+          ...attachmentMetadata,
+          media_source: 'provider',
+          staging_released_at: new Date().toISOString(),
+        };
+      }
+    }
+
     await admin
       .from('lead_messages')
       .update({
@@ -289,6 +307,7 @@ export async function POST(
         delivery_status: 'sent',
         failure_code: null,
         failure_message: null,
+        metadata: finalizedMetadata,
       })
       .eq('id', messageId);
 
