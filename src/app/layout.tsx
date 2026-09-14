@@ -20,10 +20,10 @@ const jetBrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: {
-    template: '%s | Wanderlust CRM',
-    default: 'Wanderlust CRM — High-Velocity Travel Lead Management',
+    template: '%s | Workspace CRM',
+    default: 'Workspace CRM — Customer Operations',
   },
-  description: 'High-density travel lead management and pipeline operations system for agency teams.',
+  description: 'Adaptive customer operations, conversations, pipeline and team workflow management.',
   robots: {
     index: false,
     follow: false,
