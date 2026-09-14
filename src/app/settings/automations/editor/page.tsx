@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import AutomationWorkflowBuilder, { type AutomationWorkflow } from '@/components/automation/AutomationWorkflowBuilder';
 import { getWorkflowTemplate } from '@/lib/automation/workflow-templates';
@@ -24,19 +24,31 @@ function templateWorkflow(key: string | null): AutomationWorkflow | null {
 
 export default function AutomationEditorPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { currentUser, showToast } = useApp();
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
-  const workflowId = searchParams.get('id');
-  const templateKey = searchParams.get('template');
-  const [workflow, setWorkflow] = useState<AutomationWorkflow | null>(() => templateWorkflow(templateKey));
-  const [loading, setLoading] = useState(Boolean(workflowId));
+  const [workflow, setWorkflow] = useState<AutomationWorkflow | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
   const leaveEditor = useCallback(() => router.push('/settings/automations'), [router]);
 
   useEffect(() => {
-    if (!canManage || !workflowId) return;
+    if (!canManage) {
+      setLoading(false);
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const workflowId = params.get('id');
+    const templateKey = params.get('template');
+    const starter = templateWorkflow(templateKey);
+
+    if (!workflowId) {
+      setWorkflow(starter);
+      setLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
     void (async () => {
       setLoading(true);
@@ -56,7 +68,7 @@ export default function AutomationEditorPage() {
       }
     })();
     return () => controller.abort();
-  }, [canManage, workflowId]);
+  }, [canManage]);
 
   if (!canManage) {
     return <div className="mx-auto max-w-xl px-5 py-16 text-center"><AlertCircle className="mx-auto h-7 w-7 text-zinc-400" /><h1 className="mt-3 text-lg font-semibold">Manager access required</h1><p className="mt-1 text-sm text-zinc-500">Only managers and administrators can edit automations.</p></div>;
