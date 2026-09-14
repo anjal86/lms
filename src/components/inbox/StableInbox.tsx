@@ -141,7 +141,7 @@ export default function StableInbox() {
   const { can } = useWorkspacePermissions();
   const contactLabel = term('contact', 'Contact');
   const leadLabel = term('lead', 'Lead');
-  const initialConversationId = useRef(params.get('conversationId'));
+  const [initialConversationId] = useState<string | null>(() => params.get('conversationId'));
 
   const [queue, setQueue] = useState<QueueKey>(() => queueFromParam(params.get('view')));
   const [provider, setProvider] = useState('all');
@@ -154,7 +154,7 @@ export default function StableInbox() {
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [activeSavedView, setActiveSavedView] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialConversationId.current);
+  const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -228,13 +228,13 @@ export default function StableInbox() {
       const rows = (payload.conversations || []) as Conversation[];
       setConversations(rows);
       setMetrics({ ...EMPTY_METRICS, ...(payload.metrics || {}) });
-      setSelectedId((current) => current || initialConversationId.current || rows[0]?.id || null);
+      setSelectedId((current) => current || initialConversationId || rows[0]?.id || null);
     } catch (error) {
       if (!quiet) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
     } finally {
       if (!quiet) setLoadingList(false);
     }
-  }, [debouncedSearch, priority, provider, queue, showToast, sort, state]);
+  }, [debouncedSearch, initialConversationId, priority, provider, queue, showToast, sort, state]);
 
   const applyThreadSnapshot = useCallback((snapshot: ThreadSnapshot) => {
     setSelected(snapshot.conversation);
@@ -372,7 +372,7 @@ export default function StableInbox() {
       url.searchParams.set('conversationId', conversation.id);
       window.history.replaceState(null, '', url.toString());
     } catch { /* noop */ }
-  }, [applyThreadSnapshot]);
+  }, [applyThreadSnapshot, setContextOpen]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void Promise.all([loadViews(), loadList()]); }, 0);
