@@ -32,6 +32,18 @@ export async function PATCH(request: Request, context: Context) {
   }
 
   const input = parsed.data;
+  if (input.ownerId) {
+    const { data: owner, error: ownerError } = await actor.supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', input.ownerId)
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (ownerError) return NextResponse.json({ error: 'Unable to validate owner.' }, { status: 500 });
+    if (!owner) return NextResponse.json({ error: 'Owner is not an active member of this workspace.' }, { status: 400 });
+  }
+
   const patch: Record<string, unknown> = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description || null;
