@@ -16,11 +16,49 @@ const CreateSchema = z.object({
 
 type Context = { params: Promise<{ id: string }> };
 
+async function validateOpportunityAndOwner(
+  actor: Awaited<ReturnType<typeof getApiActor>> extends infer T ? Exclude<T, { error: NextResponse }> : never,
+  leadId: string,
+  ownerId: string | null,
+) {
+  const { data: lead, error: leadError } = await actor.supabase
+    .from('leads')
+    .select('id')
+    .eq('id', leadId)
+    .eq('workspace_id', actor.profile.workspace_id)
+    .maybeSingle();
+  if (leadError) return { response: NextResponse.json({ error: 'Unable to validate opportunity.' }, { status: 500 }) };
+  if (!lead) return { response: NextResponse.json({ error: 'Opportunity not found or unavailable.' }, { status: 404 }) };
+
+  if (ownerId) {
+    const { data: owner, error: ownerError } = await actor.supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', ownerId)
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (ownerError) return { response: NextResponse.json({ error: 'Unable to validate document owner.' }, { status: 500 }) };
+    if (!owner) return { response: NextResponse.json({ error: 'Document owner is not an active member of this workspace.' }, { status: 400 }) };
+  }
+
+  return { response: null };
+}
+
 export async function GET(request: Request, context: Context) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
   const { id } = await context.params;
   if (!uuidSchema.safeParse(id).success) return NextResponse.json({ error: 'Invalid opportunity id.' }, { status: 400 });
+
+  const { data: lead, error: leadError } = await actor.supabase
+    .from('leads')
+    .select('id')
+    .eq('id', id)
+    .eq('workspace_id', actor.profile.workspace_id)
+    .maybeSingle();
+  if (leadError) return NextResponse.json({ error: 'Unable to validate opportunity.' }, { status: 500 });
+  if (!lead) return NextResponse.json({ error: 'Opportunity not found or unavailable.' }, { status: 404 });
 
   const { data, error } = await actor.supabase
     .from('lead_documents')
@@ -41,6 +79,10 @@ export async function POST(request: Request, context: Context) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'Invalid document request.' }, { status: 400 });
 
   const input = parsed.data;
+  const ownerId = input.ownerId ?? actor.user.id;
+  const validation = await validateOpportunityAndOwner(actor, id, ownerId);
+  if (validation.response) return validation.response;
+
   const recordId = crypto.randomUUID();
   const { data, error } = await actor.supabase
     .from('lead_documents')
@@ -53,13 +95,14 @@ export async function POST(request: Request, context: Context) {
       lifecycle_status: 'requested',
       requested_at: new Date().toISOString(),
       expires_at: input.expiresAt || null,
-      owner_id: input.ownerId ?? actor.user.id,
+      owner_id: ownerId,
       notes: input.notes || null,
       payload: { id: recordId, title: input.title, category: input.documentType, lifecycle_status: 'requested' },
     })
     .select('*')
     .single();
   if (error) {
+    if (error.code === '23514') return NextResponse.json({ error: error.message || 'Invalid document request.' }, { status: 400 });
     console.error('Document request create failed:', error.message);
     return NextResponse.json({ error: 'Unable to request document.' }, { status: 500 });
   }
