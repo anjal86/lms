@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { CalendarClock, Kanban, LayoutDashboard, ListChecks, MessageSquare, MessageSquareQuote, Users } from 'lucide-react';
+import { CalendarClock, Inbox, Kanban, LayoutDashboard, Users } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
+import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
 
 type Tone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet';
 
@@ -35,27 +36,21 @@ export default function MobileBottomNav() {
   const pathname = usePathname();
   const { currentUser } = useApp();
   const { term, moduleEnabled } = useWorkspace();
+  const { can } = useWorkspacePermissions();
   const isAgent = currentUser.role === 'agent';
-  const leadPlural = term('lead_plural', 'Leads');
+  const leadPlural = term('lead_plural', 'Opportunities');
+  const contactPlural = term('contact_plural', 'Contacts');
   const inboxEnabled = moduleEnabled('inbox', true);
   const leadsEnabled = moduleEnabled('leads', true);
   const tasksEnabled = moduleEnabled('tasks', true);
 
-  const items: MobileNavItem[] = isAgent
-    ? [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
-        ...(inboxEnabled ? [{ label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const }] : []),
-        ...(leadsEnabled ? [{ label: 'My Work', href: '/my-work', icon: ListChecks, tone: 'cyan' as const }] : []),
-        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock, tone: 'amber' as const }] : []),
-        { label: 'Messages', href: '/templates', icon: MessageSquareQuote, tone: 'violet' },
-      ]
-    : [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
-        ...(inboxEnabled ? [{ label: 'Inbox', href: '/inbox', icon: MessageSquare, tone: 'cyan' as const }] : []),
-        ...(leadsEnabled ? [{ label: leadPlural, href: '/leads', icon: Kanban, tone: 'cyan' as const }] : []),
-        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock, tone: 'amber' as const }] : []),
-        { label: 'Team', href: '/team', icon: Users, tone: 'emerald' },
-      ];
+  const items: MobileNavItem[] = [
+    { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
+    ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', href: '/inbox', icon: Inbox, tone: 'cyan' as const }] : []),
+    ...(leadsEnabled ? [{ label: leadPlural, href: isAgent ? '/my-work' : '/leads', icon: Kanban, tone: 'cyan' as const }] : []),
+    ...(tasksEnabled ? [{ label: 'Due Work', href: '/work', icon: CalendarClock, tone: 'amber' as const }] : []),
+    ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users, tone: 'emerald' as const }] : []),
+  ];
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/80 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-10px_30px_rgba(37,99,235,0.08)] backdrop-blur md:hidden" aria-label="Primary navigation">
