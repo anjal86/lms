@@ -65,6 +65,10 @@ const migrations = [
     file: '202609120045_business_event_runtime_integrity.sql',
     applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='business_events' and column_name='status') and exists(select 1 from pg_trigger where tgname='trg_lead_business_event' and not tgisinternal) and position('automation_generated' in pg_get_functiondef(to_regprocedure('public.run_business_event_automations()'))) > 0"),
   },
+  {
+    file: '202609120046_inbox_realtime_publication.sql',
+    applied: () => exists("select not exists(select 1 from pg_publication where pubname='supabase_realtime') or (exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_conversations') and exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_messages'))"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
