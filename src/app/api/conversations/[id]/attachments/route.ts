@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { resolveMetaMessageMedia } from '@/lib/integrations/meta-message-media';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +16,12 @@ const ALLOWED_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
+
+type UnknownRecord = Record<string, unknown>;
+
+function record(value: unknown): UnknownRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {};
+}
 
 function safeName(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'attachment';
@@ -31,7 +38,7 @@ async function loadConversation(actor: Awaited<ReturnType<typeof getApiActor>>, 
   if ('error' in actor) return null;
   const { data } = await actor.supabase
     .from('lead_conversations')
-    .select('id,workspace_id')
+    .select('id,workspace_id,provider,connection_id,external_thread_id')
     .eq('id', id)
     .eq('workspace_id', actor.profile.workspace_id)
     .maybeSingle();
@@ -119,14 +126,64 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return storageUnavailable(error instanceof Error ? error.message : 'Missing service-role configuration.');
   }
 
-  const { data, error } = await admin.storage.from(BUCKET).download(path);
-  if (error || !data) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
-  const contentType = data.type || 'application/octet-stream';
-  return new Response(await data.arrayBuffer(), {
-    headers: {
-      'Content-Type': contentType,
-      'Cache-Control': 'private, max-age=300',
-      'Content-Disposition': 'inline',
-    },
-  });
+  try {
+    const { data } = await admin.storage.from(BUCKET).download(path);
+    if (data) {
+      const contentType = data.type || 'application/octet-stream';
+      return new Response(await data.arrayBuffer(), {
+        headers: {
+          'Content-Type': contentType,
+          'Cache-Control': 'private, max-age=300',
+          'Content-Disposition': 'inline',
+        },
+      });
+    }
+  } catch {
+    // The staging object may already be released after Meta accepted the message.
+  }
+
+  if ((conversation.provider !== 'facebook' && conversation.provider !== 'instagram') || !conversation.connection_id) {
+    return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
+  }
+
+  const { data: recentMessages } = await admin
+    .from('lead_messages')
+    .select('provider_message_id,external_message_id,metadata,sent_at')
+    .eq('conversation_id', id)
+    .eq('direction', 'outbound')
+    .order('sent_at', { ascending: false })
+    .limit(100);
+
+  const storedMessage = (recentMessages || []).find((message) => record(message.metadata).storage_path === path);
+  const providerMessageId = storedMessage?.provider_message_id || storedMessage?.external_message_id;
+  if (!providerMessageId) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
+
+  try {
+    const providerMedia = await resolveMetaMessageMedia({
+      provider: conversation.provider,
+      connectionId: conversation.connection_id,
+      externalThreadId: conversation.external_thread_id,
+      messageId: providerMessageId,
+    });
+    if (!providerMedia?.url) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
+
+    const providerResponse = await fetch(providerMedia.url, { redirect: 'follow', cache: 'no-store' });
+    if (!providerResponse.ok) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
+
+    const metadata = record(storedMessage?.metadata);
+    const contentType = providerResponse.headers.get('content-type')
+      || providerMedia.mimeType
+      || (typeof metadata.mime_type === 'string' ? metadata.mime_type : 'application/octet-stream');
+
+    return new Response(await providerResponse.arrayBuffer(), {
+      headers: {
+        'Content-Type': contentType,
+        'Cache-Control': 'private, max-age=300',
+        'Content-Disposition': 'inline',
+      },
+    });
+  } catch (error) {
+    console.error('Unable to resolve released Meta attachment:', error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
+  }
 }
