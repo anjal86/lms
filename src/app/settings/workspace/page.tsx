@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Building2,
   ListPlus,
+  MessageSquareQuote,
   PlugZap,
   Settings,
   ShieldCheck,
@@ -34,15 +35,16 @@ export default function WorkspaceSettingsHubPage() {
   }
 
   const cards: SettingsCard[] = [
-    { href: '/settings/business', title: 'Business setup', description: 'Industry pack, terminology, modules and pipelines.', icon: Building2, visible: true },
+    { href: '/settings/business', title: 'Business setup', description: 'Industry pack, terminology, modules, pipelines and qualification behavior.', icon: Building2, visible: true },
     { href: '/settings/business/fields', title: 'Custom fields', description: 'Control the structured data collected on opportunities.', icon: ListPlus, visible: true },
-    { href: '/connections', title: 'Connections', description: 'Manage messaging and external system connections.', icon: PlugZap, visible: true },
+    { href: '/connections', title: 'Connections', description: 'Manage messaging channels, webhooks and external system connections.', icon: PlugZap, visible: true },
+    { href: '/templates', title: 'Saved replies', description: 'Reusable customer replies available to the communication workflow.', icon: MessageSquareQuote, visible: true },
     { href: '/team/users', title: 'Users', description: 'Manage workspace members, roles and availability.', icon: UserCog, visible: true },
-    { href: '/settings/automations', title: 'Automations', description: 'Routing and workflow rules that progress work automatically.', icon: Zap, visible: can('automations.view') },
-    { href: '/settings/service-levels', title: 'Service levels', description: 'Conversation SLA, reminders, reassignment and recovery behavior.', icon: Sparkles, visible: can('service_levels.view') },
+    { href: '/settings/automations', title: 'Automations', description: 'Workflow rules that progress or route work automatically.', icon: Zap, visible: can('automations.view') },
+    { href: '/settings/service-levels', title: 'Service levels & routing', description: 'Response targets, assignment strategy, reminders, reassignment and recovery.', icon: Sparkles, visible: can('service_levels.view') },
     { href: '/settings/permissions', title: 'Permissions', description: 'Control capabilities for managers and agents.', icon: ShieldCheck, visible: can('permissions.view') },
     { href: '/audit', title: 'Activity log', description: 'Review important workspace changes and operational events.', icon: Activity, visible: true },
-    { href: '/settings', title: 'Advanced settings', description: 'Regional, routing, alerts, taxonomy and backup configuration.', icon: Settings, visible: true },
+    { href: '/settings/advanced', title: 'Advanced settings', description: 'Regional preferences, notifications, taxonomies and backup.', icon: Settings, visible: true },
   ];
 
   return (
@@ -50,7 +52,7 @@ export default function WorkspaceSettingsHubPage() {
       <header>
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">Workspace</div>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-950">Settings</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">Configuration lives here so operational screens stay focused on customer work.</p>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">Configuration lives here so operational screens stay focused on customer work. Each setting has one owner and one place to edit it.</p>
       </header>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
