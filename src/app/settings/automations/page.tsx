@@ -189,7 +189,7 @@ export default function AutomationsPage() {
       <div className="border-b border-zinc-200 bg-white px-4 py-4 md:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><div className="flex items-center gap-2 text-base font-semibold text-zinc-950"><Zap className="h-4 w-4" /> Automations</div><p className="mt-1 text-xs text-zinc-500">Build visual workflows on top of real Inbox and CRM business events.</p></div>
-          <div className="flex items-center gap-2"><Link href="/inbox" className="button-secondary"><ArrowLeft className="h-3.5 w-3.5" /> Inbox</Link><button type="button" onClick={openNew} className="button-primary min-h-10"><Plus className="h-3.5 w-3.5" /> Create workflow</button></div>
+          <div className="flex items-center gap-2"><Link href="/settings/workspace" className="button-secondary"><ArrowLeft className="h-3.5 w-3.5" /> Settings</Link><button type="button" onClick={openNew} className="button-primary min-h-10"><Plus className="h-3.5 w-3.5" /> Create workflow</button></div>
         </div>
       </div>
 
