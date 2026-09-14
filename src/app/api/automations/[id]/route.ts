@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { getApiActor } from '@/lib/auth/api-actor';
+import { actorHasPermission } from '@/lib/auth/permissions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ const PatchWorkflowSchema = z.object({
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required.' }, { status: 403 });
+  if (!(await actorHasPermission(actor, 'automations.edit'))) return NextResponse.json({ error: 'Automation edit permission required.' }, { status: 403 });
   const { id } = await context.params;
 
   let raw: unknown;
@@ -25,6 +26,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const parsed = PatchWorkflowSchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: 'Validation failed.', details: parsed.error.flatten() }, { status: 400 });
   if (Object.keys(parsed.data).length === 0) return NextResponse.json({ error: 'No changes requested.' }, { status: 400 });
+  if (parsed.data.is_enabled !== undefined && !(await actorHasPermission(actor, 'automations.publish'))) {
+    return NextResponse.json({ error: 'Automation publish permission required to change workflow status.' }, { status: 403 });
+  }
 
   const { data, error } = await actor.supabase
     .from('automation_workflows')
@@ -41,7 +45,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required.' }, { status: 403 });
+  if (!(await actorHasPermission(actor, 'automations.edit'))) return NextResponse.json({ error: 'Automation edit permission required.' }, { status: 403 });
   const { id } = await context.params;
 
   const { error, count } = await actor.supabase
