@@ -38,6 +38,14 @@ async function loadConversation(actor: Awaited<ReturnType<typeof getApiActor>>, 
   return data || null;
 }
 
+function storageUnavailable(message?: string) {
+  if (message) console.error('Conversation attachment storage unavailable:', message);
+  return NextResponse.json(
+    { error: 'Attachment storage is unavailable. Start the Supabase Storage service and try again.' },
+    { status: 503 }
+  );
+}
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
@@ -51,10 +59,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!value.size || value.size > MAX_BYTES) return NextResponse.json({ error: 'Attachments must be 15 MB or smaller.' }, { status: 400 });
   if (!ALLOWED_TYPES.has(value.type)) return NextResponse.json({ error: 'This file type is not supported.' }, { status: 400 });
 
-  const admin = createSupabaseAdminClient();
+  let admin: ReturnType<typeof createSupabaseAdminClient>;
+  try {
+    admin = createSupabaseAdminClient();
+  } catch (error) {
+    return storageUnavailable(error instanceof Error ? error.message : 'Missing service-role configuration.');
+  }
+
+  const { data: bucket, error: bucketError } = await admin.storage.getBucket(BUCKET);
+  if (bucketError || !bucket) return storageUnavailable(bucketError?.message || `Bucket ${BUCKET} is missing.`);
+
   const fileName = safeName(value.name);
   const path = `${actor.profile.workspace_id}/${id}/${randomUUID()}-${fileName}`;
-  const bytes = Buffer.from(await value.arrayBuffer());
+  const bytes = await value.arrayBuffer();
   const { error: uploadError } = await admin.storage.from(BUCKET).upload(path, bytes, {
     contentType: value.type,
     upsert: false,
@@ -67,6 +84,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const { data: signed, error: signError } = await admin.storage.from(BUCKET).createSignedUrl(path, 15 * 60);
   if (signError || !signed?.signedUrl) {
     await admin.storage.from(BUCKET).remove([path]);
+    if (signError) console.error('Conversation attachment signing failed:', signError.message);
     return NextResponse.json({ error: 'Unable to prepare attachment.' }, { status: 500 });
   }
 
@@ -94,7 +112,13 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const expectedPrefix = `${actor.profile.workspace_id}/${id}/`;
   if (!path.startsWith(expectedPrefix)) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
 
-  const admin = createSupabaseAdminClient();
+  let admin: ReturnType<typeof createSupabaseAdminClient>;
+  try {
+    admin = createSupabaseAdminClient();
+  } catch (error) {
+    return storageUnavailable(error instanceof Error ? error.message : 'Missing service-role configuration.');
+  }
+
   const { data, error } = await admin.storage.from(BUCKET).download(path);
   if (error || !data) return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
   const contentType = data.type || 'application/octet-stream';
