@@ -6,35 +6,34 @@ import { useSearchParams } from 'next/navigation';
 import { CalendarClock, Check, Download, Inbox, Loader2, Plus, RefreshCw, Search } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
-import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
 import ScheduleFollowUpModal from '@/components/followups/ScheduleFollowUpModal';
-
-type ConversationAction = {
-  id: string;
-  customer_name: string | null;
-  provider: string;
-  assigned_to: string | null;
-  next_action_at: string | null;
-  priority: string;
-  workflow_state: string;
-};
 
 type ViewKey = 'overdue' | 'today' | 'upcoming';
 type SourceFilter = 'all' | 'follow_up' | 'conversation';
 type StatusFilter = 'open' | 'done';
 
-type WorkItem = {
+type ApiWorkItem = {
   id: string;
-  source: 'follow_up' | 'conversation';
+  workspace_id: string;
+  contact_id: string | null;
+  lead_id: string | null;
+  conversation_id: string | null;
+  owner_id: string | null;
+  type: 'call' | 'message' | 'email' | 'meeting' | 'document' | 'review' | 'payment' | 'proposal' | 'custom';
   title: string;
+  description: string | null;
+  due_at: string | null;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  status: 'open' | 'completed' | 'cancelled';
+  source: string;
+  completed_at: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+type DisplayWorkItem = ApiWorkItem & {
   detail: string;
-  dueAt: string;
-  ownerId: string | null;
   href: string;
-  priority: number;
-  completed: boolean;
-  followUpId?: string;
-  conversationId?: string;
+  surface: 'follow_up' | 'conversation';
 };
 
 function sameDay(value: string, now: Date) {
@@ -42,8 +41,9 @@ function sameDay(value: string, now: Date) {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
 }
 
-function dueLabel(value: string, now: number, completed: boolean) {
+function dueLabel(value: string | null, now: number, completed: boolean) {
   if (completed) return 'Completed';
+  if (!value) return 'No due date';
   const diff = Math.round((new Date(value).getTime() - now) / 60000);
   if (diff < 0) return Math.abs(diff) < 60 ? `${Math.abs(diff)}m overdue` : `${Math.round(Math.abs(diff) / 60)}h overdue`;
   if (diff < 60) return `in ${diff}m`;
@@ -55,20 +55,19 @@ function sourceFromParam(value: string | null): SourceFilter {
   return value === 'follow_up' || value === 'conversation' ? value : 'all';
 }
 
+function escapeIcs(value: string) {
+  return value.replaceAll('\\', '\\\\').replaceAll(';', '\\;').replaceAll(',', '\\,').replaceAll('\n', '\\n');
+}
+
+function toIcsDate(value: string) {
+  return new Date(value).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
 export default function DueWorkPage() {
   const params = useSearchParams();
-  const {
-    currentUser,
-    followUps,
-    allLeads,
-    allProfiles,
-    completeFollowUp,
-    exportFollowUpsIcal,
-    showToast,
-  } = useApp();
+  const { currentUser, allLeads, allProfiles, showToast } = useApp();
   const { config, term } = useWorkspace();
-  const { can } = useWorkspacePermissions();
-  const [conversations, setConversations] = useState<ConversationAction[]>([]);
+  const [items, setItems] = useState<ApiWorkItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewKey>('today');
@@ -81,24 +80,19 @@ export default function DueWorkPage() {
   const isManagement = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   const load = useCallback(async () => {
-    if (!can('inbox.view')) {
-      setConversations([]);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     try {
-      const requestParams = new URLSearchParams({ filter: isManagement ? 'all' : 'mine', sort: 'newest', limit: '1000' });
-      const response = await fetch(`/api/conversations?${requestParams.toString()}`, { cache: 'no-store' });
+      const requestParams = new URLSearchParams({ status: 'all', owner: isManagement ? 'all' : 'me', limit: '500' });
+      const response = await fetch(`/api/work-items?${requestParams.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Unable to load conversation actions.');
-      setConversations((payload.conversations || []).filter((row: ConversationAction) => row.next_action_at && row.workflow_state !== 'closed'));
+      if (!response.ok) throw new Error(payload.error || 'Unable to load due work.');
+      setItems(payload.items || []);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Unable to load conversation actions.', 'error');
+      showToast(error instanceof Error ? error.message : 'Unable to load due work.', 'error');
     } finally {
       setLoading(false);
     }
-  }, [can, isManagement, showToast]);
+  }, [isManagement, showToast]);
 
   useEffect(() => {
     document.title = `Due Work — ${config.workspace.name}`;
@@ -110,62 +104,50 @@ export default function DueWorkPage() {
     };
   }, [config.workspace.name, load]);
 
-  const items = useMemo<WorkItem[]>(() => {
-    const followUpItems: WorkItem[] = followUps
-      .filter((item) => isManagement || item.assigned_to === currentUser.id || item.agent_id === currentUser.id)
-      .map((item) => {
-        const lead = allLeads.find((row) => row.id === item.lead_id);
-        const completed = item.status === 'completed';
-        return {
-          id: `followup:${item.id}`,
-          source: 'follow_up',
-          title: item.title || `Follow up with ${lead?.customer_name || leadLabel}`,
-          detail: `${lead?.customer_name || leadLabel}${item.channel ? ` · ${item.channel}` : ''}${item.notes ? ` · ${item.notes}` : ''}`,
-          dueAt: item.scheduled_at,
-          ownerId: item.assigned_to || item.agent_id || null,
-          href: isManagement ? `/leads/${item.lead_id}/workspace` : `/my-work/${item.lead_id}`,
-          priority: item.priority === 'urgent' ? 0 : item.priority === 'high' ? 0.5 : 1,
-          completed,
-          followUpId: item.id,
-        };
-      });
+  const displayItems = useMemo<DisplayWorkItem[]>(() => items.map((item) => {
+    const lead = item.lead_id ? allLeads.find((row) => row.id === item.lead_id) : null;
+    const surface: DisplayWorkItem['surface'] = item.conversation_id || item.source.startsWith('conversation') ? 'conversation' : 'follow_up';
+    const metadata = item.metadata || {};
+    const channel = typeof metadata.channel === 'string' ? metadata.channel : item.type;
+    const target = lead?.customer_name || (surface === 'conversation' ? 'Customer conversation' : leadLabel);
+    const detail = [target, channel, item.description].filter(Boolean).join(' · ');
+    const href = item.conversation_id
+      ? `/inbox?conversationId=${item.conversation_id}`
+      : item.lead_id
+        ? `/leads/${item.lead_id}/workspace`
+        : item.contact_id
+          ? `/contacts?contactId=${item.contact_id}`
+          : '/work';
+    return { ...item, detail, href, surface };
+  }).sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
+    const priority = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
+    return priority[a.priority] - priority[b.priority]
+      || (a.due_at ? new Date(a.due_at).getTime() : Number.MAX_SAFE_INTEGER)
+      - (b.due_at ? new Date(b.due_at).getTime() : Number.MAX_SAFE_INTEGER);
+  }), [allLeads, items, leadLabel]);
 
-    const conversationItems: WorkItem[] = conversations
-      .filter((row) => Boolean(row.next_action_at))
-      .map((row) => ({
-        id: `conversation:${row.id}`,
-        source: 'conversation',
-        title: `Conversation action · ${row.customer_name || 'Customer'}`,
-        detail: `${row.provider} · ${row.priority} priority`,
-        dueAt: row.next_action_at as string,
-        ownerId: row.assigned_to,
-        href: `/inbox?conversationId=${row.id}`,
-        priority: row.priority === 'urgent' ? 0 : row.priority === 'high' ? 0.5 : 1,
-        completed: false,
-        conversationId: row.id,
-      }));
-
-    return [...followUpItems, ...conversationItems].sort((a, b) => {
-      if (a.completed !== b.completed) return a.completed ? 1 : -1;
-      return a.priority - b.priority || new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime();
-    });
-  }, [allLeads, conversations, currentUser.id, followUps, isManagement, leadLabel]);
-
-  const ownerMatches = useCallback((item: WorkItem) => {
-    if (!isManagement) return item.ownerId === currentUser.id || item.ownerId === null;
+  const ownerMatches = useCallback((item: ApiWorkItem) => {
+    if (!isManagement) return item.owner_id === currentUser.id || item.owner_id === null;
     if (ownerFilter === 'all') return true;
-    if (ownerFilter === 'me') return item.ownerId === currentUser.id;
-    return item.ownerId === ownerFilter;
+    if (ownerFilter === 'me') return item.owner_id === currentUser.id;
+    return item.owner_id === ownerFilter;
   }, [currentUser.id, isManagement, ownerFilter]);
 
-  const openItems = useMemo(() => items.filter((item) => !item.completed && ownerMatches(item) && (sourceFilter === 'all' || item.source === sourceFilter)), [items, ownerMatches, sourceFilter]);
+  const sourceMatches = useCallback((item: DisplayWorkItem) => sourceFilter === 'all' || item.surface === sourceFilter, [sourceFilter]);
+
+  const openItems = useMemo(() => displayItems.filter((item) => item.status === 'open' && ownerMatches(item) && sourceMatches(item)), [displayItems, ownerMatches, sourceMatches]);
 
   const counts = useMemo(() => {
     const current = new Date(now);
     return openItems.reduce((acc, item) => {
-      const due = new Date(item.dueAt).getTime();
+      if (!item.due_at) {
+        acc.upcoming += 1;
+        return acc;
+      }
+      const due = new Date(item.due_at).getTime();
       if (due < now) acc.overdue += 1;
-      else if (sameDay(item.dueAt, current)) acc.today += 1;
+      else if (sameDay(item.due_at, current)) acc.today += 1;
       else acc.upcoming += 1;
       return acc;
     }, { overdue: 0, today: 0, upcoming: 0 });
@@ -174,46 +156,54 @@ export default function DueWorkPage() {
   const filtered = useMemo(() => {
     const current = new Date(now);
     const searchTerm = query.trim().toLowerCase();
-    return items.filter((item) => {
-      if (!ownerMatches(item)) return false;
-      if (sourceFilter !== 'all' && item.source !== sourceFilter) return false;
+    return displayItems.filter((item) => {
+      if (!ownerMatches(item) || !sourceMatches(item)) return false;
       if (statusFilter === 'done') {
-        if (!item.completed) return false;
+        if (item.status !== 'completed') return false;
       } else {
-        if (item.completed) return false;
-        const due = new Date(item.dueAt).getTime();
-        if (view === 'overdue' && due >= now) return false;
-        if (view === 'today' && (due < now || !sameDay(item.dueAt, current))) return false;
-        if (view === 'upcoming' && (due < now || sameDay(item.dueAt, current))) return false;
+        if (item.status !== 'open') return false;
+        if (view === 'overdue' && (!item.due_at || new Date(item.due_at).getTime() >= now)) return false;
+        if (view === 'today' && (!item.due_at || new Date(item.due_at).getTime() < now || !sameDay(item.due_at, current))) return false;
+        if (view === 'upcoming' && item.due_at && (new Date(item.due_at).getTime() < now || sameDay(item.due_at, current))) return false;
       }
-      return !searchTerm || `${item.title} ${item.detail}`.toLowerCase().includes(searchTerm);
+      return !searchTerm || `${item.title} ${item.detail} ${item.type}`.toLowerCase().includes(searchTerm);
     });
-  }, [items, now, ownerMatches, query, sourceFilter, statusFilter, view]);
+  }, [displayItems, now, ownerMatches, query, sourceMatches, statusFilter, view]);
 
-  const calendarItems = useMemo(() => {
-    const visibleIds = new Set(filtered.filter((item) => item.source === 'follow_up' && !item.completed).map((item) => item.followUpId));
-    return followUps.filter((item) => visibleIds.has(item.id));
-  }, [filtered, followUps]);
-
-  const complete = async (item: WorkItem) => {
-    if (item.source === 'follow_up' && item.followUpId) {
-      completeFollowUp(item.followUpId, 'Completed from Due Work');
-      showToast('Action completed.', 'success');
+  const complete = async (item: DisplayWorkItem) => {
+    const response = await fetch(`/api/work-items/${item.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      showToast(payload.error || 'Unable to complete action.', 'error');
       return;
     }
-    if (item.conversationId) {
-      const response = await fetch(`/api/conversations/${item.conversationId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ next_action_at: null }),
-      });
-      if (!response.ok) {
-        showToast('Unable to complete conversation action.', 'error');
-        return;
-      }
-      setConversations((rows) => rows.filter((row) => row.id !== item.conversationId));
-      showToast('Action completed.', 'success');
-    }
+    setItems((rows) => rows.map((row) => row.id === item.id ? payload.item : row));
+    showToast('Action completed.', 'success');
+  };
+
+  const exportCalendar = () => {
+    const rows = filtered.filter((item) => item.status === 'open' && item.due_at);
+    if (!rows.length) return;
+    const events = rows.map((item) => [
+      'BEGIN:VEVENT',
+      `UID:${item.id}@crm`,
+      `DTSTAMP:${toIcsDate(new Date().toISOString())}`,
+      `DTSTART:${toIcsDate(item.due_at as string)}`,
+      `SUMMARY:${escapeIcs(item.title)}`,
+      `DESCRIPTION:${escapeIcs(item.detail)}`,
+      'END:VEVENT',
+    ].join('\r\n')).join('\r\n');
+    const body = `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CRM//Due Work//EN\r\n${events}\r\nEND:VCALENDAR\r\n`;
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/calendar;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'due-work.ics';
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const ownerOptions = allProfiles.filter((profile) => profile.is_active);
@@ -223,10 +213,10 @@ export default function DueWorkPage() {
       <div>
         <p className="page-eyebrow">Work</p>
         <h1 className="page-title">Due Work</h1>
-        <p className="page-description">One queue for scheduled CRM follow-ups and conversation actions.</p>
+        <p className="page-description">One canonical queue for every customer action that needs attention.</p>
       </div>
       <div className="page-actions">
-        <button type="button" onClick={() => exportFollowUpsIcal(calendarItems)} disabled={calendarItems.length === 0} className="button-secondary">
+        <button type="button" onClick={exportCalendar} disabled={!filtered.some((item) => item.status === 'open' && item.due_at)} className="button-secondary">
           <Download className="h-4 w-4" /> Calendar
         </button>
         <button type="button" onClick={() => setScheduleOpen(true)} className="button-primary">
@@ -254,10 +244,10 @@ export default function DueWorkPage() {
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search customer or action" className="field pl-9" />
         </div>
-        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as SourceFilter)} className="select-field text-xs" aria-label="Action type">
+        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as SourceFilter)} className="select-field text-xs" aria-label="Action source">
           <option value="all">All actions</option>
-          <option value="follow_up">CRM follow-ups</option>
-          <option value="conversation">Conversation actions</option>
+          <option value="follow_up">Opportunity work</option>
+          <option value="conversation">Conversation work</option>
         </select>
         {isManagement && <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)} className="select-field text-xs" aria-label="Owner">
           <option value="all">All owners</option>
@@ -282,23 +272,23 @@ export default function DueWorkPage() {
         <div className="divide-y divide-zinc-100">
           {filtered.map((item) => (
             <div key={item.id} className="flex items-center gap-3 px-4 py-3">
-              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.source === 'conversation' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>
-                {item.source === 'conversation' ? <Inbox className="h-4 w-4" /> : <CalendarClock className="h-4 w-4" />}
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.surface === 'conversation' ? 'bg-cyan-50 text-cyan-700' : 'bg-amber-50 text-amber-700'}`}>
+                {item.surface === 'conversation' ? <Inbox className="h-4 w-4" /> : <CalendarClock className="h-4 w-4" />}
               </span>
               <Link href={item.href} className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-zinc-900">{item.title}</div>
                 <div className="mt-0.5 truncate text-[11px] text-zinc-500">{item.detail}</div>
               </Link>
-              <div className={`shrink-0 font-mono text-[11px] font-semibold ${!item.completed && new Date(item.dueAt).getTime() < now ? 'text-rose-600' : 'text-zinc-500'}`}>
-                {dueLabel(item.dueAt, now, item.completed)}
+              <div className={`shrink-0 font-mono text-[11px] font-semibold ${item.status === 'open' && item.due_at && new Date(item.due_at).getTime() < now ? 'text-rose-600' : 'text-zinc-500'}`}>
+                {dueLabel(item.due_at, now, item.status === 'completed')}
               </div>
-              {!item.completed && <button type="button" onClick={() => void complete(item)} className="button-secondary button-sm" title="Mark done"><Check className="h-3.5 w-3.5" /></button>}
+              {item.status === 'open' && <button type="button" onClick={() => void complete(item)} className="button-secondary button-sm" title="Mark done"><Check className="h-3.5 w-3.5" /></button>}
             </div>
           ))}
         </div>
       )}
     </section>
 
-    {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => setScheduleOpen(false)} />}
+    {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => { setScheduleOpen(false); window.setTimeout(() => void load(), 150); }} />}
   </div>;
 }
