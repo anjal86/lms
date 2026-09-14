@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider } from '@/lib/integrations/catalog';
 import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,7 @@ const ManualConnectionSchema = z.object({
 });
 
 const PatchSchema = z.object({
-  id: z.string().uuid(),
+  id: uuidSchema,
   action: z.enum(['pause', 'resume', 'disconnect']),
 });
 

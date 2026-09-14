@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,7 @@ const fieldTypes = [
 ] as const;
 
 const FieldSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: uuidSchema.optional(),
   label: z.string().trim().min(1).max(80),
   fieldKey: z.string().trim().max(80).regex(/^[a-z][a-z0-9_]*$/).optional(),
   fieldType: z.enum(fieldTypes),
@@ -25,7 +26,7 @@ const FieldSchema = z.object({
   sortOrder: z.number().int().min(0).max(10000).default(100),
 });
 
-const DeleteSchema = z.object({ id: z.string().uuid() });
+const DeleteSchema = z.object({ id: uuidSchema });
 
 function slugifyFieldKey(label: string) {
   const key = label

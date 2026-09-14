@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const MergeSchema = z.object({
-  primary_contact_id: z.string().uuid(),
-  duplicate_contact_id: z.string().uuid(),
+  primary_contact_id: uuidSchema,
+  duplicate_contact_id: uuidSchema,
 }).refine((value) => value.primary_contact_id !== value.duplicate_contact_id, {
   message: 'Choose two different contacts.',
 });

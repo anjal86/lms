@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { backfillMetaConversationMessages } from '@/lib/integrations/meta-history';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,7 +20,7 @@ const PatchConversationSchema = z.object({
   resolution_code: z.string().trim().max(80).nullable().optional(),
   closing_note: z.string().trim().max(4000).nullable().optional(),
   next_action_at: z.string().datetime().nullable().optional(),
-  assigned_to: z.string().uuid().nullable().optional(),
+  assigned_to: uuidSchema.nullable().optional(),
   assign_strategy: z.enum(['least_open', 'workload_balanced', 'round_robin', 'conversion_weighted']).optional(),
   mark_read: z.boolean().optional(),
   lifecycle_key: z.string().trim().min(1).max(80).optional(),

@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement, type ApiActor } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const CollaboratorSchema = z.object({ user_id: z.string().uuid() });
+const CollaboratorSchema = z.object({ user_id: uuidSchema });
 
 async function conversationExists(actor: ApiActor, id: string) {
   const { data } = await actor.supabase

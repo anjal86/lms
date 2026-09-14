@@ -3,11 +3,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 
 const UploadRequest = z.object({
-  lead_id: z.string().uuid(),
+  lead_id: uuidSchema,
   file_name: z.string().trim().min(1).max(180),
   content_type: z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']),
   size_bytes: z.number().int().positive().max(10 * 1024 * 1024),

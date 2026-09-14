@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 
 const DownloadRequest = z.object({
-  lead_id: z.string().uuid(),
+  lead_id: uuidSchema,
   storage_path: z.string().trim().min(1).max(500),
 });
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,7 @@ const StageSchema = z.object({
 });
 
 const SaveSchema = z.object({
-  pipelineId: z.string().uuid(),
+  pipelineId: uuidSchema,
   name: z.string().trim().min(1).max(100),
   stages: z.array(StageSchema).min(2).max(30),
 }).superRefine((value, ctx) => {

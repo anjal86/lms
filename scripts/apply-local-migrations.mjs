@@ -93,6 +93,7 @@ const migrations = [
   { file: '202609120031_automation_execution_integrity.sql', applied: () => exists("select to_regprocedure('public.automation_run_authorized(uuid,uuid)') is not null and position('v_is_automation' in pg_get_functiondef(to_regprocedure('public.transition_conversation(uuid,text,timestamptz,text,text,timestamptz,uuid)'))) > 0") },
   { file: '202609120032_contact_merge_integrity.sql', applied: () => exists("select to_regprocedure('public.merge_contacts(uuid,uuid)') is not null") },
   { file: '202609120033_inbox_operational_views.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='needs_reply') and exists(select 1 from pg_trigger where tgname='trg_clear_needs_reply_when_closed' and not tgisinternal)") },
+  { file: '202609120034_profile_assignment_metrics.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='last_assigned_at') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='conversion_rate')") },
 ];
 
 console.log('\nChecking local CRM database migrations...\n');

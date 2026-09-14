@@ -94,11 +94,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             tabIndex={-1}
             className={
               isInbox
-                ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden p-2 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-3 md:pb-3 lg:p-4 lg:pb-4 bg-zinc-100/70'
+                ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0 bg-white'
                 : 'app-main'
             }
           >
-            <div className={isInbox ? 'h-full w-full min-w-0 overflow-hidden' : 'app-page-frame'}>
+            <div className={isInbox ? 'flex h-full w-full min-w-0 flex-1 overflow-hidden' : 'app-page-frame'}>
               {children}
             </div>
           </main>

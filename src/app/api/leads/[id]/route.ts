@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,8 +21,8 @@ const PatchSchema = z.object({
   customerCity: z.string().trim().max(120).optional(),
   customerCountry: z.string().trim().max(120).optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
-  assignedTo: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
-  pipelineStageId: z.union([z.string().uuid(), z.null()]).optional(),
+  assignedTo: z.union([uuidSchema, z.literal(''), z.null()]).optional(),
+  pipelineStageId: z.union([uuidSchema, z.null()]).optional(),
   customData: z.record(z.string(), z.unknown()).optional(),
 }).refine((value) => Object.keys(value).length > 0, { message: 'No changes supplied.' });
 

@@ -8,6 +8,8 @@ const PUBLIC_PATHS = [
   '/auth/callback',
   '/api/leads/webhook',
   '/api/integrations/webhooks',
+  '/api/conversations/sync',
+  '/api/cron',
 ];
 
 const MODULE_PATHS: Array<{ moduleKey: string; paths: string[] }> = [

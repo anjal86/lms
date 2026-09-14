@@ -241,12 +241,38 @@ function slaInfo(conversation: Conversation) {
   return { label: overdue ? `${amount} overdue` : `${amount} left`, overdue };
 }
 
-function eventText(event: TimelineEvent) {
-  if (event.event_type === 'assigned') return `Assigned to ${String(event.payload.assigned_to || 'team member')}`;
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function eventText(event: TimelineEvent, resolveAssigneeName?: (id: string) => string) {
+  if (event.event_type === 'assigned') {
+    const fromPayload = typeof event.payload.assigned_to_name === 'string' ? event.payload.assigned_to_name.trim() : '';
+    const rawId = String(event.payload.assigned_to || '').trim();
+    const fromLookup = resolveAssigneeName ? resolveAssigneeName(rawId).trim() : '';
+    const name = fromPayload || fromLookup || (UUID_REGEX.test(rawId) ? '' : rawId);
+    return `Assigned to ${name || 'team member'}`;
+  }
   if (event.event_type === 'priority_changed') return `Priority changed to ${String(event.payload.priority || 'updated')}`;
   if (event.event_type === 'lifecycle_changed') return `Lifecycle changed to ${lifecycleLabel(String(event.payload.lifecycle_key || 'updated'))}`;
   if (event.event_type === 'state_changed') return `Conversation ${String(event.payload.state || 'updated')}`;
   return event.event_type.replaceAll('_', ' ');
+}
+
+function formatDisplayPhone(value?: string | null): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (trimmed.startsWith('facebook:') || trimmed.startsWith('fb:') || trimmed.startsWith('ig:') || trimmed.startsWith('instagram:') || trimmed.includes('@')) {
+    return '';
+  }
+  return trimmed;
+}
+
+function formatDisplayEmail(value?: string | null): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (trimmed.endsWith('@facebook.com') || trimmed.endsWith('@instagram.com')) {
+    return '';
+  }
+  return trimmed;
 }
 
 function mediaFromMessages(messages: Message[]): MediaItem[] {
@@ -320,10 +346,29 @@ export default function InboxPage() {
   const selectedLead = leadOf(selected);
   const media = useMemo(() => mediaFromMessages(messages), [messages]);
 
+  const profileNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of allProfiles) {
+      if (p.id && p.full_name) map.set(p.id, p.full_name);
+    }
+    if (currentUser?.id && currentUser?.full_name) {
+      map.set(currentUser.id, currentUser.full_name);
+    }
+    return map;
+  }, [allProfiles, currentUser]);
+
+  const resolveProfileName = useCallback((id?: string | null) => {
+    if (!id) return '';
+    return profileNameMap.get(id) || '';
+  }, [profileNameMap]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 220);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
 
   const loadList = useCallback(async (quiet = false) => {
     if (!quiet) setLoadingList(true);
@@ -379,6 +424,31 @@ export default function InboxPage() {
     }
   }, [showToast]);
 
+  const triggerSync = useCallback(async (quiet = false) => {
+    if (syncing) return;
+    if (!quiet) setSyncing(true);
+    try {
+      const response = await fetch('/api/conversations/sync?mode=live', {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      if (response.ok) {
+        setLastSyncedAt(new Date());
+        if (!quiet) {
+          const payload = await response.json().catch(() => ({}));
+          const newMsg = Number(payload.messagesCount || 0);
+          showToast(newMsg > 0 ? `Synced ${newMsg} new message${newMsg === 1 ? '' : 's'}.` : 'Inbox is up to date.', 'success');
+        }
+      }
+    } catch (error) {
+      if (!quiet) showToast('Sync failed. Please check provider connection.', 'error');
+    } finally {
+      if (!quiet) setSyncing(false);
+      await loadList(true);
+      if (selectedId) await loadThread(selectedId, true);
+    }
+  }, [loadList, loadThread, selectedId, showToast, syncing]);
+
   useEffect(() => {
     void loadList();
   }, [loadList]);
@@ -393,6 +463,14 @@ export default function InboxPage() {
     }
     void loadThread(selectedId);
   }, [loadThread, selectedId]);
+
+  useEffect(() => {
+    // Initial live sync to fetch latest messages immediately
+    void triggerSync(true);
+    // Background sync cycle every 25 seconds
+    const syncTimer = window.setInterval(() => void triggerSync(true), 25_000);
+    return () => window.clearInterval(syncTimer);
+  }, [triggerSync]);
 
   useEffect(() => {
     const listTimer = window.setInterval(() => void loadList(true), 12_000);
@@ -529,121 +607,739 @@ export default function InboxPage() {
 
   const renderContext = () => {
     if (!selected) return null;
+    const displayPhone = formatDisplayPhone(selected.customer_phone || selectedContact?.primary_phone);
+    const displayEmail = formatDisplayEmail(selected.customer_email || selectedContact?.primary_email);
+    const rawPhone = (selected.customer_phone || selectedContact?.primary_phone || '').trim();
+    const rawEmail = (selected.customer_email || selectedContact?.primary_email || '').trim();
+    const rawChannelId = rawPhone.startsWith('facebook:')
+      ? rawPhone.replace('facebook:', '')
+      : rawEmail.endsWith('@facebook.com')
+      ? rawEmail.replace('@facebook.com', '')
+      : '';
+
     return (
       <div className="flex h-full min-h-0 flex-col bg-white">
         <div className="flex h-12 items-center border-b border-zinc-200 px-3">
-          <div className="grid w-full grid-cols-4 rounded-lg bg-zinc-100 p-1 text-[10px] font-semibold">
+          <div className="grid w-full grid-cols-4 rounded-lg bg-zinc-100 p-1 text-xs font-semibold">
             {(['details', 'activity', 'media', 'crm'] as DetailTab[]).map((tab) => (
-              <button key={tab} type="button" onClick={() => setDetailTab(tab)} className={`rounded-md px-1.5 py-1.5 capitalize ${detailTab === tab ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500 hover:text-zinc-800'}`}>{tab}</button>
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setDetailTab(tab)}
+                className={`rounded-md px-1.5 py-1.5 capitalize text-xs transition ${
+                  detailTab === tab ? 'bg-white font-bold text-zinc-950 shadow-xs' : 'text-zinc-600 hover:text-zinc-950 font-semibold'
+                }`}
+              >
+                {tab}
+              </button>
             ))}
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {detailTab === 'details' && <div className="space-y-5">
-            <section>
-              <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">{contactLabel}</div>
-              <div className="mt-3 flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-700">
-                  {selected.customer_avatar_url ? <img src={`/api/media/proxy?url=${encodeURIComponent(selected.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" /> : initials(selected.customer_name, 'C')}
+          {detailTab === 'details' && (
+            <div className="space-y-5">
+              <section>
+                <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">{contactLabel}</div>
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-800 ring-1 ring-zinc-200">
+                    {selected.customer_avatar_url ? (
+                      <img src={`/api/media/proxy?url=${encodeURIComponent(selected.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      initials(selected.customer_name, 'C')
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-base font-bold text-zinc-950">{selected.customer_name || contactLabel}</div>
+                    <div className="mt-0.5 truncate text-xs font-medium text-zinc-600">
+                      {displayEmail || displayPhone || (rawChannelId ? `Messenger ID: ${rawChannelId}` : 'No direct contact detail')}
+                    </div>
+                  </div>
                 </div>
-                <div className="min-w-0"><div className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div className="mt-0.5 truncate text-[11px] text-zinc-500">{selected.customer_email || selected.customer_phone || 'No contact detail'}</div></div>
+                <dl className="mt-4 space-y-3 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="font-semibold text-zinc-600">Phone</dt>
+                    <dd className={`max-w-[180px] truncate ${displayPhone ? 'font-mono font-semibold text-zinc-950' : 'text-zinc-400 italic'}`}>
+                      {displayPhone || 'Not provided'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="font-semibold text-zinc-600">Email</dt>
+                    <dd className={`max-w-[180px] truncate ${displayEmail ? 'font-semibold text-zinc-950' : 'text-zinc-400 italic'}`}>
+                      {displayEmail || 'Not provided'}
+                    </dd>
+                  </div>
+                  {rawChannelId && (
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="font-semibold text-zinc-600">Channel ID</dt>
+                      <dd className="max-w-[180px] truncate font-mono font-semibold text-zinc-800">
+                        {rawChannelId}
+                      </dd>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="font-semibold text-zinc-600">Channel</dt>
+                    <dd className="font-bold capitalize text-zinc-950">{selected.provider}</dd>
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="pt-2 font-semibold text-zinc-600">Lifecycle</dt>
+                    <dd>
+                      <select
+                        value={selectedContact?.lifecycle_key || 'new'}
+                        disabled={!selectedContact || saving}
+                        onChange={(event) => void patchConversation({ lifecycle_key: event.target.value })}
+                        className="select-field h-8 w-36 text-xs font-semibold"
+                      >
+                        <option value="new">New</option>
+                        <option value="qualified">Qualified</option>
+                        <option value="opportunity">Opportunity</option>
+                        <option value="customer">Customer</option>
+                        <option value="lost">Lost</option>
+                      </select>
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section className="border-t border-zinc-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">Location</div>
+                  <button type="button" onClick={() => setEditLocation((value) => !value)} className="text-xs font-semibold text-blue-600 hover:text-blue-700">
+                    {editLocation ? 'Cancel' : 'Edit'}
+                  </button>
+                </div>
+                {editLocation ? (
+                  <div className="mt-3 space-y-2">
+                    <input value={editCity} onChange={(event) => setEditCity(event.target.value)} placeholder="City / town" className="field h-8 text-xs font-medium" />
+                    <input value={editCountry} onChange={(event) => setEditCountry(event.target.value)} placeholder="Country" className="field h-8 text-xs font-medium" />
+                    <button type="button" onClick={() => void saveLocation()} disabled={saving} className="button-primary button-sm w-full font-semibold">Save location</button>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs font-semibold text-zinc-900">
+                    {[typeof customerProfile.city === 'string' ? customerProfile.city : selectedLead?.customer_city, typeof customerProfile.country === 'string' ? customerProfile.country : selectedLead?.customer_country].filter(Boolean).join(', ') || 'Not set'}
+                  </div>
+                )}
+              </section>
+
+              <section className="border-t border-zinc-100 pt-4">
+                <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">Assignment</div>
+                <div className="mt-3 space-y-2">
+                  <select
+                    value={selected.assigned_to || ''}
+                    disabled={saving || (!canManage && Boolean(selected.assigned_to) && selected.assigned_to !== currentUser.id)}
+                    onChange={(event) => void patchConversation({ assigned_to: event.target.value || null })}
+                    className="select-field h-9 w-full text-xs font-semibold"
+                  >
+                    <option value="">Unassigned</option>
+                    {assignmentProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}
+                  </select>
+                  <div className="flex flex-wrap gap-1.5">
+                    {collaborators.map((item) => (
+                      <button
+                        key={item.user_id}
+                        type="button"
+                        title="Remove collaborator"
+                        onClick={() => void removeCollaborator(item.user_id)}
+                        className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-zinc-800 hover:bg-zinc-100"
+                      >
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-bold">
+                          {initials(item.user?.full_name, '?')}
+                        </span>
+                        {item.user?.full_name || 'Member'}
+                        <X className="h-3 w-3 text-zinc-400" />
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <select
+                      value={collaboratorId}
+                      onChange={(event) => setCollaboratorId(event.target.value)}
+                      className="select-field h-8 min-w-0 flex-1 text-xs font-medium"
+                    >
+                      <option value="">Add collaborator…</option>
+                      {availableCollaborators.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}
+                    </select>
+                    <button type="button" disabled={!collaboratorId || saving} onClick={() => void addCollaborator()} className="button-secondary button-sm text-xs font-semibold">
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              {Array.isArray(selectedContact?.tags) && selectedContact.tags.length > 0 && (
+                <section className="border-t border-zinc-100 pt-4">
+                  <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">Tags</div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {selectedContact.tags.map((tag) => (
+                      <span key={String(tag)} className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-0.5 text-xs font-semibold text-zinc-800">
+                        {String(tag)}
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <Link href="/contacts" className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-800 hover:bg-zinc-100">
+                <span>Review contact identity & duplicates</span>
+                <Users className="h-3.5 w-3.5 text-zinc-600" />
+              </Link>
+            </div>
+          )}
+
+          {detailTab === 'activity' && (
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">Activity</div>
+                <span className="font-mono text-xs font-bold text-zinc-600">{events.length}</span>
               </div>
-              <dl className="mt-4 space-y-3 text-xs">
-                <div className="flex justify-between gap-3"><dt className="text-zinc-500">Phone</dt><dd className="max-w-[170px] truncate font-mono font-medium text-zinc-900">{selected.customer_phone || selectedContact?.primary_phone || '—'}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-zinc-500">Email</dt><dd className="max-w-[170px] truncate font-medium text-zinc-900">{selected.customer_email || selectedContact?.primary_email || '—'}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-zinc-500">Channel</dt><dd className="font-semibold capitalize text-zinc-900">{selected.provider}</dd></div>
-                <div className="flex items-start justify-between gap-3"><dt className="pt-2 text-zinc-500">Lifecycle</dt><dd><select value={selectedContact?.lifecycle_key || 'new'} disabled={!selectedContact || saving} onChange={(event) => void patchConversation({ lifecycle_key: event.target.value })} className="select-field h-8 w-36 text-xs"><option value="new">New</option><option value="qualified">Qualified</option><option value="opportunity">Opportunity</option><option value="customer">Customer</option><option value="lost">Lost</option></select></dd></div>
-              </dl>
-            </section>
-
-            <section className="border-t border-zinc-100 pt-4">
-              <div className="flex items-center justify-between"><div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">Location</div><button type="button" onClick={() => setEditLocation((value) => !value)} className="text-[10px] font-semibold text-blue-600">{editLocation ? 'Cancel' : 'Edit'}</button></div>
-              {editLocation ? <div className="mt-3 space-y-2"><input value={editCity} onChange={(event) => setEditCity(event.target.value)} placeholder="City / town" className="field h-8 text-xs" /><input value={editCountry} onChange={(event) => setEditCountry(event.target.value)} placeholder="Country" className="field h-8 text-xs" /><button type="button" onClick={() => void saveLocation()} disabled={saving} className="button-primary button-sm w-full">Save location</button></div> : <div className="mt-2 text-xs font-medium text-zinc-700">{[typeof customerProfile.city === 'string' ? customerProfile.city : selectedLead?.customer_city, typeof customerProfile.country === 'string' ? customerProfile.country : selectedLead?.customer_country].filter(Boolean).join(', ') || 'Not set'}</div>}
-            </section>
-
-            <section className="border-t border-zinc-100 pt-4">
-              <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">Assignment</div>
-              <div className="mt-3 space-y-2">
-                <select value={selected.assigned_to || ''} disabled={saving || (!canManage && Boolean(selected.assigned_to) && selected.assigned_to !== currentUser.id)} onChange={(event) => void patchConversation({ assigned_to: event.target.value || null })} className="select-field h-9 w-full text-xs"><option value="">Unassigned</option>{assignmentProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select>
-                <div className="flex flex-wrap gap-1.5">{collaborators.map((item) => <button key={item.user_id} type="button" title="Remove collaborator" onClick={() => void removeCollaborator(item.user_id)} className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-1 text-[10px] font-medium text-zinc-700"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-200 text-[8px]">{initials(item.user?.full_name, '?')}</span>{item.user?.full_name || 'Member'}<X className="h-2.5 w-2.5 text-zinc-400" /></button>)}</div>
-                <div className="flex gap-1.5"><select value={collaboratorId} onChange={(event) => setCollaboratorId(event.target.value)} className="select-field h-8 min-w-0 flex-1 text-[11px]"><option value="">Add collaborator…</option>{availableCollaborators.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select><button type="button" disabled={!collaboratorId || saving} onClick={() => void addCollaborator()} className="button-secondary button-sm">Add</button></div>
+              <div className="space-y-4">
+                {events.length === 0 ? (
+                  <div className="py-8 text-center text-xs font-medium text-zinc-500">No activity yet.</div>
+                ) : (
+                  events.map((event) => (
+                    <div key={event.id} className="flex gap-2.5">
+                      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-zinc-400" />
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-950">{eventText(event, resolveProfileName)}</div>
+                        <div className="mt-0.5 text-xs font-medium text-zinc-500">{event.actor?.full_name || 'System'} · {relativeTime(event.created_at)}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-            </section>
+            </div>
+          )}
 
-            {Array.isArray(selectedContact?.tags) && selectedContact.tags.length > 0 && <section className="border-t border-zinc-100 pt-4"><div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">Tags</div><div className="mt-2 flex flex-wrap gap-1">{selectedContact.tags.map((tag) => <span key={String(tag)} className="rounded-full bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600">{String(tag)}</span>)}</div></section>}
+          {detailTab === 'media' && (
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">Shared media</div>
+                <span className="font-mono text-xs font-bold text-zinc-600">{media.length}</span>
+              </div>
+              {media.length === 0 ? (
+                <div className="py-8 text-center text-xs font-medium text-zinc-500">
+                  <Paperclip className="mx-auto mb-2 h-5 w-5 text-zinc-400" />
+                  No shared files yet.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {media.map((item) => item.type === 'image' ? (
+                    <a key={item.id} href={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} target="_blank" rel="noreferrer" className="aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 hover:border-zinc-300">
+                      <img src={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} alt={item.label} className="h-full w-full object-cover" />
+                    </a>
+                  ) : (
+                    <a key={item.id} href={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-zinc-200 p-3 text-xs font-semibold text-zinc-900 hover:bg-zinc-50">
+                      <FileText className="h-4 w-4 text-zinc-500" />
+                      <span className="truncate">{item.label}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
-            <Link href="/contacts" className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100"><span>Review contact identity & duplicates</span><Users className="h-3.5 w-3.5" /></Link>
-          </div>}
-
-          {detailTab === 'activity' && <div><div className="mb-3 flex items-center justify-between"><div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">Activity</div><span className="font-mono text-[10px] text-zinc-400">{events.length}</span></div><div className="space-y-4">{events.length === 0 ? <div className="py-8 text-center text-xs text-zinc-400">No activity yet.</div> : events.map((event) => <div key={event.id} className="flex gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-zinc-300" /><div><div className="text-xs font-medium text-zinc-800">{eventText(event)}</div><div className="mt-0.5 text-[10px] text-zinc-400">{event.actor?.full_name || 'System'} · {relativeTime(event.created_at)}</div></div></div>)}</div></div>}
-
-          {detailTab === 'media' && <div><div className="mb-3 flex items-center justify-between"><div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">Shared media</div><span className="font-mono text-[10px] text-zinc-400">{media.length}</span></div>{media.length === 0 ? <div className="py-8 text-center text-xs text-zinc-400"><Paperclip className="mx-auto mb-2 h-5 w-5" />No shared files yet.</div> : <div className="grid grid-cols-2 gap-2">{media.map((item) => item.type === 'image' ? <a key={item.id} href={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} target="_blank" rel="noreferrer" className="aspect-square overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100"><img src={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} alt={item.label} className="h-full w-full object-cover" /></a> : <a key={item.id} href={`/api/media/proxy?url=${encodeURIComponent(item.url)}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-zinc-200 p-3 text-xs font-medium text-zinc-700"><FileText className="h-4 w-4 text-zinc-400" /><span className="truncate">{item.label}</span></a>)}</div>}</div>}
-
-          {detailTab === 'crm' && <div className="space-y-4"><div className="text-[10px] font-bold uppercase tracking-[0.13em] text-zinc-400">CRM</div>{selectedLead ? <div className="rounded-xl border border-zinc-200 p-4"><div className="text-sm font-semibold text-zinc-950">{selectedLead.customer_name || `${leadLabel} record`}</div>{selectedLead.lead_code && <div className="mt-1 font-mono text-[10px] text-zinc-400">{selectedLead.lead_code}</div>}<div className="mt-4 grid grid-cols-2 gap-2 text-xs"><div className="rounded-lg bg-zinc-50 p-2.5"><div className="text-[10px] text-zinc-400">Stage</div><div className="mt-1 font-semibold capitalize">{selectedLead.stage.replaceAll('_', ' ')}</div></div><div className="rounded-lg bg-zinc-50 p-2.5"><div className="text-[10px] text-zinc-400">Priority</div><div className="mt-1 font-semibold capitalize">{selectedLead.priority}</div></div></div><Link href={`/leads/${selectedLead.id}/workspace`} className="button-primary mt-4 w-full">Open {leadLabel} workspace</Link></div> : <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center"><UserCheck className="mx-auto h-5 w-5 text-zinc-400" /><div className="mt-2 text-sm font-semibold text-zinc-800">No {leadLabel.toLowerCase()} yet</div><p className="mt-1 text-xs leading-5 text-zinc-500">Create a CRM record only when this conversation becomes commercially relevant.</p><button type="button" onClick={() => setConvertOpen(true)} className="button-primary mt-4 w-full">Create {leadLabel}</button></div>}<Link href="/contacts" className="button-secondary w-full">Open {contactLabel} directory</Link></div>}
+          {detailTab === 'crm' && (
+            <div className="space-y-4">
+              <div className="text-xs font-bold uppercase tracking-wider text-zinc-600">CRM</div>
+              {selectedLead ? (
+                <div className="rounded-xl border border-zinc-200 p-4">
+                  <div className="text-sm font-bold text-zinc-950">{selectedLead.customer_name || `${leadLabel} record`}</div>
+                  {selectedLead.lead_code && <div className="mt-1 font-mono text-xs font-bold text-zinc-600">{selectedLead.lead_code}</div>}
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-zinc-50 p-2.5 border border-zinc-200">
+                      <div className="text-xs font-semibold text-zinc-600">Stage</div>
+                      <div className="mt-1 font-bold capitalize text-zinc-950">{selectedLead.stage.replaceAll('_', ' ')}</div>
+                    </div>
+                    <div className="rounded-lg bg-zinc-50 p-2.5 border border-zinc-200">
+                      <div className="text-xs font-semibold text-zinc-600">Priority</div>
+                      <div className="mt-1 font-bold capitalize text-zinc-950">{selectedLead.priority}</div>
+                    </div>
+                  </div>
+                  <Link href={`/leads/${selectedLead.id}/workspace`} className="button-primary mt-4 w-full font-bold">Open {leadLabel} workspace</Link>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center">
+                  <UserCheck className="mx-auto h-5 w-5 text-zinc-400" />
+                  <div className="mt-2 text-sm font-bold text-zinc-900">No {leadLabel.toLowerCase()} yet</div>
+                  <p className="mt-1 text-xs font-medium leading-5 text-zinc-600">Create a CRM record only when this conversation becomes commercially relevant.</p>
+                  <button type="button" onClick={() => setConvertOpen(true)} className="button-primary mt-4 w-full font-bold">Create {leadLabel}</button>
+                </div>
+              )}
+              <Link href="/contacts" className="button-secondary w-full font-semibold">Open {contactLabel} directory</Link>
+            </div>
+          )}
         </div>
       </div>
     );
   };
 
   return (
-    <div className="h-[calc(100vh-4rem)] min-h-[560px] overflow-hidden bg-white">
-      <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[330px_minmax(0,1fr)] lg:grid-cols-[180px_330px_minmax(0,1fr)] xl:grid-cols-[180px_330px_minmax(420px,1fr)_300px]">
+    <div className="flex h-full w-full min-h-0 flex-1 flex-col overflow-hidden bg-white">
+      <div className="grid h-full min-h-0 flex-1 grid-cols-1 md:grid-cols-[330px_minmax(0,1fr)] lg:grid-cols-[180px_330px_minmax(0,1fr)] xl:grid-cols-[180px_330px_minmax(420px,1fr)_300px]">
         <aside className="hidden min-h-0 border-r border-zinc-200 bg-zinc-50/70 lg:flex lg:flex-col">
-          <div className="flex h-14 items-center gap-2 border-b border-zinc-200 px-3"><InboxIcon className="h-4 w-4 text-zinc-900" /><span className="text-sm font-bold text-zinc-950">Inbox</span>{metrics.slaOverdue > 0 && <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 font-mono text-[10px] font-bold text-red-700">{metrics.slaOverdue}</span>}</div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
-            <div className="px-2 pb-1 text-[9px] font-bold uppercase tracking-[0.16em] text-zinc-400">Standard</div>
-            {standardViews.map((item) => { const Icon = item.icon; const active = queue === item.key; return <button key={item.key} type="button" onClick={() => setQueue(item.key)} className={`mt-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium ${active ? 'bg-zinc-950 text-white' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1">{item.label}</span>{item.count !== undefined && <span className={`font-mono text-[9px] ${active ? 'text-zinc-300' : 'text-zinc-400'}`}>{item.count}</span>}</button>; })}
-            <div className="mt-5 px-2 pb-1 text-[9px] font-bold uppercase tracking-[0.16em] text-zinc-400">Saved views</div>
-            {savedViews.map((item) => { const Icon = item.icon; const active = queue === item.key; return <button key={item.key} type="button" onClick={() => setQueue(item.key)} className={`mt-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium ${active ? 'bg-white text-zinc-950 shadow-sm ring-1 ring-zinc-200' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'}`}><Icon className={`h-3.5 w-3.5 ${item.key === 'sla_overdue' && item.count ? 'text-red-500' : ''}`} /><span className="flex-1">{item.label}</span>{item.count !== undefined && <span className={`font-mono text-[9px] ${item.key === 'sla_overdue' && item.count ? 'font-bold text-red-600' : 'text-zinc-400'}`}>{item.count}</span>}</button>; })}
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-zinc-200 px-3">
+            <InboxIcon className="h-4 w-4 text-zinc-900" />
+            <span className="text-sm font-semibold tracking-tight text-zinc-950">Inbox</span>
+            {metrics.slaOverdue > 0 && (
+              <span className="ml-auto rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-rose-700">
+                {metrics.slaOverdue}
+              </span>
+            )}
           </div>
-          {canManage && <div className="border-t border-zinc-200 p-2.5"><Link href="/settings/automations" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-semibold text-zinc-600 hover:bg-zinc-100"><Zap className="h-3.5 w-3.5" /> Automations</Link></div>}
+          <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+            <div className="px-2 pb-1.5 text-xs font-bold uppercase tracking-wider text-zinc-600">Standard</div>
+            {standardViews.map((item) => {
+              const Icon = item.icon;
+              const active = queue === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setQueue(item.key)}
+                  className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-semibold transition ${
+                    active ? 'bg-zinc-900 text-zinc-50 shadow-xs font-bold' : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {item.count !== undefined && (
+                    <span className={`font-mono text-xs font-bold ${active ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                      {item.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <div className="mt-5 px-2 pb-1.5 text-xs font-bold uppercase tracking-wider text-zinc-600">Saved views</div>
+            {savedViews.map((item) => {
+              const Icon = item.icon;
+              const active = queue === item.key;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setQueue(item.key)}
+                  className={`mt-0.5 flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-semibold transition ${
+                    active ? 'bg-white text-zinc-950 shadow-2xs ring-1 ring-zinc-200 font-bold' : 'text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950'
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${item.key === 'sla_overdue' && item.count ? 'text-rose-600' : ''}`} />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {item.count !== undefined && (
+                    <span className={`font-mono text-xs font-bold ${item.key === 'sla_overdue' && item.count ? 'text-rose-600' : 'text-zinc-600'}`}>
+                      {item.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {canManage && (
+            <div className="shrink-0 border-t border-zinc-200 p-2.5">
+              <Link href="/settings/automations" className="flex items-center gap-2 rounded-md px-2.5 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 hover:text-zinc-950 transition">
+                <Zap className="h-3.5 w-3.5" /> Automations
+              </Link>
+            </div>
+          )}
         </aside>
 
         <section className={`${selectedId ? 'hidden md:flex' : 'flex'} min-h-0 min-w-0 flex-col border-r border-zinc-200 bg-white`}>
-          <div className="border-b border-zinc-200 p-3">
-            <div className="flex items-center gap-2 lg:hidden"><select value={queue} onChange={(event) => setQueue(event.target.value as QueueKey)} className="select-field h-9 flex-1 text-xs"><optgroup label="Standard">{standardViews.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</optgroup><optgroup label="Saved views">{savedViews.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</optgroup></select><button type="button" onClick={() => void loadList()} className="button-secondary button-sm h-9"><RefreshCw className="h-3.5 w-3.5" /></button></div>
-            <div className="relative mt-2 lg:mt-0"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${contactLabel.toLowerCase()} or messages`} className="field h-9 pl-8 pr-3 text-xs" /></div>
-            <div className="mt-2 flex gap-2"><select value={provider} onChange={(event) => setProvider(event.target.value)} className="select-field h-8 min-w-0 flex-1 text-[11px]"><option value="all">All channels</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="website">Website</option></select><select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="select-field h-8 min-w-0 flex-1 text-[11px]"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="waiting">Longest waiting</option><option value="sla">SLA soonest</option></select></div>
+          <div className="shrink-0 border-b border-zinc-200 p-3">
+            <div className="flex items-center gap-2 lg:hidden">
+              <select value={queue} onChange={(event) => setQueue(event.target.value as QueueKey)} className="select-field h-9 flex-1 text-xs font-semibold">
+                <optgroup label="Standard">{standardViews.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</optgroup>
+                <optgroup label="Saved views">{savedViews.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</optgroup>
+              </select>
+              <button
+                type="button"
+                disabled={syncing}
+                onClick={() => void triggerSync(false)}
+                title="Sync latest messages from Meta"
+                className="button-secondary button-sm h-9 px-2.5"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin text-blue-600' : ''}`} />
+              </button>
+            </div>
+            <div className="relative mt-2 flex items-center gap-2 lg:mt-0">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" />
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${contactLabel.toLowerCase()} or messages`} className="field h-9 pl-8 pr-3 text-xs font-medium" />
+              </div>
+              <button
+                type="button"
+                disabled={syncing}
+                onClick={() => void triggerSync(false)}
+                title={syncing ? 'Syncing latest messages from Meta…' : 'Sync latest messages from Meta / Facebook / Instagram'}
+                aria-label="Sync latest messages"
+                className="button-secondary button-sm h-9 shrink-0 px-2.5 flex items-center gap-1.5 font-bold text-xs text-zinc-700 hover:text-zinc-950"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin text-blue-600' : ''}`} />
+                <span className="hidden sm:inline">{syncing ? 'Syncing…' : 'Sync'}</span>
+              </button>
+            </div>
+            <div className="mt-2 flex gap-2">
+              <select value={provider} onChange={(event) => setProvider(event.target.value)} className="select-field h-8 min-w-0 flex-1 text-xs font-semibold">
+                <option value="all">All channels</option>
+                <option value="facebook">Facebook</option>
+                <option value="instagram">Instagram</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="email">Email</option>
+                <option value="website">Website</option>
+              </select>
+              <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="select-field h-8 min-w-0 flex-1 text-xs font-semibold">
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="waiting">Longest waiting</option>
+                <option value="sla">SLA soonest</option>
+              </select>
+            </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {loadingList ? <div className="flex h-32 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Inbox…</div> : conversations.length === 0 ? <div className="px-6 py-16 text-center"><InboxIcon className="mx-auto h-6 w-6 text-zinc-300" /><div className="mt-2 text-sm font-semibold text-zinc-700">Nothing here</div><p className="mt-1 text-xs text-zinc-400">This view is clear.</p></div> : conversations.map((conversation) => {
+          <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-zinc-100">
+            {loadingList ? (
+              <div className="flex h-32 items-center justify-center gap-2 text-xs font-medium text-zinc-500">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-400" /> Loading Inbox…
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="px-6 py-16 text-center">
+                <InboxIcon className="mx-auto h-6 w-6 text-zinc-300" />
+                <div className="mt-2 text-sm font-bold text-zinc-800">Nothing here</div>
+                <p className="mt-1 text-xs font-medium text-zinc-500">This view is clear.</p>
+              </div>
+            ) : conversations.map((conversation) => {
               const active = selectedId === conversation.id;
               const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare;
               const sla = slaInfo(conversation);
               const lifecycle = contactOf(conversation)?.lifecycle_key || 'new';
-              return <button key={conversation.id} type="button" onClick={() => { setSelectedId(conversation.id); setContextOpen(false); }} className={`w-full border-b border-zinc-100 px-3.5 py-3 text-left transition ${active ? 'bg-blue-50/55' : 'hover:bg-zinc-50'}`}>
-                <div className="flex items-start gap-2.5">
-                  <div className="relative shrink-0"><div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-700">{conversation.customer_avatar_url ? <img src={`/api/media/proxy?url=${encodeURIComponent(conversation.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" /> : initials(conversation.customer_name, 'C')}</div><span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-white"><Icon className="h-2.5 w-2.5" /></span></div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2"><span className="truncate text-xs font-bold text-zinc-950">{conversation.customer_name || contactLabel}</span>{conversation.unread_count > 0 && <span className="min-w-4 rounded-full bg-blue-600 px-1 text-center font-mono text-[9px] font-bold text-white">{conversation.unread_count}</span>}<span className="ml-auto shrink-0 font-mono text-[9px] text-zinc-400">{shortTime(conversation.last_message_at)}</span></div>
-                    <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-600">{conversation.last_message_preview || 'No message preview'}</p>
-                    <div className="mt-2 flex items-center gap-1.5 text-[9px] font-medium text-zinc-400"><span className="max-w-20 truncate">{conversation.assigned_profile?.full_name || 'Unassigned'}</span><span>·</span><span>{lifecycleLabel(lifecycle)}</span><span className="ml-auto" />{conversation.priority !== 'normal' && <span className={`rounded px-1.5 py-0.5 font-bold uppercase ${conversation.priority === 'urgent' ? 'bg-red-50 text-red-700' : conversation.priority === 'high' ? 'bg-amber-50 text-amber-700' : 'bg-zinc-100 text-zinc-500'}`}>{conversation.priority}</span>}<span className={`rounded px-1.5 py-0.5 ${sla.overdue ? 'bg-red-50 font-bold text-red-700' : conversation.needs_reply ? 'bg-blue-50 font-semibold text-blue-700' : 'text-zinc-400'}`}>{sla.label}</span></div>
+              return (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => { setSelectedId(conversation.id); setContextOpen(false); }}
+                  className={`w-full px-3.5 py-3 text-left transition ${active ? 'bg-zinc-100/90' : 'hover:bg-zinc-50'}`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <div className="relative shrink-0">
+                      <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-800 ring-1 ring-zinc-200">
+                        {conversation.customer_avatar_url ? (
+                          <img src={`/api/media/proxy?url=${encodeURIComponent(conversation.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          initials(conversation.customer_name, 'C')
+                        )}
+                      </div>
+                      <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-white shadow-2xs">
+                        <Icon className="h-2.5 w-2.5" />
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[14px] font-bold text-zinc-950">
+                          {conversation.customer_name || contactLabel}
+                        </span>
+                        {conversation.unread_count > 0 && (
+                          <span className="min-w-4 rounded-full bg-blue-600 px-1.5 py-0.2 text-center font-mono text-[10px] font-bold text-white">
+                            {conversation.unread_count}
+                          </span>
+                        )}
+                        <span className="ml-auto shrink-0 font-mono text-xs font-semibold text-zinc-600">
+                          {shortTime(conversation.last_message_at)}
+                        </span>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed font-medium text-zinc-700">
+                        {conversation.last_message_preview || 'No message preview'}
+                      </p>
+                      <div className="mt-2 flex items-center gap-1.5 text-xs text-zinc-600">
+                        <span className="max-w-28 truncate font-semibold text-zinc-800">
+                          {conversation.assigned_profile?.full_name || 'Unassigned'}
+                        </span>
+                        <span className="text-zinc-300">·</span>
+                        <span className="capitalize font-semibold text-zinc-700">{lifecycleLabel(lifecycle)}</span>
+                        <span className="ml-auto" />
+                        {conversation.priority !== 'normal' && (
+                          <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-tight ${
+                            conversation.priority === 'urgent'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : conversation.priority === 'high'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : 'bg-zinc-100 text-zinc-700'
+                          }`}>
+                            {conversation.priority}
+                          </span>
+                        )}
+                        {sla.overdue ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-rose-600">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                            {sla.label}
+                          </span>
+                        ) : conversation.needs_reply ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-600">
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                            Needs reply
+                          </span>
+                        ) : (
+                          <span className="font-mono text-xs font-semibold text-zinc-600">{sla.label}</span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </button>;
+                </button>
+              );
             })}
           </div>
         </section>
 
-        <section className={`${selectedId ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-col bg-zinc-50/60`}>
-          {!selected ? <div className="flex h-full items-center justify-center p-8 text-center text-sm text-zinc-400">Select a conversation to start working.</div> : <>
-            <header className="flex min-h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3 md:px-4">
-              <div className="flex min-w-0 items-center gap-2.5"><button type="button" onClick={() => setSelectedId(null)} className="button-ghost button-sm px-2 md:hidden"><ArrowLeft className="h-4 w-4" /></button><div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-bold text-zinc-700">{selected.customer_avatar_url ? <img src={`/api/media/proxy?url=${encodeURIComponent(selected.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" /> : initials(selected.customer_name, 'C')}</div><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-bold text-zinc-950">{selected.customer_name || contactLabel}</h1><span className="hidden rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-zinc-500 sm:inline">{selected.provider}</span></div><div className="mt-0.5 flex items-center gap-2 text-[10px] text-zinc-500"><span className="truncate">{selected.assigned_profile?.full_name || 'Unassigned'}</span><span>·</span><span>{lifecycleLabel(selectedContact?.lifecycle_key || 'new')}</span></div></div></div>
-              <div className="flex shrink-0 items-center gap-1.5"><span className={`hidden rounded-md px-2 py-1 text-[10px] font-semibold lg:inline-flex ${slaInfo(selected).overdue ? 'bg-red-50 text-red-700' : selected.needs_reply ? 'bg-blue-50 text-blue-700' : 'bg-zinc-100 text-zinc-600'}`}>{slaInfo(selected).label}</span>{!selected.assigned_to && <button type="button" disabled={saving} onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden lg:inline">Claim</span></button>}<button type="button" onClick={() => setContextOpen(true)} className="button-secondary button-sm px-2 xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>{selected.workflow_state !== 'closed' && <button type="button" disabled={saving} onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}<div className="relative"><button type="button" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm px-2"><MoreHorizontal className="h-4 w-4" /></button>{moreOpen && <div className="absolute right-0 top-9 z-30 w-52 overflow-hidden rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl"><div className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-zinc-400">Conversation</div>{selected.workflow_state !== 'waiting' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-700 hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button>}<button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 60 * 60 * 1000).toISOString() }); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-700 hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-700 hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-zinc-700 hover:bg-zinc-50"><CircleDot className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><label className="block px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-zinc-400">Priority</label><select value={selected.priority} onChange={(event) => void patchConversation({ priority: event.target.value })} className="select-field mx-1 mb-1 h-8 w-[calc(100%-0.5rem)] text-xs"><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>}</div></div>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">
-              {loadingThread ? <div className="flex h-full min-h-48 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading conversation…</div> : <div className="mx-auto max-w-3xl space-y-3">{timeline.map((item) => item.kind === 'event' ? <div key={`event-${item.event.id}`} className="flex items-center gap-2 py-1 text-[10px] text-zinc-400"><span className="h-px flex-1 bg-zinc-200" /><span className="max-w-[70%] truncate">{eventText(item.event)} · {item.event.actor?.full_name || 'System'} · {shortTime(item.event.created_at)}</span><span className="h-px flex-1 bg-zinc-200" /></div> : <div key={`message-${item.message.id}`} className={`flex ${item.message.direction === 'outbound' ? 'justify-end' : item.message.direction === 'internal' ? 'justify-center' : 'justify-start'}`}>{item.message.direction === 'internal' ? <div className="max-w-[85%] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950"><div className="mb-1 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider text-amber-700"><StickyNote className="h-3 w-3" /> Internal note · {item.message.author_profile?.full_name || 'Team'}</div><div className="whitespace-pre-wrap leading-5">{item.message.body || '—'}</div><div className="mt-1 text-right font-mono text-[9px] text-amber-600">{shortTime(item.message.sent_at)}</div></div> : <div className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 text-xs shadow-sm ${item.message.direction === 'outbound' ? 'rounded-br-md bg-blue-600 text-white' : 'rounded-bl-md border border-zinc-200 bg-white text-zinc-900'}`}><div className="whitespace-pre-wrap leading-5">{item.message.body || (item.message.message_type === 'image' ? 'Shared an image' : 'Attachment')}</div><div className={`mt-1 text-right font-mono text-[9px] ${item.message.direction === 'outbound' ? 'text-blue-100' : 'text-zinc-400'}`}>{shortTime(item.message.sent_at)}{item.message.delivery_status === 'failed' ? ' · failed' : ''}</div>{item.message.failure_message && <div className="mt-1 text-[10px] text-red-200">{item.message.failure_message}</div>}</div>}</div>)}<div ref={endRef} /></div>}
+        <section className={`${selectedId ? 'flex' : 'hidden md:flex'} min-h-0 min-w-0 flex-col bg-zinc-50/50`}>
+          {!selected ? (
+            <div className="flex h-full items-center justify-center p-8 text-center text-sm text-zinc-500">
+              Select a conversation to start working.
             </div>
+          ) : (
+            <>
+              <header className="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3 md:px-4">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <button type="button" onClick={() => setSelectedId(null)} className="button-ghost button-sm px-2 md:hidden">
+                    <ArrowLeft className="h-4 w-4" />
+                  </button>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-semibold text-zinc-700">
+                    {selected.customer_avatar_url ? (
+                      <img src={`/api/media/proxy?url=${encodeURIComponent(selected.customer_avatar_url)}`} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      initials(selected.customer_name, 'C')
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h1 className="truncate text-base font-semibold tracking-tight text-zinc-950">
+                        {selected.customer_name || contactLabel}
+                      </h1>
+                      <span className="hidden rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wider text-zinc-600 sm:inline">
+                        {selected.provider}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
+                      <span className="truncate font-medium text-zinc-600">{selected.assigned_profile?.full_name || 'Unassigned'}</span>
+                      <span className="text-zinc-300">·</span>
+                      <span className="capitalize">{lifecycleLabel(selectedContact?.lifecycle_key || 'new')}</span>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="border-t border-zinc-200 bg-white p-3 sm:p-4">
-              <div className="mx-auto max-w-3xl rounded-xl border border-zinc-200 bg-white shadow-sm focus-within:border-zinc-300 focus-within:ring-2 focus-within:ring-zinc-100">
-                <div className="flex items-center gap-1 border-b border-zinc-100 px-2 py-1.5"><button type="button" onClick={() => setReplyMode('outbound')} className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${replyMode === 'outbound' ? 'bg-zinc-950 text-white' : 'text-zinc-500 hover:bg-zinc-100'}`}>Reply</button><button type="button" onClick={() => setReplyMode('internal')} className={`rounded-md px-2.5 py-1 text-[10px] font-semibold ${replyMode === 'internal' ? 'bg-amber-100 text-amber-800' : 'text-zinc-500 hover:bg-zinc-100'}`}>Internal note</button>{replyMode === 'outbound' && !canReply && <span className="ml-auto rounded bg-amber-50 px-2 py-1 text-[9px] font-semibold text-amber-700">Provider reply window closed</span>}</div>
-                <textarea value={replyBody} onChange={(event) => setReplyBody(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={3} disabled={replyMode === 'outbound' && !canReply} placeholder={replyMode === 'internal' ? 'Leave context for your team…' : canReply ? 'Write a reply…' : 'Switch to Internal note to add context.'} className="w-full resize-none bg-transparent px-3.5 py-3 text-xs leading-5 text-zinc-950 outline-none placeholder:text-zinc-400 disabled:bg-zinc-50" />
-                <div className="flex items-center justify-between border-t border-zinc-100 px-2.5 py-2"><div className="text-[9px] text-zinc-400">Enter to send · Shift + Enter for new line</div><button type="button" disabled={sending || !replyBody.trim() || (replyMode === 'outbound' && !canReply)} onClick={() => void sendMessage()} className="button-primary button-sm">{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{replyMode === 'internal' ? 'Add note' : 'Send'}</button></div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <div className={`hidden items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium lg:inline-flex ${
+                    slaInfo(selected).overdue
+                      ? 'border-rose-200 bg-rose-50/70 text-rose-700'
+                      : selected.needs_reply
+                      ? 'border-blue-200 bg-blue-50/70 text-blue-700'
+                      : 'border-zinc-200 bg-zinc-50 text-zinc-600'
+                  }`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${
+                      slaInfo(selected).overdue ? 'bg-rose-500' : selected.needs_reply ? 'bg-blue-500' : 'bg-zinc-400'
+                    }`} />
+                    <span>{slaInfo(selected).label}</span>
+                  </div>
+
+                  {!selected.assigned_to && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')}
+                      className="button-secondary button-sm text-xs font-medium"
+                    >
+                      <UserCheck className="h-3.5 w-3.5" />
+                      <span className="hidden lg:inline">Claim</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={syncing}
+                    onClick={() => void triggerSync(false)}
+                    title={syncing ? 'Syncing latest messages…' : 'Sync latest messages'}
+                    aria-label="Sync latest messages"
+                    className="button-secondary button-sm px-2"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin text-blue-600' : ''}`} />
+                  </button>
+
+                  <button type="button" onClick={() => setContextOpen(true)} className="button-secondary button-sm px-2 xl:hidden">
+                    <PanelRight className="h-3.5 w-3.5" />
+                  </button>
+
+                  {selected.workflow_state !== 'closed' && (
+                    <button type="button" disabled={saving} onClick={() => setCloseOpen(true)} className="button-primary button-sm text-xs font-semibold">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Resolve</span>
+                    </button>
+                  )}
+
+                  <div className="relative">
+                    <button type="button" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm px-2">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                    {moreOpen && (
+                      <div className="absolute right-0 top-9 z-30 w-52 overflow-hidden rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg">
+                        <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Conversation</div>
+                        {selected.workflow_state !== 'waiting' && (
+                          <button
+                            type="button"
+                            onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }}
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <PauseCircle className="h-3.5 w-3.5" /> Mark waiting
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 60 * 60 * 1000).toISOString() }); }}
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                        >
+                          <AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }); }}
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                        >
+                          <Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours
+                        </button>
+                        {selected.workflow_state !== 'open' && (
+                          <button
+                            type="button"
+                            onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }}
+                            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <CircleDot className="h-3.5 w-3.5" /> Reopen
+                          </button>
+                        )}
+                        <div className="my-1 border-t border-zinc-100" />
+                        <label className="block px-2 py-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">Priority</label>
+                        <select
+                          value={selected.priority}
+                          onChange={(event) => void patchConversation({ priority: event.target.value })}
+                          className="select-field mx-1 mb-1 h-8 w-[calc(100%-0.5rem)] text-xs font-medium"
+                        >
+                          <option value="low">Low</option>
+                          <option value="normal">Normal</option>
+                          <option value="high">High</option>
+                          <option value="urgent">Urgent</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+                {loadingThread ? (
+                  <div className="flex h-full min-h-48 items-center justify-center gap-2 text-xs text-zinc-500">
+                    <Loader2 className="h-4 w-4 animate-spin text-zinc-400" /> Loading conversation…
+                  </div>
+                ) : (
+                  <div className="mx-auto max-w-3xl space-y-4">
+                    {timeline.map((item) => item.kind === 'event' ? (
+                      <div key={`event-${item.event.id}`} className="my-3 flex items-center justify-center gap-3">
+                        <span className="h-px flex-1 bg-zinc-200/70" />
+                        <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3.5 py-1 text-xs text-zinc-700 shadow-2xs">
+                          <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                          <span className="font-semibold text-zinc-900">{eventText(item.event, resolveProfileName)}</span>
+                          <span className="text-zinc-300">·</span>
+                          <span className="font-medium text-zinc-600">{item.event.actor?.full_name || 'System'}</span>
+                          <span className="text-zinc-300">·</span>
+                          <span className="font-mono text-xs font-semibold text-zinc-600">{shortTime(item.event.created_at)}</span>
+                        </div>
+                        <span className="h-px flex-1 bg-zinc-200/70" />
+                      </div>
+                    ) : (
+                      <div key={`message-${item.message.id}`} className={`flex ${item.message.direction === 'outbound' ? 'justify-end' : item.message.direction === 'internal' ? 'justify-center' : 'justify-start'}`}>
+                        {item.message.direction === 'internal' ? (
+                          <div className="max-w-[85%] rounded-lg border border-amber-300/80 bg-amber-50/90 p-3.5 text-sm leading-relaxed text-amber-950 shadow-2xs font-medium">
+                            <div className="mb-1.5 flex items-center justify-between gap-3 text-xs font-semibold text-amber-900">
+                              <span className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-amber-950">
+                                <StickyNote className="h-3.5 w-3.5 text-amber-700" /> Internal note
+                              </span>
+                              <span className="text-amber-900 font-semibold">{item.message.author_profile?.full_name || 'Team'}</span>
+                            </div>
+                            <div className="whitespace-pre-wrap leading-relaxed font-medium text-amber-950">{item.message.body || '—'}</div>
+                            <div className="mt-2 text-right font-mono text-xs font-bold text-amber-900/90">{shortTime(item.message.sent_at)}</div>
+                          </div>
+                        ) : (
+                          <div className={`max-w-[78%] rounded-lg px-4 py-3 text-sm leading-relaxed shadow-2xs ${
+                            item.message.direction === 'outbound'
+                              ? 'bg-zinc-950 text-white font-medium antialiased'
+                              : 'border border-zinc-200 bg-white text-zinc-950 font-medium antialiased'
+                          }`}>
+                            <div className="whitespace-pre-wrap break-words">{item.message.body || (item.message.message_type === 'image' ? 'Shared an image' : 'Attachment')}</div>
+                            <div className={`mt-2 flex items-center justify-end gap-1.5 font-mono text-xs ${
+                              item.message.direction === 'outbound' ? 'text-zinc-300 font-semibold' : 'text-zinc-500 font-semibold'
+                            }`}>
+                              <span>{shortTime(item.message.sent_at)}</span>
+                              {item.message.delivery_status === 'failed' && <span className="font-sans font-bold text-rose-400">· Failed</span>}
+                            </div>
+                            {item.message.failure_message && (
+                              <div className="mt-1.5 text-xs font-semibold text-rose-300">{item.message.failure_message}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <div ref={endRef} />
+                  </div>
+                )}
               </div>
-            </div>
-          </>}
+
+              <div className="shrink-0 border-t border-zinc-200 bg-white p-3 sm:p-4">
+                <div className="mx-auto max-w-3xl rounded-lg border border-zinc-200 bg-white shadow-2xs transition-colors focus-within:border-zinc-400 focus-within:ring-1 focus-within:ring-zinc-400">
+                  <div className="flex items-center gap-1 border-b border-zinc-100 px-2 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setReplyMode('outbound')}
+                      className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                        replyMode === 'outbound' ? 'bg-zinc-950 text-white shadow-xs' : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+                      }`}
+                    >
+                      Reply
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReplyMode('internal')}
+                      className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                        replyMode === 'internal' ? 'bg-amber-100 text-amber-950 shadow-xs' : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100'
+                      }`}
+                    >
+                      Internal note
+                    </button>
+                    {replyMode === 'outbound' && !canReply && (
+                      <span className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        Provider reply window closed
+                      </span>
+                    )}
+                  </div>
+                  <textarea
+                    value={replyBody}
+                    onChange={(event) => setReplyBody(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }}
+                    rows={3}
+                    disabled={replyMode === 'outbound' && !canReply}
+                    placeholder={replyMode === 'internal' ? 'Leave context for your team…' : canReply ? 'Write a reply…' : 'Switch to Internal note to add context.'}
+                    className="w-full resize-none bg-transparent px-3.5 py-3 text-sm font-medium leading-relaxed text-zinc-950 outline-none placeholder:text-zinc-400 placeholder:font-normal disabled:bg-zinc-50"
+                  />
+                  <div className="flex items-center justify-between border-t border-zinc-100 px-3 py-2">
+                    <div className="text-xs font-medium text-zinc-600">
+                      <kbd className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-xs font-bold text-zinc-700">Enter</kbd> to send · <kbd className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 font-mono text-xs font-bold text-zinc-700">Shift + Enter</kbd> for new line
+                    </div>
+                    <button
+                      type="button"
+                      disabled={sending || !replyBody.trim() || (replyMode === 'outbound' && !canReply)}
+                      onClick={() => void sendMessage()}
+                      className="button-primary button-sm text-xs font-bold"
+                    >
+                      {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      {replyMode === 'internal' ? 'Add note' : 'Send'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </section>
 
         <aside className="hidden min-h-0 border-l border-zinc-200 bg-white xl:block">{renderContext()}</aside>
@@ -651,7 +1347,7 @@ export default function InboxPage() {
 
       {contextOpen && selected && <div className="fixed inset-0 z-40 flex justify-end bg-zinc-950/30 xl:hidden" onClick={() => setContextOpen(false)}><div className="h-full w-full max-w-sm shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="absolute right-2 top-2 z-10"><button type="button" onClick={() => setContextOpen(false)} className="rounded-lg bg-white p-2 text-zinc-500 shadow"><X className="h-4 w-4" /></button></div>{renderContext()}</div></div>}
 
-      {closeOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4" role="dialog" aria-modal="true" aria-label="Resolve conversation"><div className="w-full max-w-md overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><div><div className="text-sm font-semibold text-zinc-950">Resolve conversation</div><div className="mt-0.5 text-[11px] text-zinc-500">Close the active work while keeping the contact and history.</div></div><button type="button" onClick={() => setCloseOpen(false)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button></div><div className="space-y-3 p-4"><label className="block text-xs font-medium text-zinc-700">Resolution<select value={resolution} onChange={(event) => setResolution(event.target.value)} className="select-field mt-1 w-full"><option value="resolved">Resolved</option><option value="qualified">Qualified</option><option value="converted">Converted</option><option value="not_interested">Not interested</option><option value="duplicate">Duplicate</option><option value="spam">Spam</option><option value="other">Other</option></select></label><label className="block text-xs font-medium text-zinc-700">Closing note<textarea value={closingNote} onChange={(event) => setClosingNote(event.target.value)} rows={4} placeholder="What was decided? What should the next person know?" className="mt-1 w-full rounded-md border border-zinc-200 p-2.5 text-xs leading-5 outline-none focus:border-zinc-400" /></label></div><div className="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50 px-4 py-3"><button type="button" onClick={() => setCloseOpen(false)} className="button-secondary">Cancel</button><button type="button" disabled={saving} onClick={() => void resolveConversation()} className="button-primary">{saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Resolve</button></div></div></div>}
+      {closeOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4" role="dialog" aria-modal="true" aria-label="Resolve conversation"><div className="w-full max-w-md overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><div><div className="text-sm font-semibold text-zinc-950">Resolve conversation</div><div className="mt-0.5 text-xs text-zinc-500">Close the active work while keeping the contact and history.</div></div><button type="button" onClick={() => setCloseOpen(false)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button></div><div className="space-y-3 p-4"><label className="block text-xs font-medium text-zinc-700">Resolution<select value={resolution} onChange={(event) => setResolution(event.target.value)} className="select-field mt-1 w-full"><option value="resolved">Resolved</option><option value="qualified">Qualified</option><option value="converted">Converted</option><option value="not_interested">Not interested</option><option value="duplicate">Duplicate</option><option value="spam">Spam</option><option value="other">Other</option></select></label><label className="block text-xs font-medium text-zinc-700">Closing note<textarea value={closingNote} onChange={(event) => setClosingNote(event.target.value)} rows={4} placeholder="What was decided? What should the next person know?" className="mt-1 w-full rounded-md border border-zinc-200 p-2.5 text-xs leading-5 outline-none focus:border-zinc-400" /></label></div><div className="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50 px-4 py-3"><button type="button" onClick={() => setCloseOpen(false)} className="button-secondary">Cancel</button><button type="button" disabled={saving} onClick={() => void resolveConversation()} className="button-primary">{saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Resolve</button></div></div></div>}
 
       <ConvertToLeadDrawer isOpen={convertOpen} onClose={() => setConvertOpen(false)} conversation={selected} onConverted={() => void handleConverted()} />
     </div>

@@ -2,15 +2,16 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ActionSchema = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('disable'), user_id: z.string().uuid() }),
-  z.object({ action: z.literal('enable'), user_id: z.string().uuid() }),
-  z.object({ action: z.literal('reset_password'), user_id: z.string().uuid() }),
-  z.object({ action: z.literal('role'), user_id: z.string().uuid(), role: z.enum(['admin', 'manager', 'agent']) }),
+  z.object({ action: z.literal('disable'), user_id: uuidSchema }),
+  z.object({ action: z.literal('enable'), user_id: uuidSchema }),
+  z.object({ action: z.literal('reset_password'), user_id: uuidSchema }),
+  z.object({ action: z.literal('role'), user_id: uuidSchema, role: z.enum(['admin', 'manager', 'agent']) }),
 ]);
 
 async function requireAdmin() {

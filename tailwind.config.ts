@@ -60,6 +60,13 @@ const config: Config = {
         xs: '0 1px 3px rgba(9, 9, 11, 0.05), 0 1px 2px -1px rgba(9, 9, 11, 0.05)',
         panel: 'var(--shadow-panel)',
       },
+      fontWeight: {
+        normal: '450',
+        medium: '550',
+        semibold: '650',
+        bold: '750',
+        extrabold: '800',
+      },
     },
   },
   plugins: [],

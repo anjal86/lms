@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,7 @@ const ConvertSchema = z.object({
   customerCity: z.string().trim().max(120).optional().or(z.literal('')),
   customerCountry: z.string().trim().max(120).optional().or(z.literal('')),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
-  assignedTo: z.string().uuid().nullable().optional(),
+  assignedTo: uuidSchema.nullable().optional(),
   notes: z.string().trim().max(5000).optional().or(z.literal('')),
   customData: z.record(z.string(), z.unknown()).default({}),
 });

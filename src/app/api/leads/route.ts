@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,7 @@ const CreateLeadSchema = z.object({
   customerCountry: z.string().trim().max(120).default(''),
   source: z.string().trim().min(1).max(80).default('website'),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
-  assignedTo: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
+  assignedTo: z.union([uuidSchema, z.literal(''), z.null()]).optional(),
   notes: z.string().trim().max(5000).default(''),
   customData: z.record(z.string(), z.unknown()).default({}),
 });

@@ -43,5 +43,33 @@ export async function GET(
     return NextResponse.json({ error: 'Unable to load conversation history.' }, { status: 500 });
   }
 
-  return NextResponse.json({ events: data || [] }, { headers: { 'Cache-Control': 'private, no-store' } });
+  const events = (data || []).map((e) => ({
+    ...e,
+    payload: (e.payload || {}) as Record<string, unknown>,
+  }));
+
+  const assigneeIds = Array.from(new Set(
+    events
+      .filter((e) => e.event_type === 'assigned' && typeof e.payload.assigned_to === 'string')
+      .map((e) => e.payload.assigned_to as string)
+  ));
+
+  if (assigneeIds.length > 0) {
+    const { data: profiles } = await actor.supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', assigneeIds);
+
+    const profileMap = new Map((profiles || []).map((p) => [p.id, p.full_name]));
+    for (const e of events) {
+      if (e.event_type === 'assigned' && typeof e.payload.assigned_to === 'string') {
+        const name = profileMap.get(e.payload.assigned_to);
+        if (name) {
+          e.payload.assigned_to_name = name;
+        }
+      }
+    }
+  }
+
+  return NextResponse.json({ events }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
