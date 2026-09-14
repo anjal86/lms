@@ -1,0 +1,202 @@
+.metaChatScope :global(section[aria-label='Conversation thread']) {
+  background: #f7f8fa !important;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > header) {
+  min-height: 58px !important;
+  padding: 8px 12px !important;
+  border-bottom: 1px solid #e4e4e7 !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.03) !important;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > header [data-chat-avatar='true']) {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px #e4e4e7;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > header [data-chat-name='true']) {
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #18181b;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > header [data-chat-subtitle='true']) {
+  margin-top: 2px;
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: #71717a;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > header button) {
+  min-height: 34px;
+}
+
+.metaChatScope :global([aria-label='Message history']) {
+  padding: 12px clamp(12px, 2vw, 28px) 18px !important;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.76)),
+    #f4f5f7 !important;
+  scrollbar-width: thin;
+  scrollbar-color: #d4d4d8 transparent;
+}
+
+.metaChatScope :global([aria-label='Message history']::-webkit-scrollbar) {
+  width: 8px;
+}
+
+.metaChatScope :global([aria-label='Message history']::-webkit-scrollbar-thumb) {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background: #d4d4d8;
+}
+
+.metaChatScope :global([aria-label='Message history'] img) {
+  display: block;
+  max-height: 420px;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  padding: 9px 12px 11px !important;
+  border-top: 1px solid #e4e4e7 !important;
+  background: rgba(255, 255, 255, 0.99) !important;
+  box-shadow: 0 -3px 10px rgba(24, 24, 27, 0.025) !important;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer [data-chat-composer='true']) {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.035);
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer [data-composer-tabs='true']) {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  border-bottom: 1px solid #f4f4f5;
+  background: #fafafa;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer [data-composer-tabs='true'] button) {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer textarea) {
+  min-height: 72px !important;
+  padding: 11px 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  font-size: 13.5px !important;
+  line-height: 1.45 !important;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer textarea:focus) {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.metaChatScope :global(section[aria-label='Conversation thread'] > footer [data-composer-actions='true']) {
+  min-height: 38px;
+  border-top: 1px solid #f4f4f5;
+  background: #fff;
+}
+
+.metaChatScope :global(section[aria-label='Conversation details']) {
+  background: #fff;
+}
+
+.metaChatScope :global(section[aria-label='Conversation details'] [data-context-tabs='true']) {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid #e4e4e7;
+  background: #fff;
+}
+
+.metaChatScope :global(section[aria-label='Conversation details'] [data-context-tabs='true'] button) {
+  min-height: 42px;
+  border-bottom: 2px solid transparent;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #71717a;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.metaChatScope :global(section[aria-label='Conversation details'] [data-context-tabs='true'] button[aria-selected='true']) {
+  border-bottom-color: #18181b;
+  color: #18181b;
+}
+
+.metaChatScope :global([data-customer-summary='true']) {
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+.metaChatScope :global([data-customer-summary='true'] [data-customer-avatar='true']) {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px #e4e4e7;
+}
+
+.metaChatScope :global(button[data-conversation-item='true']) {
+  border-left: 2px solid transparent;
+}
+
+.metaChatScope :global(button[data-conversation-item='true'][aria-current='true']) {
+  border-left-color: #0866ff !important;
+  background: #f7f8fa !important;
+}
+
+.metaChatScope :global(button[data-conversation-item='true'] [data-unread='true']) {
+  background: #0866ff !important;
+}
+
+@media (max-width: 767px) {
+  .metaChatScope :global(section[aria-label='Conversation thread'] > header) {
+    min-height: 54px !important;
+    padding: 7px 8px !important;
+  }
+
+  .metaChatScope :global([aria-label='Message history']) {
+    padding: 10px 8px 14px !important;
+  }
+
+  .metaChatScope :global(section[aria-label='Conversation thread'] > footer) {
+    padding: 7px 8px 8px !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metaChatScope :global(*) {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
