@@ -77,6 +77,10 @@ const migrations = [
     file: '202609120048_inbox_collaboration_media.sql',
     applied: () => exists("select to_regprocedure('public.notify_conversation_collaborator_added()') is not null and exists(select 1 from pg_trigger where tgname='trg_conversation_collaborator_notification' and not tgisinternal) and exists(select 1 from storage.buckets where id='conversation-media')"),
   },
+  {
+    file: '202609120049_collaboration_notification_type.sql',
+    applied: () => exists("select exists(select 1 from pg_constraint c join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace where n.nspname='public' and t.relname='notifications' and c.conname='notifications_type_check' and position('collaboration' in pg_get_constraintdef(c.oid)) > 0)"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
