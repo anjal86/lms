@@ -69,6 +69,10 @@ const migrations = [
     file: '202609120046_inbox_realtime_publication.sql',
     applied: () => exists("select not exists(select 1 from pg_publication where pubname='supabase_realtime') or (exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_conversations') and exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_messages'))"),
   },
+  {
+    file: '202609120047_realtime_assignment_notifications.sql',
+    applied: () => exists("select to_regprocedure('public.notify_staff_assignment()') is not null and exists(select 1 from pg_trigger where tgname='trg_leads_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_conversations_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_work_items_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_post_sale_cases_assignment_notification' and not tgisinternal)"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
