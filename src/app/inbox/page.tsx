@@ -1,7 +1,7 @@
 'use client';
 
-import UnifiedInbox from '@/components/inbox/UnifiedInbox';
+import StableInbox from '@/components/inbox/StableInbox';
 
 export default function InboxPage() {
-  return <UnifiedInbox />;
+  return <StableInbox />;
 }
