@@ -1,3 +1,4 @@
+import type { DynamicFieldDefinition } from './platform/types';
 import type { FollowUp, FollowUpChannel, Lead } from './types';
 
 export type IndustryPack = 'education' | 'travel' | 'services';
@@ -52,6 +53,12 @@ const formatValue = (value: unknown) => {
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'string') return value.replaceAll('_', ' ');
   return String(value);
+};
+
+const configuredFieldValue = (lead: Lead, fieldKey: string) => {
+  const legacyValue = (lead as unknown as Record<string, unknown>)[fieldKey];
+  if (hasValue(legacyValue)) return legacyValue;
+  return lead.custom_data?.[fieldKey];
 };
 
 const travelFields: FieldDefinition[] = [
@@ -118,7 +125,6 @@ const terminalActions: Partial<Record<Lead['stage'], string>> = {
 function summarizeQualification(pack: IndustryPack, items: QualificationItem[]): QualificationSummary {
   const completed = items.filter((item) => item.complete).length;
   const total = items.length;
-
   return {
     pack,
     packLabel: packLabels[pack],
@@ -148,8 +154,33 @@ export function inferIndustryPack(lead: Lead, workspaceBusinessType?: string): I
   return 'travel';
 }
 
-export function buildQualificationSummary(lead: Lead, workspaceBusinessType?: string): QualificationSummary {
+function qualificationFieldsFromSchema(fields?: DynamicFieldDefinition[]) {
+  return (fields || [])
+    .filter((field) => field.entity_type === 'lead' && field.is_active && field.validation?.qualification === true)
+    .sort((left, right) => left.sort_order - right.sort_order);
+}
+
+export function buildQualificationSummary(
+  lead: Lead,
+  workspaceBusinessType?: string,
+  workspaceFields?: DynamicFieldDefinition[]
+): QualificationSummary {
   const pack = inferIndustryPack(lead, workspaceBusinessType);
+  const configuredFields = qualificationFieldsFromSchema(workspaceFields);
+
+  if (configuredFields.length > 0) {
+    const items = configuredFields.map((field) => {
+      const rawValue = configuredFieldValue(lead, field.field_key);
+      return {
+        key: field.field_key,
+        label: field.label,
+        value: formatValue(rawValue),
+        complete: hasValue(rawValue),
+      };
+    });
+    return summarizeQualification(pack, items);
+  }
+
   const items = packFields[pack].map((field) => {
     const rawValue = field.read(lead);
     return {
@@ -169,7 +200,7 @@ export function buildConfiguredQualificationSummary(
 ): QualificationSummary {
   const pack = inferIndustryPack(lead, workspaceBusinessType);
   const items = fields.map((field) => {
-    const rawValue = lead.custom_data?.[field.key];
+    const rawValue = configuredFieldValue(lead, field.key);
     return {
       key: field.key,
       label: field.label,
@@ -183,13 +214,7 @@ export function buildConfiguredQualificationSummary(
 export function getCanonicalNextAction(lead: Lead, followUps: FollowUp[], stageHint?: string): CanonicalNextAction {
   const terminalAction = terminalActions[lead.stage];
   if (terminalAction) {
-    return {
-      id: null,
-      title: terminalAction,
-      scheduledAt: null,
-      channel: null,
-      source: 'suggested',
-    };
+    return { id: null, title: terminalAction, scheduledAt: null, channel: null, source: 'suggested' };
   }
 
   const nextFollowUp = followUps
@@ -206,21 +231,11 @@ export function getCanonicalNextAction(lead: Lead, followUps: FollowUp[], stageH
     };
   }
 
+  // Legacy next_follow_up_at remains a compatibility projection for old data. New
+  // scheduled work should be represented by follow_ups and surfaced through Due Work.
   if (lead.next_follow_up_at) {
-    return {
-      id: null,
-      title: 'Follow up with customer',
-      scheduledAt: lead.next_follow_up_at,
-      channel: null,
-      source: 'lead',
-    };
+    return { id: null, title: 'Follow up with customer', scheduledAt: lead.next_follow_up_at, channel: null, source: 'lead' };
   }
 
-  return {
-    id: null,
-    title: suggestedActionForStage(lead.stage, stageHint),
-    scheduledAt: null,
-    channel: null,
-    source: 'suggested',
-  };
+  return { id: null, title: suggestedActionForStage(lead.stage, stageHint), scheduledAt: null, channel: null, source: 'suggested' };
 }
