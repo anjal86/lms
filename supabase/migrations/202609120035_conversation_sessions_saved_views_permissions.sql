@@ -86,14 +86,13 @@ where not exists (
 );
 
 update public.lead_conversations c
-set current_session_id = s.id
-from lateral (
+set current_session_id = (
   select cs.id
   from public.conversation_sessions cs
   where cs.conversation_id=c.id
   order by cs.opened_at desc, cs.id desc
   limit 1
-) s
+)
 where c.current_session_id is null;
 
 update public.lead_messages m
