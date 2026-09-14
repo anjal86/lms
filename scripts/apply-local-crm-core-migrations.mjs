@@ -66,6 +66,10 @@ const migrations = [
     applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='business_events' and column_name='status') and exists(select 1 from pg_trigger where tgname='trg_lead_business_event' and not tgisinternal) and position('automation_generated' in pg_get_functiondef(to_regprocedure('public.run_business_event_automations()'))) > 0"),
   },
   {
+    file: '202609120046_inbox_realtime_publication.sql',
+    applied: () => exists("select not exists(select 1 from pg_publication where pubname='supabase_realtime') or (exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_conversations') and exists(select 1 from pg_publication_tables where pubname='supabase_realtime' and schemaname='public' and tablename='lead_messages'))"),
+  },
+  {
     file: '202609120047_realtime_assignment_notifications.sql',
     applied: () => exists("select to_regprocedure('public.notify_staff_assignment()') is not null and exists(select 1 from pg_trigger where tgname='trg_leads_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_conversations_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_work_items_assignment_notification' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_post_sale_cases_assignment_notification' and not tgisinternal)"),
   },
