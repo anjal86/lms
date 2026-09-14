@@ -176,23 +176,40 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       } else {
         const { data: stage, error: stageError } = await actor.supabase
           .from('pipeline_stages')
-          .select('id,stage_key,stage_type,pipelines!inner(id,workspace_id)')
+          .select('id,pipeline_id,stage_key,stage_type,sort_order,pipelines!inner(id,workspace_id)')
           .eq('id', parsed.data.pipelineStageId)
           .eq('pipelines.workspace_id', actor.profile.workspace_id)
           .maybeSingle();
         if (stageError) throw stageError;
         if (!stage) return NextResponse.json({ error: 'Pipeline stage is not available in this workspace.' }, { status: 400 });
 
+        let requirementStageIds = [stage.id];
+        if (stage.stage_type !== 'lost') {
+          const { data: priorStages, error: priorStagesError } = await actor.supabase
+            .from('pipeline_stages')
+            .select('id')
+            .eq('pipeline_id', stage.pipeline_id)
+            .neq('stage_type', 'lost')
+            .lte('sort_order', stage.sort_order)
+            .order('sort_order');
+          if (priorStagesError) throw priorStagesError;
+          requirementStageIds = (priorStages || []).map((item) => item.id);
+        }
+
         const { data: requirementRows, error: requirementsError } = await actor.supabase
           .from('pipeline_stage_requirements')
-          .select('requirement_type,requirement_key,label')
+          .select('requirement_type,requirement_key,label,sort_order')
           .eq('workspace_id', actor.profile.workspace_id)
-          .eq('pipeline_stage_id', stage.id)
+          .in('pipeline_stage_id', requirementStageIds)
           .eq('is_required', true)
           .order('sort_order');
         if (requirementsError) throw requirementsError;
 
-        const requirements = (requirementRows || []) as StageRequirement[];
+        const deduped = new Map<string, StageRequirement>();
+        for (const requirement of (requirementRows || []) as StageRequirement[]) {
+          deduped.set(`${requirement.requirement_type}:${requirement.requirement_key}`, requirement);
+        }
+        const requirements = Array.from(deduped.values());
         const documentKeys = requirements
           .filter((item) => item.requirement_type === 'document')
           .map((item) => item.requirement_key);
@@ -228,9 +245,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         }
 
         patch.pipeline_stage_id = stage.id;
-        const stageType = stage.stage_type;
-        if (stageType === 'won') patch.stage = 'won';
-        else if (stageType === 'lost') patch.stage = 'lost';
+        if (stage.stage_type === 'won') patch.stage = 'won';
+        else if (stage.stage_type === 'lost') patch.stage = 'lost';
         else if (existing.stage === 'won' || existing.stage === 'lost') patch.stage = 'new';
       }
     }
