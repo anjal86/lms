@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
+import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
 import { AgentStatus } from '@/lib/types';
 import {
+  BarChart3,
   Bell,
   Plus,
   FileSpreadsheet,
@@ -20,15 +22,10 @@ import {
   Kanban,
   CalendarClock,
   Users,
-  BarChart3,
-  Trophy,
-  MessageSquareQuote,
-  MessageSquare,
   Settings,
   LogOut,
   LayoutDashboard,
-  ListChecks,
-  Zap,
+  MessageSquare,
 } from 'lucide-react';
 import LeadModal from '../leads/LeadModal';
 import CsvImportModal from '../leads/CsvImportModal';
@@ -50,6 +47,7 @@ export default function Header() {
     showToast,
   } = useApp();
   const { config, term, moduleEnabled } = useWorkspace();
+  const { can } = useWorkspacePermissions();
 
   const isAgent = currentUser.role === 'agent';
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
@@ -57,39 +55,23 @@ export default function Header() {
   const inboxEnabled = moduleEnabled('inbox', true);
   const leadsEnabled = moduleEnabled('leads', true);
   const tasksEnabled = moduleEnabled('tasks', true);
-  const leadLabel = term('lead', 'Lead');
-  const leadPlural = term('lead_plural', 'Leads');
+  const leadLabel = term('lead', 'Opportunity');
+  const leadPlural = term('lead_plural', 'Opportunities');
   const contactPlural = term('contact_plural', 'Contacts');
   const workspaceName = config.workspace.name || 'Workspace';
   const workspaceLabel = term('workspace_label', 'Business Workspace');
   const workspaceInitial = workspaceName.trim().charAt(0).toUpperCase() || 'C';
 
-  const mobileNavItems = isAgent
-    ? [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
-        ...(inboxEnabled ? [
-          { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-          { label: contactPlural, href: '/contacts', icon: Users },
-        ] : []),
-        ...(leadsEnabled ? [{ label: 'My Work', href: '/my-work', icon: ListChecks }] : []),
-        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/my-follow-ups', icon: CalendarClock }] : []),
-        { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
-      ]
-    : [
-        { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
-        ...(inboxEnabled ? [
-          { label: 'Inbox', href: '/inbox', icon: MessageSquare },
-          { label: contactPlural, href: '/contacts', icon: Users },
-          ...(canManage ? [{ label: 'Automations', href: '/settings/automations', icon: Zap }] : []),
-        ] : []),
-        ...(leadsEnabled ? [{ label: `All ${leadPlural}`, href: '/leads', icon: Kanban }] : []),
-        ...(tasksEnabled ? [{ label: 'Follow-ups', href: '/follow-ups', icon: CalendarClock }] : []),
-        { label: 'Team', href: '/team', icon: Users },
-        { label: 'Performance', href: '/analytics', icon: BarChart3 },
-        { label: 'Incentives', href: '/incentives', icon: Trophy },
-        { label: 'Messages', href: '/templates', icon: MessageSquareQuote },
-        { label: 'Settings', href: '/settings', icon: Settings },
-      ];
+  const mobileNavItems = [
+    { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
+    ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', href: '/inbox', icon: MessageSquare }] : []),
+    ...(leadsEnabled ? [{ label: leadPlural, href: isAgent ? '/my-work' : '/leads', icon: Kanban }] : []),
+    ...(tasksEnabled ? [{ label: 'Due Work', href: '/work', icon: CalendarClock }] : []),
+    ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users }] : []),
+    ...(!isAgent ? [{ label: 'Team', href: '/team', icon: Users }] : []),
+    ...(!isAgent && can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3 }] : []),
+    ...(!isAgent ? [{ label: 'Settings', href: '/settings/workspace', icon: Settings }] : []),
+  ];
 
   const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
@@ -138,7 +120,7 @@ export default function Header() {
       if (lastKey === 'g' && now - lastKeyTime < 1500) {
         const key = event.key.toLowerCase();
         if (key === 'l' && leadsEnabled) router.push(isAgent ? '/my-work' : '/leads');
-        else if (key === 'f' && tasksEnabled) router.push(isAgent ? '/my-follow-ups' : '/follow-ups');
+        else if (key === 'f' && tasksEnabled) router.push('/work');
         else if (key === 't' && canManage) router.push('/team');
         lastKey = '';
       }
