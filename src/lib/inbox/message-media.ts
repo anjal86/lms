@@ -22,8 +22,10 @@ function rows(value: unknown): UnknownRecord[] {
 
 function url(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
+  const trimmed = value.trim();
+  if (trimmed.startsWith('/')) return trimmed;
   try {
-    const parsed = new URL(value);
+    const parsed = new URL(trimmed);
     return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.toString() : null;
   } catch {
     return null;
@@ -67,13 +69,7 @@ export function messageMedia(messageType: string, metadataValue: unknown): Messa
   if (!resolvedUrl && !previewUrl && normalizedType === 'text') return null;
   if (!resolvedUrl && !previewUrl && !['image', 'video', 'audio', 'file', 'media'].includes(normalizedType)) return null;
 
-  return {
-    kind,
-    url: resolvedUrl,
-    previewUrl,
-    fileName,
-    mimeType,
-  };
+  return { kind, url: resolvedUrl, previewUrl, fileName, mimeType };
 }
 
 export function isMediaPlaceholder(body: string | null | undefined) {
