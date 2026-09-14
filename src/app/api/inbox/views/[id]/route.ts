@@ -23,7 +23,7 @@ const PatchSchema = z.object({
 
 async function loadOwnedOrManaged(request: Request, id: string) {
   const actor = await getApiActor(request);
-  if ('error' in actor) return actor;
+  if ('error' in actor) return { error: actor.error } as const;
   if (!(await actorHasPermission(actor, 'inbox.saved_views.manage'))) {
     return { error: NextResponse.json({ error: 'Saved-view permission required.' }, { status: 403 }) } as const;
   }
