@@ -8,7 +8,7 @@ import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import type { DynamicFieldDefinition, PipelineStageConfig } from '@/lib/platform/types';
 import type { Lead } from '@/lib/types';
-import { buildConfiguredQualificationSummary, getCanonicalNextAction } from '@/lib/opportunity-workspace';
+import { buildQualificationSummary, getCanonicalNextAction } from '@/lib/opportunity-workspace';
 import UnifiedCommunicationTimeline from './UnifiedCommunicationTimeline';
 
 type Tab = 'overview' | 'communication' | 'details';
@@ -117,11 +117,7 @@ export default function GenericLeadWorkspace() {
   const leadActivities = activities.filter((activity) => activity.lead_id === leadId);
   const leadLabel = term('lead', 'Lead');
   const contactLabel = term('contact', 'Contact');
-  const qualification = lead ? buildConfiguredQualificationSummary(
-    lead,
-    config.workspace.business_type,
-    fields.map((field) => ({ key: field.field_key, label: field.label }))
-  ) : null;
+  const qualification = lead ? buildQualificationSummary(lead, config.workspace.business_type, fields) : null;
   const nextAction = lead ? getCanonicalNextAction(lead, followUps, currentStage?.stage_key || currentStage?.name) : null;
 
   function beginEdit() {
