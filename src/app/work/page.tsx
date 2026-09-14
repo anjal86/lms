@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { CalendarClock, Check, Inbox, Loader2, RefreshCw, Search } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { CalendarClock, Check, Download, Inbox, Loader2, Plus, RefreshCw, Search } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
+import ScheduleFollowUpModal from '@/components/followups/ScheduleFollowUpModal';
 
 type ConversationAction = {
   id: string;
@@ -18,6 +20,8 @@ type ConversationAction = {
 };
 
 type ViewKey = 'overdue' | 'today' | 'upcoming';
+type SourceFilter = 'all' | 'follow_up' | 'conversation';
+type StatusFilter = 'open' | 'done';
 
 type WorkItem = {
   id: string;
@@ -38,7 +42,8 @@ function sameDay(value: string, now: Date) {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
 }
 
-function dueLabel(value: string, now: number) {
+function dueLabel(value: string, now: number, completed: boolean) {
+  if (completed) return 'Completed';
   const diff = Math.round((new Date(value).getTime() - now) / 60000);
   if (diff < 0) return Math.abs(diff) < 60 ? `${Math.abs(diff)}m overdue` : `${Math.round(Math.abs(diff) / 60)}h overdue`;
   if (diff < 60) return `in ${diff}m`;
@@ -46,24 +51,45 @@ function dueLabel(value: string, now: number) {
   return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+function sourceFromParam(value: string | null): SourceFilter {
+  return value === 'follow_up' || value === 'conversation' ? value : 'all';
+}
+
 export default function DueWorkPage() {
-  const { currentUser, followUps, allLeads, completeFollowUp, showToast } = useApp();
+  const params = useSearchParams();
+  const {
+    currentUser,
+    followUps,
+    allLeads,
+    allProfiles,
+    completeFollowUp,
+    exportFollowUpsIcal,
+    showToast,
+  } = useApp();
   const { config, term } = useWorkspace();
   const { can } = useWorkspacePermissions();
   const [conversations, setConversations] = useState<ConversationAction[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewKey>('today');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() => sourceFromParam(params.get('type')));
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => params.get('status') === 'done' ? 'done' : 'open');
+  const [ownerFilter, setOwnerFilter] = useState(() => params.get('owner') === 'me' ? 'me' : 'all');
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const leadLabel = term('lead', 'Lead');
+  const leadLabel = term('lead', 'Opportunity');
   const isManagement = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   const load = useCallback(async () => {
-    if (!can('inbox.view')) { setLoading(false); return; }
+    if (!can('inbox.view')) {
+      setConversations([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const params = new URLSearchParams({ filter: isManagement ? 'all' : 'mine', sort: 'newest', limit: '1000' });
-      const response = await fetch(`/api/conversations?${params.toString()}`, { cache: 'no-store' });
+      const requestParams = new URLSearchParams({ filter: isManagement ? 'all' : 'mine', sort: 'newest', limit: '1000' });
+      const response = await fetch(`/api/conversations?${requestParams.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to load conversation actions.');
       setConversations((payload.conversations || []).filter((row: ConversationAction) => row.next_action_at && row.workflow_state !== 'closed'));
@@ -78,14 +104,18 @@ export default function DueWorkPage() {
     document.title = `Due Work — ${config.workspace.name}`;
     const initial = window.setTimeout(() => void load(), 0);
     const clock = window.setInterval(() => setNow(Date.now()), 60000);
-    return () => { window.clearTimeout(initial); window.clearInterval(clock); };
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(clock);
+    };
   }, [config.workspace.name, load]);
 
   const items = useMemo<WorkItem[]>(() => {
     const followUpItems: WorkItem[] = followUps
-      .filter((item) => item.status !== 'completed' && (isManagement || item.assigned_to === currentUser.id || item.agent_id === currentUser.id))
+      .filter((item) => isManagement || item.assigned_to === currentUser.id || item.agent_id === currentUser.id)
       .map((item) => {
         const lead = allLeads.find((row) => row.id === item.lead_id);
+        const completed = item.status === 'completed';
         return {
           id: `followup:${item.id}`,
           source: 'follow_up',
@@ -94,8 +124,8 @@ export default function DueWorkPage() {
           dueAt: item.scheduled_at,
           ownerId: item.assigned_to || item.agent_id || null,
           href: isManagement ? `/leads/${item.lead_id}/workspace` : `/my-work/${item.lead_id}`,
-          priority: 1,
-          completed: false,
+          priority: item.priority === 'urgent' ? 0 : item.priority === 'high' ? 0.5 : 1,
+          completed,
           followUpId: item.id,
         };
       });
@@ -105,8 +135,8 @@ export default function DueWorkPage() {
       .map((row) => ({
         id: `conversation:${row.id}`,
         source: 'conversation',
-        title: `Next action · ${row.customer_name || 'Customer'}`,
-        detail: `${row.provider} conversation · ${row.priority} priority`,
+        title: `Conversation action · ${row.customer_name || 'Customer'}`,
+        detail: `${row.provider} · ${row.priority} priority`,
         dueAt: row.next_action_at as string,
         ownerId: row.assigned_to,
         href: `/inbox?conversationId=${row.id}`,
@@ -115,53 +145,160 @@ export default function DueWorkPage() {
         conversationId: row.id,
       }));
 
-    return [...followUpItems, ...conversationItems].sort((a, b) => a.priority - b.priority || new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());
+    return [...followUpItems, ...conversationItems].sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      return a.priority - b.priority || new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime();
+    });
   }, [allLeads, conversations, currentUser.id, followUps, isManagement, leadLabel]);
 
-  const filtered = useMemo(() => {
-    const current = new Date(now);
-    const term = query.trim().toLowerCase();
-    return items.filter((item) => {
-      const due = new Date(item.dueAt).getTime();
-      if (view === 'overdue' && due >= now) return false;
-      if (view === 'today' && (due < now || !sameDay(item.dueAt, current))) return false;
-      if (view === 'upcoming' && (due < now || sameDay(item.dueAt, current))) return false;
-      return !term || `${item.title} ${item.detail}`.toLowerCase().includes(term);
-    });
-  }, [items, now, query, view]);
+  const ownerMatches = useCallback((item: WorkItem) => {
+    if (!isManagement) return item.ownerId === currentUser.id || item.ownerId === null;
+    if (ownerFilter === 'all') return true;
+    if (ownerFilter === 'me') return item.ownerId === currentUser.id;
+    return item.ownerId === ownerFilter;
+  }, [currentUser.id, isManagement, ownerFilter]);
+
+  const openItems = useMemo(() => items.filter((item) => !item.completed && ownerMatches(item) && (sourceFilter === 'all' || item.source === sourceFilter)), [items, ownerMatches, sourceFilter]);
 
   const counts = useMemo(() => {
     const current = new Date(now);
-    return items.reduce((acc, item) => {
+    return openItems.reduce((acc, item) => {
       const due = new Date(item.dueAt).getTime();
       if (due < now) acc.overdue += 1;
       else if (sameDay(item.dueAt, current)) acc.today += 1;
       else acc.upcoming += 1;
       return acc;
     }, { overdue: 0, today: 0, upcoming: 0 });
-  }, [items, now]);
+  }, [now, openItems]);
+
+  const filtered = useMemo(() => {
+    const current = new Date(now);
+    const searchTerm = query.trim().toLowerCase();
+    return items.filter((item) => {
+      if (!ownerMatches(item)) return false;
+      if (sourceFilter !== 'all' && item.source !== sourceFilter) return false;
+      if (statusFilter === 'done') {
+        if (!item.completed) return false;
+      } else {
+        if (item.completed) return false;
+        const due = new Date(item.dueAt).getTime();
+        if (view === 'overdue' && due >= now) return false;
+        if (view === 'today' && (due < now || !sameDay(item.dueAt, current))) return false;
+        if (view === 'upcoming' && (due < now || sameDay(item.dueAt, current))) return false;
+      }
+      return !searchTerm || `${item.title} ${item.detail}`.toLowerCase().includes(searchTerm);
+    });
+  }, [items, now, ownerMatches, query, sourceFilter, statusFilter, view]);
+
+  const calendarItems = useMemo(() => {
+    const visibleIds = new Set(filtered.filter((item) => item.source === 'follow_up' && !item.completed).map((item) => item.followUpId));
+    return followUps.filter((item) => visibleIds.has(item.id));
+  }, [filtered, followUps]);
 
   const complete = async (item: WorkItem) => {
     if (item.source === 'follow_up' && item.followUpId) {
-      completeFollowUp(item.followUpId);
-      showToast('Follow-up completed.', 'success');
+      completeFollowUp(item.followUpId, 'Completed from Due Work');
+      showToast('Action completed.', 'success');
       return;
     }
     if (item.conversationId) {
-      const response = await fetch(`/api/conversations/${item.conversationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next_action_at: null }) });
-      if (!response.ok) { showToast('Unable to complete conversation action.', 'error'); return; }
+      const response = await fetch(`/api/conversations/${item.conversationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ next_action_at: null }),
+      });
+      if (!response.ok) {
+        showToast('Unable to complete conversation action.', 'error');
+        return;
+      }
       setConversations((rows) => rows.filter((row) => row.id !== item.conversationId));
-      showToast('Conversation action completed.', 'success');
+      showToast('Action completed.', 'success');
     }
   };
 
+  const ownerOptions = allProfiles.filter((profile) => profile.is_active);
+
   return <div className="app-page">
-    <header className="page-header"><div><p className="page-eyebrow">Work</p><h1 className="page-title">Due Work</h1><p className="page-description">CRM follow-ups and conversation next actions in one prioritized queue.</p></div><div className="page-actions"><Link href="/follow-ups" className="button-secondary"><CalendarClock className="h-4 w-4" /> Manage follow-ups</Link><button type="button" onClick={() => void load()} disabled={loading} className="button-secondary px-3"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button></div></header>
+    <header className="page-header">
+      <div>
+        <p className="page-eyebrow">Work</p>
+        <h1 className="page-title">Due Work</h1>
+        <p className="page-description">One queue for scheduled CRM follow-ups and conversation actions.</p>
+      </div>
+      <div className="page-actions">
+        <button type="button" onClick={() => exportFollowUpsIcal(calendarItems)} disabled={calendarItems.length === 0} className="button-secondary">
+          <Download className="h-4 w-4" /> Calendar
+        </button>
+        <button type="button" onClick={() => setScheduleOpen(true)} className="button-primary">
+          <Plus className="h-4 w-4" /> Add action
+        </button>
+        <button type="button" onClick={() => void load()} disabled={loading} className="button-secondary px-3" aria-label="Refresh due work">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+    </header>
 
-    <section className="grid gap-3 sm:grid-cols-3">{(['overdue','today','upcoming'] as ViewKey[]).map((key) => <button key={key} type="button" onClick={() => setView(key)} className={`metric text-left ${view === key ? 'border-zinc-400' : ''}`}><div className="metric-label">{key[0].toUpperCase() + key.slice(1)}</div><div className="metric-value">{counts[key]}</div><div className="metric-hint">{key === 'overdue' ? 'Past due now' : key === 'today' ? 'Still due today' : 'Scheduled later'}</div></button>)}</section>
-
-    <section className="surface-flat overflow-hidden"><div className="border-b border-zinc-200 p-3"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search due work" className="field pl-9" /></div></div>
-      {loading && items.length === 0 ? <div className="flex min-h-44 items-center justify-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading due work…</div> : filtered.length === 0 ? <div className="py-16 text-center"><Check className="mx-auto h-6 w-6 text-emerald-600" /><div className="mt-2 text-sm font-semibold">This queue is clear</div><p className="mt-1 text-xs text-zinc-500">No {view} work matches your filters.</p></div> : <div className="divide-y divide-zinc-100">{filtered.map((item) => <div key={item.id} className="flex items-center gap-3 px-4 py-3"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.source === 'conversation' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>{item.source === 'conversation' ? <Inbox className="h-4 w-4" /> : <CalendarClock className="h-4 w-4" />}</span><Link href={item.href} className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-zinc-900">{item.title}</div><div className="mt-0.5 truncate text-[11px] text-zinc-500">{item.detail}</div></Link><div className={`shrink-0 font-mono text-[11px] font-semibold ${new Date(item.dueAt).getTime() < now ? 'text-rose-600' : 'text-zinc-500'}`}>{dueLabel(item.dueAt, now)}</div><button type="button" onClick={() => void complete(item)} className="button-secondary button-sm" title="Mark done"><Check className="h-3.5 w-3.5" /></button></div>)}</div>}
+    <section className="grid gap-3 sm:grid-cols-3">
+      {(['overdue', 'today', 'upcoming'] as ViewKey[]).map((key) => (
+        <button key={key} type="button" onClick={() => { setStatusFilter('open'); setView(key); }} className={`metric text-left ${statusFilter === 'open' && view === key ? 'border-zinc-400' : ''}`}>
+          <div className="metric-label">{key[0].toUpperCase() + key.slice(1)}</div>
+          <div className="metric-value">{counts[key]}</div>
+          <div className="metric-hint">{key === 'overdue' ? 'Past due now' : key === 'today' ? 'Still due today' : 'Scheduled later'}</div>
+        </button>
+      ))}
     </section>
+
+    <section className="surface-flat overflow-visible">
+      <div className="grid gap-2 border-b border-zinc-200 p-3 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+        <div className="relative min-w-0">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search customer or action" className="field pl-9" />
+        </div>
+        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as SourceFilter)} className="select-field text-xs" aria-label="Action type">
+          <option value="all">All actions</option>
+          <option value="follow_up">CRM follow-ups</option>
+          <option value="conversation">Conversation actions</option>
+        </select>
+        {isManagement && <select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)} className="select-field text-xs" aria-label="Owner">
+          <option value="all">All owners</option>
+          <option value="me">Assigned to me</option>
+          {ownerOptions.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}
+        </select>}
+        <div className="flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+          <button type="button" onClick={() => setStatusFilter('open')} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${statusFilter === 'open' ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500'}`}>Open</button>
+          <button type="button" onClick={() => setStatusFilter('done')} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${statusFilter === 'done' ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500'}`}>Done</button>
+        </div>
+      </div>
+
+      {loading && items.length === 0 ? (
+        <div className="flex min-h-44 items-center justify-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading due work…</div>
+      ) : filtered.length === 0 ? (
+        <div className="py-16 text-center">
+          <Check className="mx-auto h-6 w-6 text-emerald-600" />
+          <div className="mt-2 text-sm font-semibold">This queue is clear</div>
+          <p className="mt-1 text-xs text-zinc-500">No {statusFilter === 'done' ? 'completed' : view} work matches the current filters.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-zinc-100">
+          {filtered.map((item) => (
+            <div key={item.id} className="flex items-center gap-3 px-4 py-3">
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.source === 'conversation' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>
+                {item.source === 'conversation' ? <Inbox className="h-4 w-4" /> : <CalendarClock className="h-4 w-4" />}
+              </span>
+              <Link href={item.href} className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-zinc-900">{item.title}</div>
+                <div className="mt-0.5 truncate text-[11px] text-zinc-500">{item.detail}</div>
+              </Link>
+              <div className={`shrink-0 font-mono text-[11px] font-semibold ${!item.completed && new Date(item.dueAt).getTime() < now ? 'text-rose-600' : 'text-zinc-500'}`}>
+                {dueLabel(item.dueAt, now, item.completed)}
+              </div>
+              {!item.completed && <button type="button" onClick={() => void complete(item)} className="button-secondary button-sm" title="Mark done"><Check className="h-3.5 w-3.5" /></button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+
+    {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => setScheduleOpen(false)} />}
   </div>;
 }
