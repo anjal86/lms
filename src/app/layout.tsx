@@ -5,6 +5,7 @@ import './color-theme.css';
 import { AppProvider } from '@/lib/store';
 import AppShell from '@/components/layout/AppShell';
 import ToastContainer from '@/components/layout/ToastContainer';
+import RealtimeAssignmentNotifications from '@/components/layout/RealtimeAssignmentNotifications';
 
 const manrope = Manrope({
   subsets: ['latin'],
@@ -49,6 +50,7 @@ export default function RootLayout({
             Skip to main content
           </a>
 
+          <RealtimeAssignmentNotifications />
           <AppShell>{children}</AppShell>
           <ToastContainer />
         </AppProvider>
