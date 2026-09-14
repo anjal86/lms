@@ -96,6 +96,7 @@ const migrations = [
   { file: '202609120034_profile_assignment_metrics.sql', applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='last_assigned_at') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='profiles' and column_name='conversion_rate')") },
   { file: '202609120035_conversation_sessions_saved_views_permissions.sql', applied: () => exists("select to_regclass('public.conversation_sessions') is not null and to_regclass('public.conversation_saved_views') is not null and to_regclass('public.workspace_role_permissions') is not null and to_regprocedure('public.has_workspace_permission(text)') is not null") },
   { file: '202609120036_operational_worker_and_automation_actions.sql', applied: () => exists("select to_regprocedure('public.assign_conversation_worker(uuid,text)') is not null and position('set_lifecycle' in pg_get_functiondef(to_regprocedure('public.run_conversation_automations()'))) > 0") },
+  { file: '202609120037_contact_profile_edit_integrity.sql', applied: () => exists("select to_regprocedure('public.update_contact_profile(uuid,text,text,text,text,uuid,jsonb,jsonb)') is not null") },
 ];
 
 console.log('\nChecking local CRM database migrations...\n');
