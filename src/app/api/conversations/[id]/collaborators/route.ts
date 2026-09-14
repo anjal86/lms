@@ -52,9 +52,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const parsed = CollaboratorSchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ error: 'Invalid collaborator.' }, { status: 400 });
 
-  if (parsed.data.user_id !== actor.user.id && !(await canManageOtherCollaborators(actor))) {
-    return NextResponse.json({ error: 'You do not have permission to add another staff member as a collaborator.' }, { status: 403 });
-  }
 
   const { data: member } = await actor.supabase
     .from('profiles')

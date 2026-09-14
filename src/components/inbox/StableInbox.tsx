@@ -614,7 +614,6 @@ export default function StableInbox() {
   const availableCollaborators = allProfiles.filter((profile) =>
     profile.is_active
     && !collaborators.some((row) => row.user_id === profile.id)
-    && (canManageCollaborators || profile.id === currentUser?.id)
   );
 
   const context = selected ? <section aria-label="Conversation details" className="flex h-full min-h-0 flex-col bg-white">
