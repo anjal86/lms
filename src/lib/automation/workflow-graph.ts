@@ -69,16 +69,13 @@ export function runtimeWorkflowToGraph(definition: RuntimeWorkflowDefinition): W
       label: nodeLabel('trigger', { trigger_key: definition.trigger_key }),
       config: { trigger_key: definition.trigger_key },
     },
-  ];
-
-  if (Object.keys(definition.conditions || {}).length > 0) {
-    nodes.push({
+    {
       id: 'conditions',
       kind: 'condition',
-      label: nodeLabel('condition', definition.conditions),
-      config: { ...definition.conditions },
-    });
-  }
+      label: nodeLabel('condition', definition.conditions || {}),
+      config: { ...(definition.conditions || {}) },
+    },
+  ];
 
   definition.actions.forEach((action, index) => {
     nodes.push({
