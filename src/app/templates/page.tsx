@@ -3,13 +3,7 @@
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { WhatsAppTemplate } from '@/lib/types';
-import {
-  MessageSquareQuote,
-  Plus,
-  Trash2,
-  Check,
-  Copy,
-} from 'lucide-react';
+import { MessageSquareQuote, Plus, Trash2, Check, Copy } from 'lucide-react';
 
 export default function TemplatesPage() {
   const { templates, updateTemplates, currentUser } = useApp();
@@ -56,30 +50,26 @@ export default function TemplatesPage() {
   const categoryLabel = (category: string) => {
     const labels: Record<string, string> = {
       welcome: 'Welcome',
-      quote_followup: 'Quote follow-up',
+      quote_followup: 'Proposal follow-up',
       discount: 'Offer',
       reminder: 'Reminder',
-      custom: 'Message',
+      custom: 'Reply',
     };
-    return labels[category] || 'Message';
+    return labels[category] || 'Reply';
   };
 
   return (
     <div className="workspace-page max-w-5xl">
       <div className="workspace-header">
         <div>
-          <p className="workspace-eyebrow">Messages</p>
-          <h1 className="workspace-title">Saved messages</h1>
-          <p className="workspace-description">
-            {canManage
-              ? 'Keep useful customer messages ready for the whole team.'
-              : 'Copy a message, personalize it for the traveler, and send it.'}
-          </p>
+          <p className="workspace-eyebrow">Communication</p>
+          <h1 className="workspace-title">Saved Replies</h1>
+          <p className="workspace-description">Reusable customer replies. Keep them short, adaptable and industry-neutral unless the workspace specifically needs a vertical template.</p>
         </div>
 
         {canManage && (
           <button type="button" onClick={() => setIsAdding((value) => !value)} className="button-primary">
-            <Plus className="h-4 w-4" /> Add message
+            <Plus className="h-4 w-4" /> Add reply
           </button>
         )}
       </div>
@@ -88,8 +78,8 @@ export default function TemplatesPage() {
         <section className="panel p-5">
           <div className="flex items-start justify-between gap-4 border-b border-zinc-100 pb-4">
             <div>
-              <h2 className="text-sm font-semibold text-zinc-950">Add a saved message</h2>
-              <p className="mt-1 text-xs text-zinc-500">Use the placeholders only where you want traveler details filled automatically.</p>
+              <h2 className="text-sm font-semibold text-zinc-950">Add a saved reply</h2>
+              <p className="mt-1 text-xs text-zinc-500">Use customer and agent placeholders only when they improve reuse across the workspace.</p>
             </div>
             <button type="button" onClick={() => setIsAdding(false)} className="text-xs font-medium text-zinc-500 hover:text-zinc-900">Cancel</button>
           </div>
@@ -104,7 +94,7 @@ export default function TemplatesPage() {
                 <label htmlFor="message-category" className="mb-1.5 block text-xs font-medium text-zinc-700">Type</label>
                 <select id="message-category" value={newCategory} onChange={(event) => setNewCategory(event.target.value as typeof newCategory)} className="field">
                   <option value="welcome">Welcome</option>
-                  <option value="quote_followup">Quote follow-up</option>
+                  <option value="quote_followup">Proposal follow-up</option>
                   <option value="discount">Offer</option>
                   <option value="reminder">Reminder</option>
                 </select>
@@ -112,13 +102,12 @@ export default function TemplatesPage() {
             </div>
 
             <div>
-              <label htmlFor="message-body" className="mb-1.5 block text-xs font-medium text-zinc-700">Message</label>
-              <textarea id="message-body" rows={5} required value={newBody} onChange={(event) => setNewBody(event.target.value)} placeholder="Hi {{customer_name}}, I’m following up about your {{destination}} trip…" className="field resize-none leading-6" />
+              <label htmlFor="message-body" className="mb-1.5 block text-xs font-medium text-zinc-700">Reply</label>
+              <textarea id="message-body" rows={5} required value={newBody} onChange={(event) => setNewBody(event.target.value)} placeholder="Hi {{customer_name}}, I’m following up on our recent conversation…" className="field resize-none leading-6" />
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <span className="text-xs text-zinc-500">Add:</span>
                 {[
-                  ['Traveler name', '{{customer_name}}'],
-                  ['Destination', '{{destination}}'],
+                  ['Customer name', '{{customer_name}}'],
                   ['Agent name', '{{agent_name}}'],
                 ].map(([label, value]) => (
                   <button key={value} type="button" onClick={() => insertVariable(value)} className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50">{label}</button>
@@ -128,7 +117,7 @@ export default function TemplatesPage() {
 
             <div className="flex justify-end gap-2 border-t border-zinc-100 pt-4">
               <button type="button" onClick={() => setIsAdding(false)} className="button-secondary">Cancel</button>
-              <button type="submit" className="button-primary">Save message</button>
+              <button type="submit" className="button-primary">Save reply</button>
             </div>
           </form>
         </section>
@@ -137,8 +126,8 @@ export default function TemplatesPage() {
       {templates.length === 0 ? (
         <section className="panel px-6 py-14 text-center">
           <MessageSquareQuote className="mx-auto h-6 w-6 text-zinc-300" />
-          <h2 className="mt-3 text-sm font-semibold text-zinc-900">No saved messages yet</h2>
-          <p className="mt-1 text-xs text-zinc-500">{canManage ? 'Add a message the team can reuse.' : 'Ask a manager to add shared messages.'}</p>
+          <h2 className="mt-3 text-sm font-semibold text-zinc-900">No saved replies yet</h2>
+          <p className="mt-1 text-xs text-zinc-500">{canManage ? 'Add a reply the team can reuse.' : 'Ask a manager to add shared replies.'}</p>
         </section>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -161,7 +150,7 @@ export default function TemplatesPage() {
               </div>
 
               <button type="button" onClick={() => void handleCopy(template.message_body, template.id)} className="button-secondary mt-3 w-full">
-                {copiedId === template.id ? <><Check className="h-4 w-4 text-emerald-600" /> Copied</> : <><Copy className="h-4 w-4" /> Copy message</>}
+                {copiedId === template.id ? <><Check className="h-4 w-4 text-emerald-600" /> Copied</> : <><Copy className="h-4 w-4" /> Copy reply</>}
               </button>
             </article>
           ))}
