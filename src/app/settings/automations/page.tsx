@@ -124,7 +124,7 @@ export default function AutomationsPage() {
       <header className="border-b border-zinc-200 bg-white px-4 py-4 md:px-6 xl:px-8">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 text-lg font-semibold tracking-tight text-zinc-950"><Zap className="h-4.5 w-4.5" /> Automations</div>
+            <div className="flex items-center gap-2 text-lg font-semibold tracking-tight text-zinc-950"><Zap className="h-[18px] w-[18px]" /> Automations</div>
             <p className="mt-1 text-xs text-zinc-500">Manage workflow rules, templates and execution health across Inbox and CRM events.</p>
           </div>
           <div className="flex items-center gap-2">
