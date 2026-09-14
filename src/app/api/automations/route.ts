@@ -38,8 +38,15 @@ export async function GET(request: Request) {
   const latestRuns = new Map<string, unknown>();
   for (const run of runRows || []) if (!latestRuns.has(run.workflow_id)) latestRuns.set(run.workflow_id, run);
 
+  const workflowNames = new Map((data || []).map((workflow) => [workflow.id, workflow.name]));
+  const recentRuns = (runRows || []).slice(0, 30).map((run) => ({
+    ...run,
+    workflow_name: workflowNames.get(run.workflow_id) || 'Deleted workflow',
+  }));
+
   return NextResponse.json({
     workflows: (data || []).map((workflow) => ({ ...workflow, latest_run: latestRuns.get(workflow.id) || null })),
+    recent_runs: recentRuns,
   }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 

@@ -15,6 +15,7 @@ import {
   Settings,
   UserCog,
   Users,
+  Zap,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
@@ -97,6 +98,7 @@ export default function Sidebar() {
   const manage: NavItem[] = isAgent ? [] : [
     { label: 'Team', href: '/team', icon: UserCog, tone: 'rose' },
     ...(can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3, tone: 'violet' as const }] : []),
+    ...(can('automations.view') ? [{ label: 'Automations', href: '/settings/automations', icon: Zap, tone: 'amber' as const }] : []),
   ];
 
   const admin: NavItem[] = isAgent ? [] : [
