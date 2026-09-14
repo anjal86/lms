@@ -54,7 +54,6 @@ export type WorkflowGraphValidation = {
 };
 
 const SUPPORTED_NODE_KINDS: WorkflowNodeKind[] = ['trigger', 'condition', 'action'];
-const CONVERSATION_ONLY_ACTIONS = new Set(['assign', 'set_state']);
 
 function nodeLabel(kind: WorkflowNodeKind, config: Record<string, unknown>, index = 0) {
   if (kind === 'trigger') return String(config.trigger_key || 'Trigger').replaceAll('_', ' ');
@@ -152,10 +151,13 @@ export function validateWorkflowGraph(graph: WorkflowGraphDefinition): WorkflowG
       for (const node of graph.nodes) {
         if (node.kind !== 'action') continue;
         const actionType = String(node.config.type || '');
-        if (CONVERSATION_ONLY_ACTIONS.has(actionType)) {
+        const isUnsafeStateAction = actionType === 'set_state';
+        const isUnsafeStrategyAssignment = actionType === 'assign' && !String(node.config.user_id || '').trim();
+        if (isUnsafeStateAction || isUnsafeStrategyAssignment) {
+          const reason = isUnsafeStrategyAssignment ? 'strategy-based assignment' : 'set state';
           issues.push({
             code: 'unsupported_action_for_trigger',
-            message: `${actionType.replaceAll('_', ' ')} requires conversation context and cannot run from ${triggerKey === '*' ? 'a wildcard' : 'a CRM'} trigger.`,
+            message: `${reason} requires conversation context and cannot run from ${triggerKey === '*' ? 'a wildcard' : 'a CRM'} trigger.`,
             nodeId: node.id,
           });
         }
