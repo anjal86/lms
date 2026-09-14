@@ -38,6 +38,7 @@ export type WorkflowGraphIssueCode =
   | 'branching_not_supported'
   | 'multiple_condition_nodes'
   | 'condition_after_action'
+  | 'unsupported_action_for_trigger'
   | 'missing_action';
 
 export type WorkflowGraphIssue = {
@@ -53,6 +54,7 @@ export type WorkflowGraphValidation = {
 };
 
 const SUPPORTED_NODE_KINDS: WorkflowNodeKind[] = ['trigger', 'condition', 'action'];
+const CONVERSATION_ONLY_ACTIONS = new Set(['assign', 'set_state']);
 
 function nodeLabel(kind: WorkflowNodeKind, config: Record<string, unknown>, index = 0) {
   if (kind === 'trigger') return String(config.trigger_key || 'Trigger').replaceAll('_', ' ');
@@ -144,6 +146,22 @@ export function validateWorkflowGraph(graph: WorkflowGraphDefinition): WorkflowG
   if (graph.nodes.every((node) => node.kind !== 'action')) issues.push({ code: 'missing_action', message: 'A workflow must contain at least one action.' });
 
   if (trigger) {
+    const triggerKey = String(trigger.config.trigger_key || '');
+    const crossContextTrigger = triggerKey === '*' || triggerKey.includes('.');
+    if (crossContextTrigger) {
+      for (const node of graph.nodes) {
+        if (node.kind !== 'action') continue;
+        const actionType = String(node.config.type || '');
+        if (CONVERSATION_ONLY_ACTIONS.has(actionType)) {
+          issues.push({
+            code: 'unsupported_action_for_trigger',
+            message: `${actionType.replaceAll('_', ' ')} requires conversation context and cannot run from ${triggerKey === '*' ? 'a wildcard' : 'a CRM'} trigger.`,
+            nodeId: node.id,
+          });
+        }
+      }
+    }
+
     const reachable = new Set<string>();
     const visiting = new Set<string>();
     let hasCycle = false;
