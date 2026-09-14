@@ -11,6 +11,7 @@ const PermissionKeys = [
   'contacts.view','contacts.edit','contacts.merge',
   'automations.view','automations.edit','automations.publish',
   'reports.view','permissions.view','permissions.manage',
+  'service_levels.view','service_levels.edit',
 ] as const;
 
 const PatchSchema = z.object({
