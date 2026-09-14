@@ -51,7 +51,7 @@ export default function MyWorkPage() {
     .filter((lead) => lead.assigned_to === currentUser.id && ACTIVE_STAGES.includes(lead.stage))
     .map((lead) => ({
       lead,
-      qualification: buildQualificationSummary(lead, config.workspace.business_type),
+      qualification: buildQualificationSummary(lead, config.workspace.business_type, config.fields),
       nextAction: getCanonicalNextAction(lead, followUps),
     }))
     .sort((left, right) => {
@@ -59,7 +59,7 @@ export default function MyWorkPage() {
       const rightDue = right.nextAction.scheduledAt ? new Date(right.nextAction.scheduledAt).getTime() : Number.POSITIVE_INFINITY;
       if (leftDue !== rightDue) return leftDue - rightDue;
       return right.lead.updated_at.localeCompare(left.lead.updated_at);
-    }), [config.workspace.business_type, currentUser.id, followUps, leads]);
+    }), [config.fields, config.workspace.business_type, currentUser.id, followUps, leads]);
 
   const stageCounts = useMemo(() => myOpportunities.reduce((result, item) => {
     result[item.lead.stage] = (result[item.lead.stage] || 0) + 1;
@@ -137,23 +137,10 @@ export default function MyWorkPage() {
                     <Link href={`/my-work/${lead.id}`} className="truncate text-sm font-semibold text-zinc-950 hover:text-blue-600">{lead.customer_name}</Link>
                     <p className="mt-1 truncate text-xs text-zinc-500">{[businessSummary, lead.customer_phone].filter(Boolean).join(' · ')}</p>
                   </div>
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Stage</div>
-                    <div className="mt-1 text-xs font-semibold text-zinc-800">{STAGE_LABELS[lead.stage]}</div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Qualified</div>
-                    <div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{qualification.percent}%</div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Next action</div>
-                    <div className="mt-1 truncate text-xs font-semibold text-zinc-800">{nextAction.title}</div>
-                    <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-zinc-500"><CalendarClock className="h-3 w-3" /> {formatNextDate(nextAction.scheduledAt)}</div>
-                  </div>
-                  <div className="flex items-center gap-2 lg:justify-end">
-                    <Link href={`/inbox/lead/${lead.id}`} className="button-secondary px-3"><MessageCircle className="h-4 w-4" /> Message</Link>
-                    <Link href={`/my-work/${lead.id}`} className="button-primary px-3">Open <ArrowRight className="h-4 w-4" /></Link>
-                  </div>
+                  <div><div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Stage</div><div className="mt-1 text-xs font-semibold text-zinc-800">{STAGE_LABELS[lead.stage]}</div></div>
+                  <div><div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Qualified</div><div className="mt-1 font-mono text-xs font-semibold text-zinc-800">{qualification.percent}%</div></div>
+                  <div className="min-w-0"><div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Next action</div><div className="mt-1 truncate text-xs font-semibold text-zinc-800">{nextAction.title}</div><div className="mt-1 inline-flex items-center gap-1 text-[10px] text-zinc-500"><CalendarClock className="h-3 w-3" /> {formatNextDate(nextAction.scheduledAt)}</div></div>
+                  <div className="flex items-center gap-2 lg:justify-end"><Link href={`/inbox/lead/${lead.id}`} className="button-secondary px-3"><MessageCircle className="h-4 w-4" /> Message</Link><Link href={`/my-work/${lead.id}`} className="button-primary px-3">Open <ArrowRight className="h-4 w-4" /></Link></div>
                 </div>
               );
             })}
