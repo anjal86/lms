@@ -1,0 +1,31 @@
+name: Patch Meta Style Chat
+
+on:
+  push:
+    branches: [feature/meta-style-chat]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[meta-chat-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/meta-style-chat
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20.19.0
+      - name: Apply UI patch
+        run: node scripts/patch-meta-chat-ui.mjs
+      - name: Commit UI patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+anjal86@users.noreply.github.com"
+          git add src/components/inbox/StableInbox.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: refine inbox chat toward Meta Business Suite [meta-chat-patched]"
+          git push origin HEAD:feature/meta-style-chat
