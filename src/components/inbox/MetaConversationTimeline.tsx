@@ -20,6 +20,8 @@ type ChatEvent = {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+  actor_id?: string | null;
+  actor?: { full_name?: string | null } | null;
 };
 
 type TimelineItem =
@@ -66,6 +68,16 @@ function label(value: string) {
 }
 
 function eventText(event: ChatEvent) {
+  if (event.event_type === 'collaborator_added' || event.event_type === 'collaborator_removed') {
+    const collaboratorId = typeof event.payload.collaborator_id === 'string' ? event.payload.collaborator_id : null;
+    const collaboratorName = String(event.payload.collaborator_name || 'team member');
+    const actorName = event.actor?.full_name || 'Team member';
+    const selfChange = Boolean(event.actor_id && collaboratorId && event.actor_id === collaboratorId);
+    if (event.event_type === 'collaborator_added') {
+      return selfChange ? `${collaboratorName} joined as collaborator` : `${actorName} added ${collaboratorName} as collaborator`;
+    }
+    return selfChange ? `${collaboratorName} left as collaborator` : `${actorName} removed ${collaboratorName} as collaborator`;
+  }
   if (event.event_type === 'assigned') return `Assigned to ${String(event.payload.assigned_to_name || 'team member')}`;
   if (event.event_type === 'priority_changed') return `Priority changed to ${String(event.payload.priority || 'updated')}`;
   if (event.event_type === 'lifecycle_changed') return `Lifecycle changed to ${label(String(event.payload.lifecycle_key || 'updated'))}`;

@@ -119,7 +119,7 @@ type SecondarySnapshot = { events: TimelineEvent[]; collaborators: Collaborator[
 
 const EMPTY_METRICS: Metrics = { totalOpen: 0, unassigned: 0, collaborations: 0, waiting: 0, snoozed: 0, unread: 0, needsReply: 0, slaOverdue: 0, highPriority: 0, hasPhone: 0 };
 const PROVIDER_ICONS: Record<string, typeof MessageSquare> = { facebook: Facebook, instagram: Instagram, whatsapp: MessageCircle, email: Mail, website: Globe };
-const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed']);
+const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed', 'collaborator_added', 'collaborator_removed']);
 const THREAD_TTL_MS = 30_000;
 const SECONDARY_TTL_MS = 60_000;
 const INITIAL_MESSAGE_LIMIT = 160;
