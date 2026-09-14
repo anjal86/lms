@@ -13,6 +13,7 @@ type FieldRow = {
   section_key: string;
   description: string | null;
   options: unknown[];
+  validation: Record<string, unknown> | null;
   is_required: boolean;
   is_searchable: boolean;
   is_filterable: boolean;
@@ -32,6 +33,10 @@ function toKey(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70);
 }
 
+function isQualificationField(field: FieldRow) {
+  return field.validation?.qualification === true;
+}
+
 export default function BusinessFieldsPage() {
   const { config, refresh: refreshWorkspace, term } = useWorkspace();
   const [fields, setFields] = useState<FieldRow[]>([]);
@@ -46,6 +51,7 @@ export default function BusinessFieldsPage() {
   const [description, setDescription] = useState('');
   const [optionsText, setOptionsText] = useState('');
   const [required, setRequired] = useState(false);
+  const [qualification, setQualification] = useState(false);
   const [searchable, setSearchable] = useState(false);
   const [filterable, setFilterable] = useState(false);
 
@@ -63,9 +69,7 @@ export default function BusinessFieldsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const grouped = useMemo(() => {
     const result = new Map<string, FieldRow[]>();
@@ -97,6 +101,7 @@ export default function BusinessFieldsPage() {
           description,
           options,
           required,
+          qualification,
           searchable,
           filterable,
           sortOrder: fields.length * 10 + 100,
@@ -109,9 +114,10 @@ export default function BusinessFieldsPage() {
       setDescription('');
       setOptionsText('');
       setRequired(false);
+      setQualification(false);
       setSearchable(false);
       setFilterable(false);
-      setMessage('Custom field added. It is now available in new lead intake.');
+      setMessage('Custom field added to the opportunity schema.');
       await Promise.all([load(), refreshWorkspace()]);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Unable to create field.');
@@ -147,14 +153,14 @@ export default function BusinessFieldsPage() {
           <Link href="/settings/business" className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900">
             <ArrowLeft className="h-3.5 w-3.5" /> Business setup
           </Link>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">{term('lead', 'Lead')} fields</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-950">{term('lead', 'Opportunity')} fields</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
-            Template fields define the business starting point. Add your own fields without changing code; custom fields survive future template changes.
+            This schema is the single source for structured opportunity data. Fields marked “Qualification” are used to calculate qualification progress.
           </p>
         </div>
         <div className="text-right text-xs text-zinc-500">
           <div className="font-semibold text-zinc-800">{config.workspace.name}</div>
-          <div>{fields.filter((field) => field.is_active).length} active fields</div>
+          <div>{fields.filter((field) => field.is_active).length} active fields · {fields.filter((field) => field.is_active && isQualificationField(field)).length} qualification criteria</div>
         </div>
       </header>
 
@@ -166,13 +172,7 @@ export default function BusinessFieldsPage() {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <section>
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-950">Current schema</h2>
-              <p className="mt-1 text-xs text-zinc-500">Fields are grouped exactly as they will appear in intake.</p>
-            </div>
-          </div>
-
+          <div className="mb-4"><h2 className="text-sm font-semibold text-zinc-950">Current schema</h2><p className="mt-1 text-xs text-zinc-500">Qualification is configured here rather than duplicated inside individual opportunity screens.</p></div>
           {loading ? (
             <div className="flex min-h-40 items-center justify-center border-y border-zinc-200 text-sm text-zinc-500"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading fields…</div>
           ) : grouped.length === 0 ? (
@@ -188,7 +188,8 @@ export default function BusinessFieldsPage() {
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="truncate text-sm font-medium text-zinc-900">{field.label}</span>
-                            {field.is_required && <span className="text-[10px] font-semibold uppercase tracking-wide text-red-600">Required</span>}
+                            {isQualificationField(field) && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">Qualification</span>}
+                            {field.is_required && <span className="text-[10px] font-semibold uppercase tracking-wide text-red-600">Required intake</span>}
                             <span className="font-mono text-[10px] text-zinc-400">{field.field_key}</span>
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
@@ -218,39 +219,20 @@ export default function BusinessFieldsPage() {
           <div className="sticky top-4">
             <h2 className="text-sm font-semibold text-zinc-950">Add custom field</h2>
             <p className="mt-1 text-xs leading-5 text-zinc-500">Use business language your team already understands.</p>
-
             <form onSubmit={createField} className="mt-5 space-y-4">
-              <label className="block text-[11px] font-medium text-zinc-600">Label
-                <input required value={label} onChange={(event) => { setLabel(event.target.value); if (!fieldKey) setFieldKey(toKey(event.target.value)); }} placeholder="e.g. Referral Doctor" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" />
-              </label>
-              <label className="block text-[11px] font-medium text-zinc-600">Field key
-                <input required value={fieldKey} onChange={(event) => setFieldKey(toKey(event.target.value))} className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 font-mono text-xs outline-none focus:border-zinc-400" />
-              </label>
-              <label className="block text-[11px] font-medium text-zinc-600">Type
-                <select value={fieldType} onChange={(event) => setFieldType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm">
-                  {TYPES.map(([value, title]) => <option key={value} value={value}>{title}</option>)}
-                </select>
-              </label>
-              <label className="block text-[11px] font-medium text-zinc-600">Section
-                <input required value={sectionKey} onChange={(event) => setSectionKey(event.target.value)} placeholder="details" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" />
-              </label>
-              <label className="block text-[11px] font-medium text-zinc-600">Description
-                <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Optional helper text" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" />
-              </label>
-              {selectType && (
-                <label className="block text-[11px] font-medium text-zinc-600">Options
-                  <textarea required value={optionsText} onChange={(event) => setOptionsText(event.target.value)} rows={4} placeholder={'Option one\nOption two\nOption three'} className="mt-1 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-zinc-400" />
-                  <span className="mt-1 block text-[10px] text-zinc-400">One per line or comma-separated.</span>
-                </label>
-              )}
+              <label className="block text-[11px] font-medium text-zinc-600">Label<input required value={label} onChange={(event) => { setLabel(event.target.value); if (!fieldKey) setFieldKey(toKey(event.target.value)); }} placeholder="e.g. Decision maker" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" /></label>
+              <label className="block text-[11px] font-medium text-zinc-600">Field key<input required value={fieldKey} onChange={(event) => setFieldKey(toKey(event.target.value))} className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 font-mono text-xs outline-none focus:border-zinc-400" /></label>
+              <label className="block text-[11px] font-medium text-zinc-600">Type<select value={fieldType} onChange={(event) => setFieldType(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm">{TYPES.map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
+              <label className="block text-[11px] font-medium text-zinc-600">Section<input required value={sectionKey} onChange={(event) => setSectionKey(event.target.value)} placeholder="details" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" /></label>
+              <label className="block text-[11px] font-medium text-zinc-600">Description<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Optional helper text" className="mt-1 h-10 w-full rounded-md border border-zinc-200 px-3 text-sm outline-none focus:border-zinc-400" /></label>
+              {selectType && <label className="block text-[11px] font-medium text-zinc-600">Options<textarea required value={optionsText} onChange={(event) => setOptionsText(event.target.value)} rows={4} placeholder={'Option one\nOption two\nOption three'} className="mt-1 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm outline-none focus:border-zinc-400" /><span className="mt-1 block text-[10px] text-zinc-400">One per line or comma-separated.</span></label>}
               <div className="space-y-2 border-t border-zinc-100 pt-4 text-xs text-zinc-600">
+                <label className="flex items-start gap-2"><input type="checkbox" checked={qualification} onChange={(event) => setQualification(event.target.checked)} className="mt-0.5" /><span><span className="font-medium text-zinc-700">Counts toward qualification</span><span className="block text-[10px] leading-4 text-zinc-400">Missing values lower the Opportunity qualification score.</span></span></label>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={required} onChange={(event) => setRequired(event.target.checked)} /> Required on intake</label>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={searchable} onChange={(event) => setSearchable(event.target.checked)} /> Searchable</label>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={filterable} onChange={(event) => setFilterable(event.target.checked)} /> Filterable</label>
               </div>
-              <button type="submit" disabled={saving} className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-4 text-xs font-semibold text-white disabled:bg-zinc-400">
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add field
-              </button>
+              <button type="submit" disabled={saving} className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-4 text-xs font-semibold text-white disabled:bg-zinc-400">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Add field</button>
             </form>
           </div>
         </aside>
