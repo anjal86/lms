@@ -26,9 +26,9 @@ type WorkflowNodeData = {
 type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
 
 const KIND_STYLES: Record<WorkflowNodeKind, { border: string; icon: string; eyebrow: string }> = {
-  trigger: { border: 'border-blue-300', icon: 'bg-blue-50 text-blue-700', eyebrow: 'text-blue-700' },
-  condition: { border: 'border-zinc-300', icon: 'bg-zinc-100 text-zinc-700', eyebrow: 'text-zinc-600' },
-  action: { border: 'border-emerald-300', icon: 'bg-emerald-50 text-emerald-700', eyebrow: 'text-emerald-700' },
+  trigger: { border: 'border-blue-200', icon: 'bg-blue-50 text-blue-700', eyebrow: 'text-blue-700' },
+  condition: { border: 'border-zinc-200', icon: 'bg-zinc-100 text-zinc-700', eyebrow: 'text-zinc-600' },
+  action: { border: 'border-emerald-200', icon: 'bg-emerald-50 text-emerald-700', eyebrow: 'text-emerald-700' },
 };
 
 function StepIcon({ kind }: { kind: WorkflowNodeKind }) {
@@ -40,13 +40,13 @@ function StepIcon({ kind }: { kind: WorkflowNodeKind }) {
 function WorkflowStepNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const style = KIND_STYLES[data.kind];
   return (
-    <div className={`w-[240px] border bg-white px-3 py-3 shadow-sm transition-shadow ${style.border} ${selected ? 'ring-2 ring-zinc-900/15 shadow-md' : ''}`}>
+    <div className={`w-[260px] rounded-xl border bg-white px-4 py-3.5 shadow-[0_10px_30px_rgba(24,24,27,0.06)] transition ${style.border} ${selected ? 'ring-2 ring-zinc-900/10 shadow-[0_16px_40px_rgba(24,24,27,0.10)]' : 'hover:shadow-[0_14px_36px_rgba(24,24,27,0.08)]'}`}>
       {data.kind !== 'trigger' && <Handle type="target" position={Position.Top} className="!h-2.5 !w-2.5 !border-2 !border-white !bg-zinc-400" />}
-      <div className="flex items-start gap-2.5">
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${style.icon}`}><StepIcon kind={data.kind} /></span>
+      <div className="flex items-start gap-3">
+        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${style.icon}`}><StepIcon kind={data.kind} /></span>
         <div className="min-w-0">
-          <div className={`text-[9px] font-bold uppercase tracking-[0.14em] ${style.eyebrow}`}>{data.kind}</div>
-          <div className="mt-0.5 truncate text-xs font-semibold capitalize text-zinc-950">{data.label}</div>
+          <div className={`text-[9px] font-bold uppercase tracking-[0.16em] ${style.eyebrow}`}>{data.kind}</div>
+          <div className="mt-0.5 truncate text-[13px] font-semibold capitalize text-zinc-950">{data.label}</div>
           <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-zinc-500">{data.summary}</div>
         </div>
       </div>
@@ -75,7 +75,7 @@ function toFlowNodes(graph: WorkflowGraphDefinition, selectedNodeId: string | nu
   return graph.nodes.map((node, index) => ({
     id: node.id,
     type: 'workflow',
-    position: { x: 40, y: 40 + index * 135 },
+    position: { x: 72, y: 56 + index * 150 },
     selected: node.id === selectedNodeId,
     data: { kind: node.kind, label: node.label, summary: summarize(node.kind, node.config) },
     draggable: true,
@@ -110,7 +110,7 @@ export default function WorkflowCanvas({
   })), [graph.edges]);
 
   return (
-    <div className="h-[430px] min-h-[360px] w-full overflow-hidden border border-zinc-200 bg-zinc-50" aria-label="Visual workflow canvas">
+    <div className="h-[430px] min-h-[360px] w-full overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm" aria-label="Visual workflow canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -121,12 +121,12 @@ export default function WorkflowCanvas({
         nodesConnectable={false}
         deleteKeyCode={null}
         fitView
-        fitViewOptions={{ padding: 0.22, maxZoom: 1 }}
-        minZoom={0.45}
+        fitViewOptions={{ padding: 0.3, maxZoom: 0.95 }}
+        minZoom={0.4}
         maxZoom={1.4}
         aria-label="Automation workflow"
       >
-        <Background gap={20} size={1} />
+        <Background gap={24} size={1} />
         <Controls showInteractive={false} position="bottom-right" />
       </ReactFlow>
     </div>
