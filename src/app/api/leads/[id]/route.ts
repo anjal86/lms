@@ -14,6 +14,12 @@ type DynamicField = {
   default_value: unknown;
 };
 
+type StageRequirement = {
+  requirement_type: 'field' | 'document';
+  requirement_key: string;
+  label: string;
+};
+
 const PatchSchema = z.object({
   customerName: z.string().trim().min(1).max(160).optional(),
   customerPhone: z.string().trim().max(64).optional(),
@@ -33,7 +39,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function isEmptyValue(value: unknown) {
-  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+  return value == null
+    || value === ''
+    || (Array.isArray(value) && value.length === 0)
+    || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as Record<string, unknown>).length === 0);
 }
 
 function normalizeDynamicValue(field: DynamicField, value: unknown) {
@@ -94,13 +103,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const { data: existing, error: existingError } = await actor.supabase
       .from('leads')
-      .select('id,assigned_to,custom_data,pipeline_id,stage')
+      .select('*')
       .eq('id', id)
       .eq('workspace_id', actor.profile.workspace_id)
       .maybeSingle();
     if (existingError) throw existingError;
     if (!existing) return NextResponse.json({ error: 'Record not found.' }, { status: 404 });
 
+    const existingRecord = existing as Record<string, unknown>;
     const patch: Record<string, unknown> = {};
     if (parsed.data.customerName !== undefined) patch.customer_name = parsed.data.customerName;
     if (parsed.data.customerPhone !== undefined) patch.customer_phone = parsed.data.customerPhone;
@@ -130,6 +140,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       patch.assigned_at = parsed.data.assignedTo ? new Date().toISOString() : null;
     }
 
+    let nextCustomData = asRecord(existing.custom_data);
     if (parsed.data.customData) {
       const { data: fieldRows, error: fieldsError } = await actor.supabase
         .from('field_definitions')
@@ -140,7 +151,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (fieldsError) throw fieldsError;
       const fields = (fieldRows || []) as DynamicField[];
       const byKey = new Map(fields.map((field) => [field.field_key, field]));
-      const merged = { ...asRecord(existing.custom_data) };
+      const merged = { ...nextCustomData };
 
       for (const [key, raw] of Object.entries(parsed.data.customData)) {
         const field = byKey.get(key);
@@ -155,6 +166,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           return NextResponse.json({ error: `${field.field_key.replaceAll('_', ' ')} is required.` }, { status: 400 });
         }
       }
+      nextCustomData = merged;
       patch.custom_data = merged;
     }
 
@@ -164,12 +176,57 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       } else {
         const { data: stage, error: stageError } = await actor.supabase
           .from('pipeline_stages')
-          .select('id,stage_type,pipelines!inner(id,workspace_id)')
+          .select('id,stage_key,stage_type,pipelines!inner(id,workspace_id)')
           .eq('id', parsed.data.pipelineStageId)
           .eq('pipelines.workspace_id', actor.profile.workspace_id)
           .maybeSingle();
         if (stageError) throw stageError;
         if (!stage) return NextResponse.json({ error: 'Pipeline stage is not available in this workspace.' }, { status: 400 });
+
+        const { data: requirementRows, error: requirementsError } = await actor.supabase
+          .from('pipeline_stage_requirements')
+          .select('requirement_type,requirement_key,label')
+          .eq('workspace_id', actor.profile.workspace_id)
+          .eq('pipeline_stage_id', stage.id)
+          .eq('is_required', true)
+          .order('sort_order');
+        if (requirementsError) throw requirementsError;
+
+        const requirements = (requirementRows || []) as StageRequirement[];
+        const documentKeys = requirements
+          .filter((item) => item.requirement_type === 'document')
+          .map((item) => item.requirement_key);
+        let verifiedDocuments = new Set<string>();
+        if (documentKeys.length) {
+          const { data: documentRows, error: documentsError } = await actor.supabase
+            .from('lead_documents')
+            .select('document_type,category,lifecycle_status')
+            .eq('lead_id', id)
+            .eq('lifecycle_status', 'verified');
+          if (documentsError) throw documentsError;
+          verifiedDocuments = new Set((documentRows || []).map((doc) => String(doc.document_type || doc.category || '')).filter(Boolean));
+        }
+
+        const missing = requirements.filter((requirement) => {
+          if (requirement.requirement_type === 'document') {
+            return !verifiedDocuments.has(requirement.requirement_key);
+          }
+          const physicalValue = Object.prototype.hasOwnProperty.call(patch, requirement.requirement_key)
+            ? patch[requirement.requirement_key]
+            : existingRecord[requirement.requirement_key];
+          const value = physicalValue === undefined ? nextCustomData[requirement.requirement_key] : physicalValue;
+          return isEmptyValue(value);
+        });
+
+        if (missing.length) {
+          return NextResponse.json({
+            error: `Complete ${missing.length} required item${missing.length === 1 ? '' : 's'} before moving to ${stage.stage_key.replaceAll('_', ' ')}.`,
+            code: 'STAGE_REQUIREMENTS_MISSING',
+            targetStageId: stage.id,
+            missing,
+          }, { status: 422 });
+        }
+
         patch.pipeline_stage_id = stage.id;
         const stageType = stage.stage_type;
         if (stageType === 'won') patch.stage = 'won';
