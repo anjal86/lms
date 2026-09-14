@@ -2,31 +2,33 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useApp } from '@/lib/store';
-import { useWorkspace } from '@/lib/platform/WorkspaceContext';
-import { exportToCsv } from '@/lib/export-csv';
 import {
-  Search,
   ArrowRight,
+  BarChart3,
+  CalendarClock,
+  Database,
+  Download,
+  FileSpreadsheet,
+  Inbox,
+  LayoutDashboard,
+  ListFilter,
+  ListChecks,
+  LoaderCircle,
+  MessageSquareQuote,
+  Plus,
+  Search,
+  Settings,
+  ShieldCheck,
+  Sparkles,
   User,
   Users,
-  CalendarClock,
-  TrendingUp,
-  Award,
-  Settings,
-  MessageSquareQuote,
-  MessageSquare,
-  Plus,
-  FileSpreadsheet,
   X,
-  Download,
-  Database,
-  LoaderCircle,
-  ListChecks,
-  LayoutDashboard,
-  PlugZap,
   Zap,
 } from 'lucide-react';
+import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
+import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
+import { exportToCsv } from '@/lib/export-csv';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -43,201 +45,137 @@ type SearchResult = {
   meta: Record<string, unknown>;
 };
 
+type PaletteItem = { label: string; hint: string; icon: typeof Search; action: () => void };
+
 export default function CommandPalette({ isOpen, onClose, onOpenNewLead, onOpenCsv }: CommandPaletteProps) {
   const router = useRouter();
   const { allLeads, exportCrmBackup, currentUser } = useApp();
   const { config, term, moduleEnabled } = useWorkspace();
+  const { can } = useWorkspacePermissions();
   const [query, setQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isAgent = currentUser.role === 'agent';
-  const canManageStorage = currentUser.role === 'admin';
-  const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const isTravel = config.workspace.business_type === 'travel';
   const leadsEnabled = moduleEnabled('leads', true);
   const inboxEnabled = moduleEnabled('inbox', true);
   const tasksEnabled = moduleEnabled('tasks', true);
   const leadLabel = term('lead', 'Lead');
   const leadPlural = term('lead_plural', 'Leads');
-  const contactLabel = term('contact', 'Contact');
   const contactPlural = term('contact_plural', 'Contacts');
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        if (isOpen) onClose();
-      } else if (event.key === 'Escape' && isOpen) {
-        onClose();
-      }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isOpen) onClose();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [isOpen, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
-    const resetTimer = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setQuery('');
-      setSearchResults([]);
-      setIsSearching(false);
-    }, 0);
-    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 50);
-    return () => {
-      window.clearTimeout(resetTimer);
-      window.clearTimeout(focusTimer);
-    };
+      setResults([]);
+      inputRef.current?.focus();
+    }, 30);
+    return () => window.clearTimeout(timer);
   }, [isOpen]);
 
   useEffect(() => {
-    const trimmed = query.trim();
-    if (!isOpen || trimmed.length < 2) {
-      const resetTimer = window.setTimeout(() => {
-        setSearchResults([]);
-        setIsSearching(false);
-      }, 0);
-      return () => window.clearTimeout(resetTimer);
+    if (!isOpen || query.trim().length < 2) {
+      const timer = window.setTimeout(() => setResults([]), 0);
+      return () => window.clearTimeout(timer);
     }
-
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      setIsSearching(true);
+      setSearching(true);
       try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}`, { signal: controller.signal, cache: 'no-store' });
-        if (!response.ok) throw new Error('Search request failed');
-        const payload = (await response.json()) as { results?: SearchResult[] };
-        setSearchResults(payload.results || []);
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error('Search failed');
+        const payload = await response.json() as { results?: SearchResult[] };
+        setResults(payload.results || []);
       } catch (error) {
-        if (!controller.signal.aborted) {
-          console.error('Search failed:', error);
-          setSearchResults([]);
-        }
+        if (!controller.signal.aborted) console.error('Command search failed:', error);
       } finally {
-        if (!controller.signal.aborted) setIsSearching(false);
+        if (!controller.signal.aborted) setSearching(false);
       }
     }, 180);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timer);
-    };
+    return () => { controller.abort(); window.clearTimeout(timer); };
   }, [isOpen, query]);
 
   if (!isOpen) return null;
-  const q = query.trim().toLowerCase();
 
-  const agentNavItems = [
-    { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    ...(inboxEnabled ? [
-      { label: 'Inbox', hint: 'Omnichannel customer conversations and work queues', path: '/inbox', icon: MessageSquare },
-      { label: contactPlural, hint: 'Customer identity, channels and lifecycle', path: '/contacts', icon: Users },
-    ] : []),
-    ...(leadsEnabled ? [{ label: 'My Work', hint: `Your active ${leadPlural.toLowerCase()}`, path: '/my-work', icon: ListChecks }] : []),
-    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: `${contactLabel}s to contact again`, path: '/my-follow-ups', icon: CalendarClock }] : []),
-    { label: 'Messages', hint: 'Saved message templates', path: '/templates', icon: MessageSquareQuote },
-    { label: 'My Profile', hint: 'Your profile and work status', path: '/profile', icon: User },
+  const navigate = (path: string) => { onClose(); router.push(path); };
+  const pageItems: PaletteItem[] = [
+    { label: 'Today', hint: 'Urgent work and exceptions', icon: LayoutDashboard, action: () => navigate('/dashboard') },
+    ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', hint: 'Customer conversations', icon: Inbox, action: () => navigate('/inbox') }] : []),
+    ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, hint: 'Customer identities and lifecycle', icon: Users, action: () => navigate('/contacts') }] : []),
+    ...(leadsEnabled ? [{ label: isAgent ? 'My Work' : `All ${leadPlural}`, hint: 'CRM pipeline', icon: ListChecks, action: () => navigate(isAgent ? '/my-work' : '/leads') }] : []),
+    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: 'Due and scheduled work', icon: CalendarClock, action: () => navigate(isAgent ? '/my-follow-ups' : '/follow-ups') }] : []),
+    { label: 'Messages', hint: 'Saved response templates', icon: MessageSquareQuote, action: () => navigate('/templates') },
+    ...(can('reports.view') ? [{ label: 'Conversation Ops', hint: 'Response, resolution and SLA analytics', icon: BarChart3, action: () => navigate('/analytics/conversations') }] : []),
+    ...(can('inbox.saved_views.manage') ? [{ label: 'Saved Inboxes', hint: 'Reusable Inbox filters', icon: ListFilter, action: () => navigate('/inbox/views') }] : []),
+    ...(can('automations.view') ? [{ label: 'Automations', hint: 'Routing and workflow rules', icon: Zap, action: () => navigate('/settings/automations') }] : []),
+    ...(can('permissions.view') ? [{ label: 'Permissions', hint: 'Role capability matrix', icon: ShieldCheck, action: () => navigate('/settings/permissions') }] : []),
+    ...(!isAgent ? [{ label: 'Service Levels', hint: 'Conversation SLA and recovery rules', icon: Sparkles, action: () => navigate('/settings/service-levels') }] : []),
+    ...(!isAgent ? [{ label: 'Settings', hint: 'Workspace configuration', icon: Settings, action: () => navigate('/settings') }] : []),
+    { label: 'My Profile', hint: 'Status and account', icon: User, action: () => navigate('/profile') },
   ];
 
-  const managementNavItems = [
-    { label: 'Today', hint: 'See what needs attention', path: '/dashboard', icon: LayoutDashboard },
-    ...(inboxEnabled ? [
-      { label: 'Inbox', hint: 'Omnichannel customer conversations and work queues', path: '/inbox', icon: MessageSquare },
-      { label: contactPlural, hint: 'Customer identity, channels and lifecycle', path: '/contacts', icon: Users },
-      { label: 'Automations', hint: 'Routing and multi-step Inbox workflows', path: '/settings/automations', icon: Zap },
+  const actions: PaletteItem[] = [
+    ...(leadsEnabled ? [{ label: `Add ${leadLabel}`, hint: `Create a new ${leadLabel.toLowerCase()}`, icon: Plus, action: () => { onClose(); onOpenNewLead?.(); } }] : []),
+    ...(inboxEnabled && can('inbox.view') ? [
+      { label: 'Open unassigned Inbox', hint: 'Conversations without an owner', icon: Inbox, action: () => navigate('/inbox?view=unassigned') },
+      { label: 'Open SLA overdue', hint: 'Customers waiting past SLA', icon: Sparkles, action: () => navigate('/inbox?view=sla_overdue') },
     ] : []),
-    ...(leadsEnabled ? [{ label: `All ${leadPlural}`, hint: `View every ${leadLabel.toLowerCase()} in one configured pipeline`, path: '/leads', icon: ArrowRight }] : []),
-    { label: 'Connections', hint: 'Connect Facebook, Instagram, WhatsApp, TikTok, email and forms', path: '/connections', icon: PlugZap },
-    ...(tasksEnabled ? [{ label: 'Follow-ups', hint: 'Upcoming and overdue follow-ups', path: '/follow-ups', icon: CalendarClock }] : []),
-    { label: 'Team', hint: 'People, assignments and workloads', path: '/team', icon: Users },
-    { label: 'Performance', hint: 'Team results and trends', path: '/analytics', icon: TrendingUp },
-    { label: 'Incentives', hint: 'Targets, tiers and payouts', path: '/incentives', icon: Award },
-    { label: 'Messages', hint: 'Saved message templates', path: '/templates', icon: MessageSquareQuote },
-    { label: 'My Profile', hint: 'Your profile and work status', path: '/profile', icon: User },
-    { label: 'Business Setup', hint: 'Fields, pipeline, modules and terminology', path: '/settings/business', icon: Settings },
-    { label: 'Settings', hint: 'Routing, timing and workspace settings', path: '/settings', icon: Settings },
-  ];
-
-  const navItems = (isAgent ? agentNavItems : managementNavItems).filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
-  const matchingLeads = leadsEnabled ? searchResults.filter((result) => result.kind === 'lead').slice(0, 6) : [];
-  const matchingAgents = isAgent ? [] : searchResults.filter((result) => result.kind === 'profile').slice(0, 4);
-
-  const basicActions = leadsEnabled
-    ? [{ label: `Add ${leadLabel}`, hint: `Create a new ${leadLabel.toLowerCase()}`, action: () => { onClose(); onOpenNewLead?.(); }, icon: Plus }]
-    : [];
-  const managementActions = [
-    ...(inboxEnabled ? [
-      { label: 'Open unassigned Inbox', hint: 'Work conversations that still need an owner', action: () => { onClose(); router.push('/inbox?view=unassigned'); }, icon: MessageSquare },
-      { label: 'Open SLA overdue', hint: 'See conversations that missed first response SLA', action: () => { onClose(); router.push('/inbox?view=sla_overdue'); }, icon: Zap },
-    ] : []),
-    { label: 'Connect a lead source', hint: 'Open omnichannel connections', action: () => { onClose(); router.push('/connections'); }, icon: PlugZap },
-    ...(leadsEnabled && isTravel ? [{ label: `Import ${leadPlural}`, hint: 'Upload a Travel CSV file', action: () => { onClose(); onOpenCsv?.(); }, icon: FileSpreadsheet }] : []),
-    ...(leadsEnabled ? [{
+    ...(leadsEnabled && isTravel && !isAgent ? [{ label: `Import ${leadPlural}`, hint: 'Upload a Travel CSV', icon: FileSpreadsheet, action: () => { onClose(); onOpenCsv?.(); } }] : []),
+    ...(leadsEnabled && !isAgent ? [{
       label: `Export ${leadPlural}`,
-      hint: 'Download CRM records as CSV',
+      hint: 'Download visible CRM records',
+      icon: Download,
       action: () => {
         onClose();
-        const dynamicColumns = config.fields
-          .filter((field) => field.entity_type === 'lead' && field.is_active)
-          .sort((a, b) => a.sort_order - b.sort_order)
-          .map((field) => ({
-            header: field.label,
-            accessor: (lead: (typeof allLeads)[number]) => {
-              const value = lead.custom_data?.[field.field_key];
-              if (Array.isArray(value)) return value.join(' | ');
-              if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-              return value == null ? '' : String(value);
-            },
-          }));
         exportToCsv(`${config.workspace.slug}_${leadPlural.toLowerCase().replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`, allLeads, [
           { header: 'Record Code', accessor: (lead) => lead.lead_code },
-          { header: contactLabel, accessor: (lead) => lead.customer_name },
+          { header: 'Name', accessor: (lead) => lead.customer_name },
           { header: 'Phone', accessor: (lead) => lead.customer_phone },
           { header: 'Email', accessor: (lead) => lead.customer_email || '' },
-          { header: 'City', accessor: (lead) => lead.customer_city || '' },
-          { header: 'Country', accessor: (lead) => lead.customer_country || '' },
-          ...dynamicColumns,
           { header: 'Stage', accessor: (lead) => lead.stage },
           { header: 'Priority', accessor: (lead) => lead.priority },
-          { header: 'Source', accessor: (lead) => lead.source },
           { header: 'Created At', accessor: (lead) => lead.created_at },
         ]);
       },
-      icon: Download,
     }] : []),
+    ...(currentUser.role === 'admin' ? [{ label: 'Download backup', hint: 'Export a JSON snapshot', icon: Database, action: () => { onClose(); exportCrmBackup(); } }] : []),
   ];
-  const adminActions = canManageStorage ? [{ label: 'Download backup', hint: 'Download a JSON snapshot', action: () => { onClose(); exportCrmBackup(); }, icon: Database }] : [];
-  const actionItems = [...basicActions, ...(canManage ? managementActions : []), ...adminActions].filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
-  const totalItemsCount = navItems.length + matchingLeads.length + matchingAgents.length + actionItems.length;
 
-  const navigate = (path: string) => { onClose(); router.push(path); };
-  const leadPath = (leadId: string) => isAgent ? `/my-work/${leadId}` : `/leads/${leadId}/workspace`;
+  const q = query.trim().toLowerCase();
+  const visiblePages = pageItems.filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
+  const visibleActions = actions.filter((item) => !q || item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q));
+  const matchingLeads = leadsEnabled ? results.filter((result) => result.kind === 'lead').slice(0, 6) : [];
+  const matchingPeople = isAgent ? [] : results.filter((result) => result.kind === 'profile').slice(0, 4);
+
+  const renderItems = (items: PaletteItem[]) => items.map((item) => <button key={item.label} type="button" onClick={item.action} className="group flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left hover:bg-zinc-100"><item.icon className="h-4 w-4 shrink-0 text-zinc-500 group-hover:text-zinc-900" /><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-zinc-900">{item.label}</div><div className="truncate text-[11px] text-zinc-400">{item.hint}</div></div><ArrowRight className="h-3.5 w-3.5 text-zinc-300" /></button>);
 
   return (
-    <div role="dialog" aria-modal="true" aria-label={`Search ${leadPlural.toLowerCase()} and pages`} className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-950/40 p-4 pt-20 backdrop-blur-2xs animate-in fade-in duration-100" onClick={onClose}>
-      <div className="flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-2xl animate-in zoom-in-95 duration-100" onClick={(event) => event.stopPropagation()}>
-        <div className="flex h-12 items-center gap-2.5 border-b border-zinc-200 bg-zinc-50/50 px-4">
-          {isSearching ? <LoaderCircle className="h-4 w-4 animate-spin text-zinc-400" /> : <Search className="h-4 w-4 text-zinc-400" />}
-          <input ref={inputRef} type="text" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isAgent ? `Search my ${leadPlural.toLowerCase()} or pages…` : `Search ${leadPlural.toLowerCase()}, team or pages…`} aria-label={`Search ${leadPlural.toLowerCase()} and pages`} className="flex-1 bg-transparent text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none" />
-          {query && <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>}
-          <kbd className="rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">ESC</kbd>
+    <div role="dialog" aria-modal="true" aria-label="Command palette" className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-950/40 p-4 pt-20 backdrop-blur-sm" onClick={onClose}>
+      <div className="flex max-h-[72vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex h-13 items-center gap-2.5 border-b border-zinc-200 bg-zinc-50/60 px-4 py-3">
+          {searching ? <LoaderCircle className="h-4 w-4 animate-spin text-zinc-400" /> : <Search className="h-4 w-4 text-zinc-400" />}
+          <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${leadPlural.toLowerCase()}, team, pages or actions…`} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-400" />
+          {query && <button type="button" onClick={() => setQuery('')} className="p-1 text-zinc-400 hover:text-zinc-700" aria-label="Clear"><X className="h-4 w-4" /></button>}
+          <kbd className="rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] text-zinc-500">ESC</kbd>
         </div>
-
-        <div className="space-y-3 overflow-y-auto p-2 text-xs">
-          {actionItems.length > 0 && <section><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Quick actions</div><div className="space-y-0.5">{actionItems.map((item) => <button key={item.label} onClick={item.action} className="group flex min-h-10 w-full items-center justify-between rounded-md px-3 text-left text-zinc-800 transition hover:bg-zinc-100"><div className="flex items-center gap-2.5"><item.icon className="h-4 w-4 text-zinc-500 group-hover:text-zinc-900" /><span className="font-medium text-zinc-900">{item.label}</span></div><span className="hidden text-[11px] text-zinc-400 sm:block">{item.hint}</span></button>)}</div></section>}
-
-          {matchingLeads.length > 0 && <section><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{leadPlural}</div><div className="space-y-0.5">{matchingLeads.map((lead) => <button key={lead.id} onClick={() => navigate(leadPath(lead.id))} className="group flex min-h-12 w-full items-center justify-between rounded-md px-3 text-left transition hover:bg-zinc-100"><div className="min-w-0"><div className="flex items-center gap-2"><span className="truncate text-sm font-medium text-zinc-900">{lead.title}</span>{!isAgent && lead.meta.possible_duplicate === true && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700">Possible duplicate</span>}</div><span className="mt-0.5 block truncate text-[11px] text-zinc-500">{lead.subtitle}</span></div>{!isAgent && <span className="ml-3 flex-none rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] capitalize text-zinc-600">{String(lead.meta.stage || leadLabel).replaceAll('_', ' ')}</span>}</button>)}</div></section>}
-
-          {matchingAgents.length > 0 && <section><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Team</div><div className="space-y-0.5">{matchingAgents.map((agent) => <button key={agent.id} onClick={() => navigate(`/team/${agent.id}`)} className="flex min-h-11 w-full items-center justify-between rounded-md px-3 text-left transition hover:bg-zinc-100"><div className="flex min-w-0 items-center gap-2.5"><User className="h-4 w-4 flex-none text-zinc-400" /><div className="min-w-0"><span className="block truncate font-medium text-zinc-900">{agent.title}</span><span className="block truncate text-[10px] text-zinc-400">{agent.subtitle}</span></div></div></button>)}</div></section>}
-
-          {navItems.length > 0 && <section><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Pages</div><div className="space-y-0.5">{navItems.map((item) => <button key={item.path} onClick={() => navigate(item.path)} className="group flex min-h-10 w-full items-center justify-between rounded-md px-3 text-left text-zinc-800 transition hover:bg-zinc-100"><div className="flex items-center gap-2.5"><item.icon className="h-4 w-4 text-zinc-400 group-hover:text-zinc-800" /><span className="font-medium text-zinc-900">{item.label}</span></div><span className="hidden text-[11px] text-zinc-400 sm:block">{item.hint}</span></button>)}</div></section>}
-
-          {q.length >= 2 && !isSearching && matchingLeads.length === 0 && matchingAgents.length === 0 && actionItems.length === 0 && navItems.length === 0 && <div className="py-8 text-center text-sm text-zinc-400">No results for “{query}”</div>}
-          {totalItemsCount === 0 && q.length < 2 && <div className="py-8 text-center text-sm text-zinc-400">Type at least 2 characters to search.</div>}
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {visibleActions.length > 0 && <section><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Quick actions</div>{renderItems(visibleActions)}</section>}
+          {matchingLeads.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{leadPlural}</div>{matchingLeads.map((result) => <button key={result.id} type="button" onClick={() => navigate(isAgent ? `/my-work/${result.id}` : `/leads/${result.id}/workspace`)} className="flex min-h-11 w-full items-center justify-between rounded-md px-3 text-left hover:bg-zinc-100"><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-900">{result.title}</div><div className="truncate text-[11px] text-zinc-400">{result.subtitle}</div></div><ArrowRight className="h-3.5 w-3.5 text-zinc-300" /></button>)}</section>}
+          {matchingPeople.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Team</div>{matchingPeople.map((result) => <button key={result.id} type="button" onClick={() => navigate(`/team/${result.id}`)} className="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left hover:bg-zinc-100"><User className="h-4 w-4 text-zinc-400" /><div className="min-w-0"><div className="truncate text-sm font-medium text-zinc-900">{result.title}</div><div className="truncate text-[11px] text-zinc-400">{result.subtitle}</div></div></button>)}</section>}
+          {visiblePages.length > 0 && <section className="mt-2"><div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Pages</div>{renderItems(visiblePages)}</section>}
+          {visibleActions.length + visiblePages.length + matchingLeads.length + matchingPeople.length === 0 && <div className="py-12 text-center text-sm text-zinc-500">No matching commands.</div>}
         </div>
-
-        <div className="flex min-h-9 items-center justify-between border-t border-zinc-100 bg-zinc-50 px-3 text-[11px] text-zinc-400"><span>{isAgent ? 'Search only shows work you can access.' : 'Search respects your access.'}</span><span>ESC to close</span></div>
       </div>
     </div>
   );
