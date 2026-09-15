@@ -21,6 +21,12 @@ const PatchSchema = z.object({
   action: z.enum(['pause', 'resume', 'disconnect']),
 });
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 async function getActor() {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -28,11 +34,12 @@ async function getActor() {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id,role,is_active')
+    .select('id,role,is_active,workspace_id')
     .eq('id', user.id)
     .maybeSingle();
 
   if (!profile?.is_active) return { error: NextResponse.json({ error: 'Account disabled.' }, { status: 403 }) } as const;
+  if (!profile.workspace_id) return { error: NextResponse.json({ error: 'Workspace is not configured.' }, { status: 409 }) } as const;
   return { supabase, user, profile } as const;
 }
 
@@ -42,8 +49,10 @@ export async function GET(request: Request) {
 
   const { data, error } = await actor.supabase
     .from('integration_connections')
-    .select('id,provider,display_name,external_account_id,status,capabilities,config,last_sync_at,last_event_at,last_error,created_at,updated_at')
-    .order('created_at', { ascending: true });
+    .select('id,workspace_id,provider,display_name,external_account_id,status,capabilities,config,visibility_scope,connected_by,last_sync_at,last_event_at,last_error,created_at,updated_at')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .order('provider', { ascending: true })
+    .order('display_name', { ascending: true });
 
   const appUrl = publicAppUrl(request.url);
   const catalog = integrationCatalogWithEnvStatus();
@@ -63,7 +72,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load connections.' }, { status: 500 });
   }
 
-  return NextResponse.json({ connections: data || [], catalog, setup, migrationRequired: false });
+  const connections = (data || []).filter((connection) => {
+    const config = asRecord(connection.config);
+    return config.hidden_from_account_picker !== true;
+  });
+
+  return NextResponse.json({ connections, catalog, setup, migrationRequired: false });
 }
 
 export async function POST(request: Request) {
@@ -89,19 +103,29 @@ export async function POST(request: Request) {
   if (!provider) return NextResponse.json({ error: 'Unsupported provider.' }, { status: 400 });
 
   const admin = createSupabaseAdminClient();
+  const config = {
+    ...(parsed.data.config || {}),
+    transport: parsed.data.provider === 'email'
+      ? (typeof parsed.data.config?.transport === 'string' ? parsed.data.config.transport : 'unconfigured')
+      : parsed.data.provider === 'website'
+        ? 'webhook'
+        : 'api',
+  };
   const { data, error } = await admin
     .from('integration_connections')
     .insert({
+      workspace_id: actor.profile.workspace_id,
       provider: parsed.data.provider,
       display_name: parsed.data.display_name,
       external_account_id: parsed.data.external_account_id || null,
       status: 'connected',
       capabilities: provider.capabilities,
-      config: parsed.data.config || {},
+      config,
       connected_by: actor.user.id,
+      visibility_scope: 'workspace',
       last_sync_at: new Date().toISOString(),
     })
-    .select('id,provider,display_name,external_account_id,status,capabilities,config,last_sync_at,last_event_at,last_error,created_at,updated_at')
+    .select('id,workspace_id,provider,display_name,external_account_id,status,capabilities,config,visibility_scope,connected_by,last_sync_at,last_event_at,last_error,created_at,updated_at')
     .single();
 
   if (error) {
@@ -129,10 +153,19 @@ export async function PATCH(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: 'Invalid connection action.' }, { status: 400 });
 
   const admin = createSupabaseAdminClient();
+  const { data: target } = await admin
+    .from('integration_connections')
+    .select('id,workspace_id')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', parsed.data.id)
+    .maybeSingle();
+  if (!target) return NextResponse.json({ error: 'Connection not found.' }, { status: 404 });
+
   const status = parsed.data.action === 'pause' ? 'paused' : parsed.data.action === 'resume' ? 'connected' : 'disconnected';
   const { data, error } = await admin
     .from('integration_connections')
     .update({ status, last_error: null })
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', parsed.data.id)
     .select('id,provider,display_name,status,updated_at')
     .single();
