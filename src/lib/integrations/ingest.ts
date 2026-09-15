@@ -68,6 +68,10 @@ function serializableInput(input: NormalizedChannelLead) {
   return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
 }
 
+function supportsOutboundReply(provider: string) {
+  return provider === 'facebook' || provider === 'instagram' || provider === 'whatsapp';
+}
+
 async function resolveIngestionScope(input: NormalizedChannelLead): Promise<IngestionScope> {
   const connectionId = input.connectionId?.trim();
   if (!connectionId) {
@@ -281,6 +285,7 @@ async function saveMessageAtomically(leadId: string | null, input: NormalizedCha
       ...(input.metadata || {}),
       workspace_id: scope.workspaceId,
       connection_id: scope.connectionId,
+      can_reply: supportsOutboundReply(input.provider),
     },
     p_source_label: input.sourceLabel || input.provider,
   });
