@@ -11,7 +11,6 @@ const MAX_MAINTENANCE_PASSES = 6;
 const MAINTENANCE_PASS_DELAY_MS = 350;
 
 type SyncPayload = {
-  conversationsCount?: number;
   messagesCount?: number;
   olderConversationsDiscovered?: number;
   historyPreviewMessagesInserted?: number;
@@ -41,7 +40,6 @@ function ScopedInbox({ refreshRevision }: { refreshRevision: number }) {
 
 function syncPayloadChanged(payload: SyncPayload) {
   return [
-    payload.conversationsCount,
     payload.messagesCount,
     payload.olderConversationsDiscovered,
     payload.historyPreviewMessagesInserted,
@@ -104,8 +102,8 @@ export default function InboxPage() {
         }
 
         // Supabase Realtime is helpful but must not be required for history discovery
-        // to become visible. Remount the Inbox data view only when the sync inserted or
-        // discovered something, preserving normal interaction when there was no change.
+        // to become visible. Remount the Inbox data view only when the sync actually
+        // inserted messages or discovered/repaired conversations.
         if (changed && !disposed) {
           setRefreshRevision((revision) => revision + 1);
         }
