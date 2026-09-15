@@ -14,7 +14,10 @@ export async function GET(request: Request) {
 
   const workspaceId = actor.profile.workspace_id;
   const now = new Date().toISOString();
-  const base = () => actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId);
+  const base = () => actor.supabase
+    .from('lead_conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', workspaceId);
 
   const [needsReply, overdue, unassigned, urgent, nextAction] = await Promise.all([
     base().eq('needs_reply', true).neq('workflow_state', 'closed'),
@@ -23,6 +26,18 @@ export async function GET(request: Request) {
     base().eq('priority', 'urgent').neq('workflow_state', 'closed'),
     base().neq('workflow_state', 'closed').not('next_action_at', 'is', null).lte('next_action_at', now),
   ]);
+
+  const conversationError = [
+    needsReply.error,
+    overdue.error,
+    unassigned.error,
+    urgent.error,
+    nextAction.error,
+  ].find(Boolean);
+  if (conversationError) {
+    console.error('Dashboard conversation exceptions failed:', conversationError.message);
+    return NextResponse.json({ error: 'Unable to load Inbox exception metrics.' }, { status: 500 });
+  }
 
   let automationFailures = 0;
   if (await actorHasPermission(actor, 'automations.view')) {
@@ -33,10 +48,16 @@ export async function GET(request: Request) {
       .eq('workspace_id', workspaceId)
       .eq('status', 'failed')
       .gte('created_at', since);
+
+    if (failureResult.error) {
+      console.error('Dashboard automation exception count failed:', failureResult.error.message);
+      return NextResponse.json({ error: 'Unable to load automation exception metrics.' }, { status: 500 });
+    }
     automationFailures = failureResult.count || 0;
   }
 
   return NextResponse.json({
+    workspaceId,
     exceptions: {
       needs_reply: needsReply.count || 0,
       sla_overdue: overdue.count || 0,
