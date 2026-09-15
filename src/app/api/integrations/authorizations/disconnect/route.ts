@@ -7,6 +7,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const META_PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp']);
 const DisconnectSchema = z.object({
   authorizationIds: z.array(uuidSchema).min(1).max(10),
 });
@@ -15,6 +16,15 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function isAuthorizationContainer(config: Record<string, unknown>) {
+  if (config.authorization_container === true || config.legacy_container === true) return true;
+  if (config.hidden_from_account_picker !== true) return false;
+  return Array.isArray(config.discovered_accounts)
+    || Array.isArray(config.pages)
+    || Array.isArray(config.whatsapp_business_accounts)
+    || Array.isArray(config.advertisers);
 }
 
 export async function POST(request: Request) {
@@ -47,23 +57,23 @@ export async function POST(request: Request) {
   }
 
   for (const authorization of authorizations) {
-    const config = asRecord(authorization.config);
-    if (config.authorization_container !== true && config.legacy_container !== true && config.hidden_from_account_picker !== true) {
+    if (!isAuthorizationContainer(asRecord(authorization.config))) {
       return NextResponse.json({ error: 'One of the selected records is not an authorization profile.' }, { status: 400 });
     }
   }
 
   const identityIds = authorizations
-    .map((auth) => {
-      const cfg = asRecord(auth.config);
-      const identity = asRecord(cfg.identity);
+    .filter((authorization) => META_PROVIDERS.has(authorization.provider))
+    .map((authorization) => {
+      const config = asRecord(authorization.config);
+      const identity = asRecord(config.identity);
       return typeof identity.id === 'string' ? identity.id.trim() : '';
     })
     .filter(Boolean);
 
   const { data: workspaceConnections, error: childLookupError } = await admin
     .from('integration_connections')
-    .select('id,config')
+    .select('id,provider,config')
     .eq('workspace_id', actor.profile.workspace_id);
 
   if (childLookupError) {
@@ -74,12 +84,12 @@ export async function POST(request: Request) {
   const childIds = (workspaceConnections || [])
     .filter((connection) => {
       if (ids.includes(connection.id)) return false;
-      const cfg = asRecord(connection.config);
-      const authId = cfg.authorization_id || cfg.legacy_parent_id;
+      const config = asRecord(connection.config);
+      const authId = config.authorization_id || config.legacy_parent_id;
       if (typeof authId === 'string' && ids.includes(authId)) return true;
-      const childIdentityId = asRecord(cfg.identity).id;
-      if (typeof childIdentityId === 'string' && identityIds.includes(childIdentityId)) return true;
-      return false;
+      if (!META_PROVIDERS.has(connection.provider)) return false;
+      const childIdentityId = asRecord(config.identity).id;
+      return typeof childIdentityId === 'string' && identityIds.includes(childIdentityId);
     })
     .map((connection) => connection.id);
 
