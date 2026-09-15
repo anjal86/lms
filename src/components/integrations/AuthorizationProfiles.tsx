@@ -29,6 +29,11 @@ function providerLabel(provider: string) {
   return provider;
 }
 
+function reconnectProvider(profile: AuthorizationProfile) {
+  if (profile.kind !== 'meta') return profile.authorizations[0]?.provider || profile.kind;
+  return profile.authorizations.find((authorization) => ['facebook', 'instagram', 'whatsapp'].includes(authorization.provider))?.provider || 'facebook';
+}
+
 export default function AuthorizationProfiles({ onChanged }: Props) {
   const [profiles, setProfiles] = useState<AuthorizationProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -163,7 +168,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                       ))}
                       {isDisconnected && (
                         <a
-                          href={`/api/integrations/oauth/${profile.kind === 'meta' ? 'facebook' : profile.kind}/start`}
+                          href={`/api/integrations/oauth/${reconnectProvider(profile)}/start`}
                           className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50"
                         >
                           <RefreshCw className="h-3 w-3" /> Reconnect login
@@ -187,7 +192,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                       type="button"
                       onClick={() => setPendingDelete(profile)}
                       className="button-secondary button-sm shrink-0 text-red-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
-                      title="Completely remove this account and its pages"
+                      title="Remove this authorization and its connected assets from this workspace"
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Remove account
                     </button>
@@ -224,7 +229,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
                   <p>This disconnects {pendingDisconnect.connected_assets} active business asset{pendingDisconnect.connected_assets === 1 ? '' : 's'} from this workspace and removes their stored provider credentials. Existing conversations and customer history are preserved.</p>
                 </div>
-                <p className="text-xs leading-5 text-zinc-500">This does not delete the external provider accounts themselves. You can re-authorize or permanently delete this profile at any time.</p>
+                <p className="text-xs leading-5 text-zinc-500">This does not delete the external provider accounts themselves. You can re-authorize or remove this profile from the workspace later.</p>
               </div>
               <div className="flex justify-end gap-2 border-t border-zinc-200 p-4">
                 <button type="button" onClick={() => setPendingDisconnect(null)} disabled={busy} className="button-secondary">Cancel</button>
@@ -251,7 +256,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                 <div className="flex gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></span>
                   <div>
-                    <h2 id="delete-profile-title" className="text-sm font-semibold text-zinc-950">Remove main account &amp; all linked pages?</h2>
+                    <h2 id="delete-profile-title" className="text-sm font-semibold text-zinc-950">Remove account &amp; linked assets?</h2>
                     <p className="mt-1 text-xs leading-5 text-zinc-500">{pendingDelete.display_name}</p>
                   </div>
                 </div>
@@ -261,18 +266,16 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                 <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-900">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <div>
-                    <p className="font-medium">Permanently deletes this main account and all {pendingDelete.total_assets} linked page{pendingDelete.total_assets === 1 ? '' : 's'} from this CRM workspace.</p>
-                    <p className="mt-1 text-[11px] text-red-700">All stored OAuth credentials will be completely erased.</p>
+                    <p className="font-medium">This removes the authorization and all {pendingDelete.total_assets} linked asset{pendingDelete.total_assets === 1 ? '' : 's'} from active use in this workspace.</p>
+                    <p className="mt-1 text-[11px] text-red-700">Stored OAuth credentials are erased and the accounts stop receiving or sending new CRM traffic.</p>
                   </div>
                 </div>
-                <p className="text-xs leading-5 text-zinc-500">
-                  Existing customer contacts, messages, and lead conversation histories remain safely stored in your CRM.
-                </p>
+                <p className="text-xs leading-5 text-zinc-500">Existing customer contacts, messages and conversation history remain stored with their original source-account linkage for audit/history purposes.</p>
               </div>
               <div className="flex justify-end gap-2 border-t border-zinc-200 p-4">
                 <button type="button" onClick={() => setPendingDelete(null)} disabled={busy} className="button-secondary">Cancel</button>
                 <button type="button" onClick={() => void deleteProfile()} disabled={busy} className="button-primary bg-red-600 hover:bg-red-700">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Remove account &amp; pages
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Remove from workspace
                 </button>
               </div>
             </div>
