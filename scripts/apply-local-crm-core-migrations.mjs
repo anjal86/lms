@@ -93,6 +93,10 @@ const migrations = [
     file: '202609150052_whatsapp_connection_access.sql',
     applied: () => exists("select to_regprocedure('public.can_access_conversation(uuid)') is not null and coalesce(position('can_access_conversation' in pg_get_expr(polqual, polrelid)), 0) > 0 from pg_policy where polname='lead_conversations_read' limit 1"),
   },
+  {
+    file: '202609150053_whatsapp_single_owner_assignment.sql',
+    applied: () => exists("select position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
