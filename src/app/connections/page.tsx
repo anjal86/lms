@@ -27,6 +27,7 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
+import AuthorizationProfiles from '@/components/integrations/AuthorizationProfiles';
 import BaileysWhatsAppConnect from '@/components/integrations/BaileysWhatsAppConnect';
 import AppOverlayPortal from '@/components/layout/AppOverlayPortal';
 import { useApp } from '@/lib/store';
@@ -347,6 +348,8 @@ export default function ConnectionsPage() {
           {data.migrationRequired && <code className="mt-2 inline-block rounded bg-white/70 px-2 py-1 text-[11px]">npm run db:migrate:local</code>}
         </div>
       )}
+
+      <AuthorizationProfiles onChanged={load} />
 
       <section className="grid gap-3 lg:grid-cols-2">
         {data.catalog.map((provider) => {
