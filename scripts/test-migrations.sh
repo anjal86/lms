@@ -116,10 +116,12 @@ on conflict (id) do nothing;
 
 set role service_role;
 set request.jwt.claims = '{"role":"service_role"}';
-update public.profiles set role='admin', is_active=true where id='11111111-1111-1111-1111-111111111111';
-update public.profiles set role='agent', is_active=true where id='22222222-2222-2222-2222-222222222222';
-update public.profiles set role='agent', is_active=false where id='33333333-3333-3333-3333-333333333333';
-update public.profiles set role='agent', is_active=true where id='44444444-4444-4444-4444-444444444444';
+-- New users intentionally begin without a workspace. Test fixtures explicitly join
+-- the legacy workspace so the RLS checks model a real accepted membership.
+update public.profiles set role='admin', workspace_id='00000000-0000-0000-0000-000000000001', is_active=true where id='11111111-1111-1111-1111-111111111111';
+update public.profiles set role='agent', workspace_id='00000000-0000-0000-0000-000000000001', is_active=true where id='22222222-2222-2222-2222-222222222222';
+update public.profiles set role='agent', workspace_id='00000000-0000-0000-0000-000000000001', is_active=false where id='33333333-3333-3333-3333-333333333333';
+update public.profiles set role='agent', workspace_id='00000000-0000-0000-0000-000000000001', is_active=true where id='44444444-4444-4444-4444-444444444444';
 set request.jwt.claims = '{}';
 reset role;
 
@@ -166,6 +168,31 @@ agent_load="$(query_as '11111111-1111-1111-1111-111111111111' "select current_lo
 [[ "$agent_chat_access" == "t" ]] || { echo "Expected agent to access assigned conversation"; exit 1; }
 [[ "$other_chat_access" == "f" ]] || { echo "Agent unexpectedly accessed another agent's conversation"; exit 1; }
 [[ "$agent_load" == "1" ]] || { echo "Expected database-maintained current_load=1 for agent, got '$agent_load'"; exit 1; }
+
+echo "==> Exercising multi-company workspace membership..."
+docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
+insert into public.workspaces(id,name,slug,business_type,template_key)
+values ('99999999-9999-9999-9999-999999999998','Second Client','second-client','generic','generic')
+on conflict (id) do nothing;
+
+insert into public.workspace_members(workspace_id,user_id,role,is_active,joined_at)
+values ('99999999-9999-9999-9999-999999999998','22222222-2222-2222-2222-222222222222','manager',true,now())
+on conflict (workspace_id,user_id) do update set role='manager',is_active=true;
+SQL
+
+second_membership="$(query_as '22222222-2222-2222-2222-222222222222' "select public.is_workspace_member('99999999-9999-9999-9999-999999999998');")"
+nonmember_second="$(query_as '44444444-4444-4444-4444-444444444444' "select public.is_workspace_member('99999999-9999-9999-9999-999999999998');")"
+[[ "$second_membership" == "t" ]] || { echo "Expected agent to belong to second client workspace"; exit 1; }
+[[ "$nonmember_second" == "f" ]] || { echo "Unrelated user unexpectedly belongs to second client workspace"; exit 1; }
+
+switched_role="$(query_as '22222222-2222-2222-2222-222222222222' "select public.switch_workspace('99999999-9999-9999-9999-999999999998');")"
+second_role="$(query_as '22222222-2222-2222-2222-222222222222' 'select public.current_workspace_role();')"
+second_compat_role="$(query_as '22222222-2222-2222-2222-222222222222' 'select public.current_user_role();')"
+[[ "$switched_role" == "manager" && "$second_role" == "manager" && "$second_compat_role" == "manager" ]] || { echo "Expected workspace-specific manager role after switch, got switch=$switched_role actual=$second_role compat=$second_compat_role"; exit 1; }
+
+back_role="$(query_as '22222222-2222-2222-2222-222222222222' "select public.switch_workspace('00000000-0000-0000-0000-000000000001');")"
+back_actual="$(query_as '22222222-2222-2222-2222-222222222222' 'select public.current_workspace_role();')"
+[[ "$back_role" == "agent" && "$back_actual" == "agent" ]] || { echo "Expected original workspace role to remain agent after switching back"; exit 1; }
 
 echo "==> Exercising CRM core integrity paths..."
 docker exec -e PGPASSWORD="$PASSWORD" -i "$CONTAINER" "${PSQL[@]}" <<'SQL'
@@ -271,4 +298,4 @@ SQL
 cumulative_missing="$(query_as '11111111-1111-1111-1111-111111111111' "select count(*) from public.lead_stage_missing_requirements('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1','77777777-7777-7777-7777-777777777772') where requirement_key='customer_city';")"
 [[ "$cumulative_missing" == "1" ]] || { echo "Expected cumulative stage gate to include prior-stage customer_city requirement, got $cumulative_missing"; exit 1; }
 
-echo "==> Migration chain, RLS and CRM core integrity tests passed."
+echo "==> Migration chain, RLS, multi-company tenancy and CRM core integrity tests passed."
