@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       permissions,
       is_active,
       joined_at,
-      profile:profiles(*)
+      profile:profiles!workspace_members_user_id_fkey(*)
     `)
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('is_active', true)
