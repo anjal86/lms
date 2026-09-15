@@ -117,6 +117,10 @@ const migrations = [
     file: '202609150058_multi_company_workspace_membership.sql',
     applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='workspace_members' and column_name='role') and to_regclass('public.workspace_invitations') is not null and to_regprocedure('public.current_workspace_role()') is not null and to_regprocedure('public.switch_workspace(uuid)') is not null and to_regprocedure('public.create_workspace_for_current_user(text,text)') is not null"),
   },
+  {
+    file: '202609150059_workspace_scoped_staff_routing.sql',
+    applied: () => exists("select position('from public.workspace_members wm' in lower(pg_get_functiondef(to_regprocedure('public.route_lead_atomic(uuid,text,uuid,boolean)')))) > 0 and position('wm.role=''agent''' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation_worker(uuid,text)')))) > 0 and position('wm.workspace_id=v_conversation.workspace_id' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)')))) > 0"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
