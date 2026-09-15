@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import StableInbox from '@/components/inbox/StableInbox';
 
 const AUTO_SYNC_INTERVAL_MS = 30_000;
@@ -65,5 +65,9 @@ export default function InboxPage() {
     };
   }, []);
 
-  return <StableInbox />;
+  return (
+    <Suspense fallback={<div className="flex h-full items-center justify-center p-8 text-xs text-zinc-400">Loading inbox…</div>}>
+      <StableInbox />
+    </Suspense>
+  );
 }

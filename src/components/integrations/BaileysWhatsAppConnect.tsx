@@ -1,10 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertCircle,
   ArrowLeft,
   Check,
+  Inbox,
   Link2,
   Loader2,
   Plus,
@@ -302,7 +304,16 @@ export default function BaileysWhatsAppConnect({
                       </div>
                     )}
                     {selectedState === 'connecting' && <div className="flex min-h-48 flex-col items-center justify-center text-center"><Loader2 className="h-5 w-5 animate-spin text-zinc-500" /><div className="mt-3 text-sm font-semibold text-zinc-900">Preparing connection</div><div className="mt-1 text-xs text-zinc-500">Your QR code will appear here.</div></div>}
-                    {selectedState === 'connected' && <div className="flex min-h-44 flex-col items-center justify-center text-center"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><Check className="h-5 w-5" /></span><div className="mt-3 text-sm font-semibold text-zinc-950">WhatsApp is connected</div><div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">Messages will sync automatically with the CRM inbox.</div></div>}
+                    {selectedState === 'connected' && (
+                      <div className="flex min-h-44 flex-col items-center justify-center text-center">
+                        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><Check className="h-5 w-5" /></span>
+                        <div className="mt-3 text-sm font-semibold text-zinc-950">WhatsApp is connected</div>
+                        <div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">Messages will sync automatically with the CRM inbox.</div>
+                        <Link href="/inbox?provider=whatsapp" className="button-secondary button-sm mt-4" aria-label="Open WhatsApp messages in inbox">
+                          <Inbox className="h-3.5 w-3.5" /> Open WhatsApp Inbox
+                        </Link>
+                      </div>
+                    )}
                     {selectedState === 'attention' && <div className="flex min-h-44 flex-col items-center justify-center text-center"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-rose-50 text-rose-600"><WifiOff className="h-5 w-5" /></span><div className="mt-3 text-sm font-semibold text-zinc-950">Reconnect this account</div><div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">{selected.bridge?.lastError || selected.last_error || 'The WhatsApp session is no longer active.'}</div><button type="button" onClick={() => void reconnect(selected.id)} disabled={busyId === selected.id} className="button-primary button-sm mt-4">{busyId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Reconnect</button></div>}
                     {selectedState === 'disconnected' && <div className="flex min-h-44 flex-col items-center justify-center text-center"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 text-zinc-500"><Smartphone className="h-5 w-5" /></span><div className="mt-3 text-sm font-semibold text-zinc-950">Account disconnected</div><div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">Your CRM history is safe. Reconnect to resume WhatsApp syncing.</div><button type="button" onClick={() => void reconnect(selected.id)} disabled={busyId === selected.id} className="button-primary button-sm mt-4">{busyId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Connect</button></div>}
                   </div>

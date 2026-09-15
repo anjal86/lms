@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   Facebook,
   Globe2,
+  Inbox,
   Instagram,
   Link2,
   Loader2,
@@ -299,11 +301,39 @@ export default function ConnectionsPage() {
                   {provider.id !== 'whatsapp' && active && <div className="mt-3.5 rounded-md border border-zinc-200 bg-zinc-50/60 p-2.5 text-xs"><div className="font-semibold text-zinc-800">{active.display_name}</div><div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-zinc-500">{active.last_event_at && <span>Last event {new Date(active.last_event_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}{active.external_account_id && <span className="font-mono">{active.external_account_id}</span>}</div>{active.last_error && <div className="mt-1.5 text-[10px] text-red-600">{active.last_error}</div>}</div>}
                 </div>
 
-                {provider.id === 'whatsapp' ? <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 bg-zinc-50/70 px-4 py-2.5"><button type="button" onClick={() => setWhatsappDrawerOpen(true)} className="button-primary button-sm"><QrCode className="h-3.5 w-3.5" />{baileysConnections.length > 0 ? `Manage WhatsApp (${baileysConnections.length})` : 'Connect with QR'}</button>{!provider.configured && <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500"><Settings2 className="h-3.5 w-3.5" /> Official API</button>}</div> : <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 bg-zinc-50/70 px-4 py-2.5">
-                  {!active || active.status === 'disconnected' ? provider.connectMode === 'manual' ? <button type="button" onClick={() => void connectManual(provider)} disabled={isBusy || data.migrationRequired} className="button-primary button-sm">{isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Enable</button> : provider.configured && !data.migrationRequired ? <a href={`/api/integrations/oauth/${provider.id}/start`} className="button-primary button-sm"><ExternalLink className="h-3.5 w-3.5" /> Continue with {provider.id === 'tiktok' ? 'TikTok' : 'Meta'}</a> : <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-primary button-sm" disabled={data.migrationRequired}><Settings2 className="h-3.5 w-3.5" /> Configure official API</button> : active.status === 'paused' ? <button type="button" onClick={() => void updateConnection(active, 'resume')} disabled={isBusy} className="button-primary button-sm"><PlugZap className="h-3.5 w-3.5" /> Resume</button> : <button type="button" onClick={() => void updateConnection(active, 'pause')} disabled={isBusy} className="button-secondary button-sm"><CirclePause className="h-3.5 w-3.5" /> Pause</button>}
-                  {active && active.status !== 'disconnected' && <button type="button" onClick={() => void updateConnection(active, 'disconnect')} disabled={isBusy} className="button-ghost button-sm text-red-600"><Unplug className="h-3.5 w-3.5" /> Disconnect</button>}
-                  {!provider.configured && provider.connectMode !== 'manual' && <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500"><Settings2 className="h-3.5 w-3.5" /> Official API setup</button>}
-                </div>}
+                {provider.id === 'whatsapp' ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 bg-zinc-50/70 px-4 py-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={() => setWhatsappDrawerOpen(true)} className="button-primary button-sm">
+                        <QrCode className="h-3.5 w-3.5" />
+                        {baileysConnections.length > 0 ? `Manage WhatsApp (${baileysConnections.length})` : 'Connect with QR'}
+                      </button>
+                      {providerConnected && (
+                        <Link href="/inbox?provider=whatsapp" className="button-secondary button-sm" aria-label="View WhatsApp conversations in inbox">
+                          <Inbox className="h-3.5 w-3.5" />
+                          <span>View in Inbox</span>
+                        </Link>
+                      )}
+                    </div>
+                    {!provider.configured && (
+                      <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500">
+                        <Settings2 className="h-3.5 w-3.5" /> Official API
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 bg-zinc-50/70 px-4 py-2.5">
+                    {active?.status === 'connected' && (
+                      <Link href={`/inbox?provider=${provider.id}`} className="button-secondary button-sm" aria-label={`View ${provider.name} conversations in inbox`}>
+                        <Inbox className="h-3.5 w-3.5" />
+                        <span>View in Inbox</span>
+                      </Link>
+                    )}
+                    {!active || active.status === 'disconnected' ? provider.connectMode === 'manual' ? <button type="button" onClick={() => void connectManual(provider)} disabled={isBusy || data.migrationRequired} className="button-primary button-sm">{isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Enable</button> : provider.configured && !data.migrationRequired ? <a href={`/api/integrations/oauth/${provider.id}/start`} className="button-primary button-sm"><ExternalLink className="h-3.5 w-3.5" /> Continue with {provider.id === 'tiktok' ? 'TikTok' : 'Meta'}</a> : <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-primary button-sm" disabled={data.migrationRequired}><Settings2 className="h-3.5 w-3.5" /> Configure official API</button> : active.status === 'paused' ? <button type="button" onClick={() => void updateConnection(active, 'resume')} disabled={isBusy} className="button-primary button-sm"><PlugZap className="h-3.5 w-3.5" /> Resume</button> : <button type="button" onClick={() => void updateConnection(active, 'pause')} disabled={isBusy} className="button-secondary button-sm"><CirclePause className="h-3.5 w-3.5" /> Pause</button>}
+                    {active && active.status !== 'disconnected' && <button type="button" onClick={() => void updateConnection(active, 'disconnect')} disabled={isBusy} className="button-ghost button-sm text-red-600"><Unplug className="h-3.5 w-3.5" /> Disconnect</button>}
+                    {!provider.configured && provider.connectMode !== 'manual' && <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500"><Settings2 className="h-3.5 w-3.5" /> Official API setup</button>}
+                  </div>
+                )}
               </article>
             );
           })}

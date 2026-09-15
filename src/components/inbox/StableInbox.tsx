@@ -130,29 +130,44 @@ function label(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/
 function shortTime(value?: string | null) { if (!value) return '—'; const date = new Date(value); return date.toDateString() === new Date().toDateString() ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : date.toLocaleDateString([], { month: 'short', day: 'numeric' }); }
 function duration(seconds?: number | null) { if (seconds == null) return '—'; if (seconds < 60) return `${seconds}s`; if (seconds < 3600) return `${Math.round(seconds / 60)}m`; return `${Math.round(seconds / 360) / 10}h`; }
 function queueFromParam(value: string | null): QueueKey { const allowed: QueueKey[] = ['all','mine','unassigned','collaborations','unread','needs_reply','sla_overdue','high_priority','has_phone','waiting','snoozed','closed']; return allowed.includes(value as QueueKey) ? value as QueueKey : 'all'; }
+function sortFromParam(value: string | null): SortKey { const allowed: SortKey[] = ['newest', 'oldest', 'waiting', 'sla']; return allowed.includes(value as SortKey) ? value as SortKey : 'newest'; }
+function tabFromParam(value: string | null): ContextTab { const allowed: ContextTab[] = ['details', 'history', 'assist', 'crm']; return allowed.includes(value as ContextTab) ? value as ContextTab : 'details'; }
+function providerFromParam(value: string | null): string { const allowed = ['all', 'facebook', 'instagram', 'whatsapp', 'email', 'website', 'tiktok']; return value && allowed.includes(value.toLowerCase()) ? value.toLowerCase() : 'all'; }
+function parseInboxParams(source: { get: (key: string) => string | null }) {
+  return {
+    conversationId: source.get('conversationId') || source.get('id') || source.get('conversation') || null,
+    queue: queueFromParam(source.get('view') || source.get('filter') || source.get('queue')),
+    provider: providerFromParam(source.get('provider') || source.get('channel')),
+    sort: sortFromParam(source.get('sort')),
+    search: source.get('search') || source.get('q') || '',
+    state: source.get('state') || '',
+    priority: source.get('priority') || '',
+    tab: tabFromParam(source.get('tab')),
+  };
+}
 function sla(conversation: Conversation) { if (conversation.workflow_state === 'closed') return { text: 'Resolved', danger: false }; if (conversation.needs_reply && conversation.first_responded_at) return { text: 'Needs reply', danger: false }; if (conversation.first_responded_at) return { text: 'Responded', danger: false }; if (!conversation.first_response_due_at) return { text: 'No SLA', danger: false }; const ms = new Date(conversation.first_response_due_at).getTime() - Date.now(); const mins = Math.max(1, Math.floor(Math.abs(ms) / 60000)); return { text: ms < 0 ? `${mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`} overdue` : `${mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`} left`, danger: ms < 0 }; }
 
 export default function StableInbox() {
   const params = useSearchParams();
+  const initialParams = useMemo(() => parseInboxParams(params), [params]);
   const { currentUser, allProfiles, showToast } = useApp();
   const { config, term } = useWorkspace();
   const { can } = useWorkspacePermissions();
   const contactLabel = term('contact', 'Contact');
   const leadLabel = term('lead', 'Lead');
-  const [initialConversationId] = useState<string | null>(() => params.get('conversationId'));
 
-  const [queue, setQueue] = useState<QueueKey>(() => queueFromParam(params.get('view')));
-  const [provider, setProvider] = useState('all');
-  const [state, setState] = useState('');
-  const [priority, setPriority] = useState('');
-  const [sort, setSort] = useState<SortKey>('newest');
-  const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [queue, setQueue] = useState<QueueKey>(() => initialParams.queue);
+  const [provider, setProvider] = useState(() => initialParams.provider);
+  const [state, setState] = useState(() => initialParams.state);
+  const [priority, setPriority] = useState(() => initialParams.priority);
+  const [sort, setSort] = useState<SortKey>(() => initialParams.sort);
+  const [search, setSearch] = useState(() => initialParams.search);
+  const [debouncedSearch, setDebouncedSearch] = useState(() => initialParams.search);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [activeSavedView, setActiveSavedView] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialParams.conversationId);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -160,7 +175,7 @@ export default function StableInbox() {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [contextTab, setContextTab] = useState<ContextTab>('details');
+  const [contextTab, setContextTab] = useState<ContextTab>(() => initialParams.tab);
   const [contextOpen, setContextOpen] = useState(false);
   const [replyMode, setReplyMode] = useState<ReplyMode>('outbound');
   const [replyBody, setReplyBody] = useState('');
@@ -201,8 +216,152 @@ export default function StableInbox() {
     user: { id: currentUser.id, full_name: currentUser.full_name, avatar_url: currentUser.avatar_url },
   });
 
+  const syncUrl = useCallback((updates: {
+    conversationId?: string | null;
+    view?: QueueKey | null;
+    provider?: string | null;
+    sort?: SortKey | null;
+    search?: string | null;
+    state?: string | null;
+    priority?: string | null;
+    tab?: ContextTab | null;
+  }, options?: { replace?: boolean }) => {
+    try {
+      if (typeof window === 'undefined') return;
+      const url = new URL(window.location.href);
+
+      if ('conversationId' in updates) {
+        if (updates.conversationId) {
+          url.searchParams.set('conversationId', updates.conversationId);
+        } else {
+          url.searchParams.delete('conversationId');
+          url.searchParams.delete('id');
+          url.searchParams.delete('conversation');
+        }
+      }
+
+      if ('view' in updates) {
+        if (updates.view && updates.view !== 'all') {
+          url.searchParams.set('view', updates.view);
+        } else {
+          url.searchParams.delete('view');
+          url.searchParams.delete('filter');
+          url.searchParams.delete('queue');
+        }
+      }
+
+      if ('provider' in updates) {
+        if (updates.provider && updates.provider !== 'all') {
+          url.searchParams.set('provider', updates.provider);
+        } else {
+          url.searchParams.delete('provider');
+          url.searchParams.delete('channel');
+        }
+      }
+
+      if ('sort' in updates) {
+        if (updates.sort && updates.sort !== 'newest') {
+          url.searchParams.set('sort', updates.sort);
+        } else {
+          url.searchParams.delete('sort');
+        }
+      }
+
+      if ('search' in updates) {
+        const term = updates.search?.trim();
+        if (term) {
+          url.searchParams.set('search', term);
+        } else {
+          url.searchParams.delete('search');
+          url.searchParams.delete('q');
+        }
+      }
+
+      if ('state' in updates) {
+        if (updates.state) {
+          url.searchParams.set('state', updates.state);
+        } else {
+          url.searchParams.delete('state');
+        }
+      }
+
+      if ('priority' in updates) {
+        if (updates.priority) {
+          url.searchParams.set('priority', updates.priority);
+        } else {
+          url.searchParams.delete('priority');
+        }
+      }
+
+      if ('tab' in updates) {
+        if (updates.tab && updates.tab !== 'details') {
+          url.searchParams.set('tab', updates.tab);
+        } else {
+          url.searchParams.delete('tab');
+        }
+      }
+
+      const nextSearch = url.searchParams.toString();
+      const nextQuery = nextSearch ? `?${nextSearch}` : '';
+      const nextUrl = `${url.pathname}${nextQuery}${url.hash}`;
+      const currentQuery = window.location.search ? `?${new URLSearchParams(window.location.search).toString()}` : '';
+      const currentUrl = `${window.location.pathname}${currentQuery}${window.location.hash}`;
+
+      if (nextUrl !== currentUrl) {
+        if (options?.replace) {
+          window.history.replaceState(window.history.state, '', nextUrl);
+        } else {
+          window.history.pushState(window.history.state, '', nextUrl);
+        }
+      }
+    } catch {
+      // noop
+    }
+  }, []);
+
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
-  useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 220); return () => window.clearTimeout(timer); }, [search]);
+
+  useEffect(() => {
+    const p = parseInboxParams(params);
+    setSelectedId((curr) => (curr === p.conversationId ? curr : p.conversationId));
+    setQueue((curr) => (curr === p.queue ? curr : p.queue));
+    setProvider((curr) => (curr === p.provider ? curr : p.provider));
+    setSort((curr) => (curr === p.sort ? curr : p.sort));
+    setSearch((curr) => (curr === p.search ? curr : p.search));
+    setDebouncedSearch((curr) => (curr === p.search ? curr : p.search));
+    setState((curr) => (curr === p.state ? curr : p.state));
+    setPriority((curr) => (curr === p.priority ? curr : p.priority));
+    setContextTab((curr) => (curr === p.tab ? curr : p.tab));
+  }, [params]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const sp = new URLSearchParams(window.location.search);
+      const p = parseInboxParams(sp);
+      setSelectedId(p.conversationId);
+      setQueue(p.queue);
+      setProvider(p.provider);
+      setSort(p.sort);
+      setSearch(p.search);
+      setDebouncedSearch(p.search);
+      setState(p.state);
+      setPriority(p.priority);
+      setContextTab(p.tab);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const trimmed = search.trim();
+      setDebouncedSearch(trimmed);
+      syncUrl({ search: trimmed }, { replace: true });
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [search, syncUrl]);
+
   useEffect(() => {
     const onComposerError = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
@@ -239,13 +398,22 @@ export default function StableInbox() {
       const rows = (payload.conversations || []) as Conversation[];
       setConversations(rows);
       setMetrics({ ...EMPTY_METRICS, ...(payload.metrics || {}) });
-      setSelectedId((current) => current || initialConversationId || rows[0]?.id || null);
+      setSelectedId((current) => {
+        if (current) return current;
+        const fromParam = initialParams.conversationId;
+        const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 1024;
+        const target = fromParam || (isDesktop ? rows[0]?.id : null) || null;
+        if (target && isDesktop && !fromParam && rows[0]?.id === target) {
+          syncUrl({ conversationId: target }, { replace: true });
+        }
+        return target;
+      });
     } catch (error) {
       if (!quiet) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
     } finally {
       if (!quiet) setLoadingList(false);
     }
-  }, [debouncedSearch, initialConversationId, priority, provider, queue, showToast, sort, state]);
+  }, [debouncedSearch, initialParams.conversationId, priority, provider, queue, showToast, sort, state, syncUrl]);
 
   const applyThreadSnapshot = useCallback((snapshot: ThreadSnapshot) => {
     setSelected(snapshot.conversation);
@@ -378,12 +546,8 @@ export default function StableInbox() {
     }
     const secondary = secondaryCache.current.get(conversation.id);
     if (secondary) { setEvents(secondary.events); setCollaborators(secondary.collaborators); }
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.set('conversationId', conversation.id);
-      window.history.replaceState(null, '', url.toString());
-    } catch { /* noop */ }
-  }, [applyThreadSnapshot, setContextOpen]);
+    syncUrl({ conversationId: conversation.id });
+  }, [applyThreadSnapshot, setContextOpen, syncUrl]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void Promise.all([loadViews(), loadList()]); }, 0);
@@ -678,12 +842,26 @@ export default function StableInbox() {
 
   const applySavedView = (view: SavedView) => {
     setActiveSavedView(view.id);
-    setQueue(view.filters.filter || 'all');
-    setProvider(view.filters.provider || 'all');
-    setState(view.filters.state || '');
-    setPriority(view.filters.priority || '');
-    setSort(view.filters.sort || 'newest');
-    setSearch(view.filters.search || '');
+    const q = view.filters.filter || 'all';
+    const p = view.filters.provider || 'all';
+    const st = view.filters.state || '';
+    const pr = view.filters.priority || '';
+    const so = view.filters.sort || 'newest';
+    const sr = view.filters.search || '';
+    setQueue(q);
+    setProvider(p);
+    setState(st);
+    setPriority(pr);
+    setSort(so);
+    setSearch(sr);
+    syncUrl({
+      view: q,
+      provider: p,
+      state: st || null,
+      priority: pr || null,
+      sort: so,
+      search: sr || null,
+    });
   };
 
   const standardViews = [
@@ -722,7 +900,7 @@ export default function StableInbox() {
   );
 
   const context = selected ? <section aria-label="Conversation details" className="flex h-full min-h-0 flex-col bg-white">
-    <div data-context-tabs="true">{(['details','history','assist','crm'] as ContextTab[]).map((tab) => <button key={tab} type="button" aria-selected={contextTab === tab} onClick={() => setContextTab(tab)}>{tab === 'crm' ? 'CRM' : label(tab)}</button>)}</div>
+    <div data-context-tabs="true">{(['details','history','assist','crm'] as ContextTab[]).map((tab) => <button key={tab} type="button" aria-selected={contextTab === tab} onClick={() => { setContextTab(tab); syncUrl({ tab }, { replace: true }); }}>{tab === 'crm' ? 'CRM' : label(tab)}</button>)}</div>
     <div className="relative min-h-0 flex-1 overflow-y-auto p-4">
       {contextBusy && <div className="absolute right-3 top-3"><Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" /></div>}
       {contextTab === 'details' && <div className="space-y-5">
@@ -748,9 +926,9 @@ export default function StableInbox() {
         <div className="flex h-14 items-center gap-2 border-b border-zinc-200 px-3"><InboxIcon className="h-4 w-4" /><span className="text-sm font-semibold">Inbox</span>{metrics.slaOverdue > 0 && <span className="ml-auto rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-700">{metrics.slaOverdue}</span>}</div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
           <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Standard</div>
-          {standardViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-zinc-900 text-white' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className="font-mono text-[10px]">{item.count}</span>}</button>; })}
+          {standardViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); syncUrl({ view: item.key, state: null, priority: null }); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-zinc-900 text-white' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className="font-mono text-[10px]">{item.count}</span>}</button>; })}
           <div className="mt-4 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Exceptions</div>
-          {exceptionViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-white text-zinc-950 ring-1 ring-zinc-200' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className={`font-mono text-[10px] ${item.key === 'sla_overdue' && item.count ? 'text-rose-600' : ''}`}>{item.count}</span>}</button>; })}
+          {exceptionViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); syncUrl({ view: item.key, state: null, priority: null }); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-white text-zinc-950 ring-1 ring-zinc-200' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className={`font-mono text-[10px] ${item.key === 'sla_overdue' && item.count ? 'text-rose-600' : ''}`}>{item.count}</span>}</button>; })}
           {savedViews.length > 0 && <><div className="mt-4 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Saved</div>{savedViews.map((view) => <button key={view.id} type="button" onClick={() => applySavedView(view)} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${activeSavedView === view.id ? 'bg-blue-50 text-blue-800 ring-1 ring-blue-100' : 'text-zinc-700 hover:bg-zinc-100'}`}><History className="h-3.5 w-3.5" /><span className="flex-1 truncate">{view.name}</span>{view.is_shared && <Users className="h-3 w-3 text-zinc-400" />}</button>)}</>}
           {can('inbox.saved_views.manage') && <Link href="/inbox/views" className="mt-3 flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"><Plus className="h-3.5 w-3.5" /> Manage saved views</Link>}
         </div>
@@ -758,9 +936,9 @@ export default function StableInbox() {
 
       <section aria-label="Inbox conversations" className={`${selectedId ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col border-r border-zinc-200`}>
         <div className="shrink-0 border-b border-zinc-200 p-3">
-          <div className="flex gap-2 lg:hidden"><select aria-label="Inbox view" value={queue} onChange={(e) => { setActiveSavedView(null); setQueue(e.target.value as QueueKey); }} className="select-field h-9 flex-1 text-xs">{[...standardViews, ...exceptionViews].map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><button type="button" aria-label="Sync inbox" onClick={() => void syncProvider()} className="button-secondary button-sm" disabled={syncing}><RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /></button></div>
+          <div className="flex gap-2 lg:hidden"><select aria-label="Inbox view" value={queue} onChange={(e) => { const val = e.target.value as QueueKey; setActiveSavedView(null); setQueue(val); setState(''); setPriority(''); syncUrl({ view: val, state: null, priority: null }); }} className="select-field h-9 flex-1 text-xs">{[...standardViews, ...exceptionViews].map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><button type="button" aria-label="Sync inbox" onClick={() => void syncProvider()} className="button-secondary button-sm" disabled={syncing}><RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /></button></div>
           <div className="mt-2 flex gap-2 lg:mt-0"><div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" /><input aria-label="Search conversations" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${contactLabel.toLowerCase()} or message`} className="field h-9 pl-8 text-xs" /></div><button type="button" aria-label="Sync inbox" onClick={() => void syncProvider()} className="button-secondary button-sm hidden lg:inline-flex" disabled={syncing}><RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /></button></div>
-          <div className="mt-2 grid grid-cols-2 gap-2"><select aria-label="Filter by channel" value={provider} onChange={(e) => setProvider(e.target.value)} className="select-field h-8 text-xs"><option value="all">All channels</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="website">Website</option></select><select aria-label="Sort conversations" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="select-field h-8 text-xs"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="waiting">Longest waiting</option><option value="sla">SLA soonest</option></select></div>
+          <div className="mt-2 grid grid-cols-2 gap-2"><select aria-label="Filter by channel" value={provider} onChange={(e) => { const val = e.target.value; setProvider(val); syncUrl({ provider: val }); }} className="select-field h-8 text-xs"><option value="all">All channels</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="whatsapp">WhatsApp</option><option value="email">Email</option><option value="website">Website</option></select><select aria-label="Sort conversations" value={sort} onChange={(e) => { const val = e.target.value as SortKey; setSort(val); syncUrl({ sort: val }, { replace: true }); }} className="select-field h-8 text-xs"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="waiting">Longest waiting</option><option value="sla">SLA soonest</option></select></div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-zinc-100">{loadingList ? <div className="flex h-32 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Inbox…</div> : conversations.length === 0 ? <div className="px-6 py-16 text-center"><InboxIcon className="mx-auto h-6 w-6 text-zinc-300" /><div className="mt-2 text-sm font-semibold">Nothing here</div><p className="mt-1 text-xs text-zinc-500">This view is clear.</p></div> : conversations.map((conversation) => { const info = sla(conversation); return <InboxConversationListItem key={conversation.id} conversation={conversation} selected={selectedId === conversation.id} contactLabel={contactLabel} statusText={info.text} statusDanger={info.danger} onSelect={() => selectConversation(conversation)} />; })}</div>
       </section>
@@ -769,7 +947,7 @@ export default function StableInbox() {
         {!selected ? <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a conversation to start working.</div> : <>
           <header className="relative flex min-h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3">
             {refreshingThread && <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-zinc-100"><div className="h-full w-1/3 animate-pulse bg-blue-500" /></div>}
-            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div></div></div>
+            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); syncUrl({ conversationId: null }); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div></div></div>
             <div className="flex min-w-0 items-center gap-2"><ConversationPresenceIndicator members={presence.members} typingMembers={presence.typingMembers} /><div className="flex shrink-0 items-center gap-1.5">{!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}<button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>{selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}<div className="relative"><button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>{moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}</div></div></div>
           </header>
 
