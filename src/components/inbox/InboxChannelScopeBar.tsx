@@ -50,17 +50,22 @@ export default function InboxChannelScopeBar() {
     return () => { alive = false; };
   }, []);
 
+  const activeConnections = useMemo(
+    () => connections.filter((connection) => connection.status === 'connected' || connection.status === 'paused'),
+    [connections]
+  );
+
   const grouped = useMemo(() => {
     const map = new Map<string, Connection[]>();
-    for (const connection of connections) {
+    for (const connection of activeConnections) {
       const list = map.get(connection.provider) || [];
       list.push(connection);
       map.set(connection.provider, list);
     }
     return [...map.entries()];
-  }, [connections]);
+  }, [activeConnections]);
 
-  const selected = connections.find((connection) => connection.id === selectedId) || null;
+  const selected = activeConnections.find((connection) => connection.id === selectedId) || null;
 
   const changeAccount = (connectionId: string) => {
     const next = new URLSearchParams(params.toString());
@@ -68,7 +73,7 @@ export default function InboxChannelScopeBar() {
       next.delete('accountId');
       next.delete('accountProvider');
     } else {
-      const connection = connections.find((item) => item.id === connectionId);
+      const connection = activeConnections.find((item) => item.id === connectionId);
       if (!connection) return;
       next.set('accountId', connection.id);
       next.set('accountProvider', connection.provider);
@@ -81,6 +86,8 @@ export default function InboxChannelScopeBar() {
     router.replace(query ? `/inbox?${query}` : '/inbox');
   };
 
+  const value = selected ? selected.id : '';
+
   return (
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-3 lg:px-4">
       <div className="hidden items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-zinc-400 sm:flex">
@@ -92,7 +99,7 @@ export default function InboxChannelScopeBar() {
         ) : (
           <select
             aria-label="Working channel account"
-            value={selectedId}
+            value={value}
             onChange={(event) => changeAccount(event.target.value)}
             className="select-field h-8 w-full text-xs"
           >
@@ -101,7 +108,7 @@ export default function InboxChannelScopeBar() {
               <optgroup key={provider} label={PROVIDER_LABELS[provider] || provider}>
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.display_name}{account.status !== 'connected' ? ` · ${account.status.replaceAll('_', ' ')}` : ''}
+                    {account.display_name}{account.status === 'paused' ? ' · paused' : ''}
                   </option>
                 ))}
               </optgroup>
