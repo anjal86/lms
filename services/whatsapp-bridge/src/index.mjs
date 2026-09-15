@@ -62,6 +62,16 @@ function normalizePhoneFromJid(jid) {
   return String(jid).split('@')[0].split(':')[0].replace(/\D/g, '');
 }
 
+function isLidJid(jid) {
+  return typeof jid === 'string' && (jid.endsWith('@lid') || jid.endsWith('@hosted.lid'));
+}
+
+function toPnJid(value) {
+  if (!value || isLidJid(value)) return null;
+  const digits = normalizePhoneFromJid(value);
+  return digits ? `${digits}@s.whatsapp.net` : null;
+}
+
 function targetJid(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) throw new Error('A WhatsApp phone number is required.');
@@ -245,11 +255,58 @@ function isRecentApiSend(instance, fingerprint, messageId) {
   return false;
 }
 
+function rememberContactName(instance, jid, ...names) {
+  const name = firstText(...names);
+  if (!jid || !name) return null;
+  instance.contactNames.set(jid, name);
+  return name;
+}
+
+async function resolvePnForLid(instance, lid) {
+  if (!isLidJid(lid)) return toPnJid(lid);
+  const cached = instance.lidMappings.get(lid);
+  if (cached && !isLidJid(cached)) return toPnJid(cached) || cached;
+
+  const getPNForLID = instance.sock?.signalRepository?.lidMapping?.getPNForLID;
+  if (typeof getPNForLID === 'function') {
+    try {
+      const mapped = await getPNForLID.call(instance.sock.signalRepository.lidMapping, lid);
+      const normalized = toPnJid(mapped);
+      if (normalized) {
+        instance.lidMappings.set(lid, normalized);
+        return normalized;
+      }
+    } catch (error) {
+      logger.debug({ lid, err: error instanceof Error ? error.message : String(error) }, 'Unable to resolve WhatsApp LID to phone JID');
+    }
+  }
+  return null;
+}
+
+async function detectOwnPhone(instance, state, sock) {
+  const directCandidates = [state?.creds?.me?.id, sock?.user?.id];
+  for (const candidate of directCandidates) {
+    if (!candidate || isLidJid(candidate)) continue;
+    const phone = normalizePhoneFromJid(candidate);
+    if (phone) return phone;
+  }
+
+  const ownLid = state?.creds?.me?.lid || sock?.user?.lid;
+  if (ownLid) {
+    const mapped = await resolvePnForLid(instance, ownLid);
+    const phone = normalizePhoneFromJid(mapped);
+    if (phone) return phone;
+  }
+  return '';
+}
+
 async function emitWebhook(instanceId, event, data) {
   const payload = JSON.stringify({ instanceId, event, data, emittedAt: new Date().toISOString() });
   const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7_000);
     try {
       const response = await fetch(CRM_WEBHOOK_URL, {
         method: 'POST',
@@ -258,13 +315,16 @@ async function emitWebhook(instanceId, event, data) {
           'x-whatsapp-signature': signature,
         },
         body: payload,
+        signal: controller.signal,
       });
       if (response.ok) return;
       lastError = new Error(`CRM webhook returned ${response.status}.`);
     } catch (error) {
       lastError = error;
+    } finally {
+      clearTimeout(timeout);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
   }
   logger.warn({ instanceId, event, err: lastError?.message }, 'CRM webhook delivery failed');
 }
@@ -306,25 +366,11 @@ function cacheMediaMessage(instance, message, summary, buffer = null) {
   });
 }
 
-async function downloadMessageMedia(instance, message, summary) {
-  if (!summary?.hasMedia || !instance.sock) return null;
-  const messageId = message.key?.id || '';
-  try {
-    const buffer = await downloadMediaMessage(
-      message,
-      'buffer',
-      {},
-      { logger: waLogger, reuploadRequest: (msg) => instance.sock?.updateMediaMessage(msg) }
-    );
-    if (buffer && buffer.length > 0) {
-      cacheMediaMessage(instance, message, summary, buffer);
-      return buffer;
-    }
-  } catch (mediaError) {
-    logger.warn({ messageId, err: mediaError instanceof Error ? mediaError.message : String(mediaError) }, 'Failed to download WhatsApp media');
-  }
-  cacheMediaMessage(instance, message, summary, null);
-  return null;
+function queuePendingLidMessage(instance, lid, message) {
+  const pending = instance.pendingLidMessages.get(lid) || [];
+  pending.push({ message, receivedAt: Date.now() });
+  if (pending.length > 50) pending.splice(0, pending.length - 50);
+  instance.pendingLidMessages.set(lid, pending);
 }
 
 async function startInstance(instanceId) {
@@ -347,7 +393,11 @@ async function startInstance(instanceId) {
     apiFingerprints: new Map(),
     mediaMessages: new Map(),
     lidMappings: new Map(),
+    contactNames: new Map(),
+    pendingLidMessages: new Map(),
   };
+  instance.contactNames ||= new Map();
+  instance.pendingLidMessages ||= new Map();
   instance.starting = true;
   instance.status = 'connecting';
   instance.lastError = null;
@@ -371,8 +421,26 @@ async function startInstance(instanceId) {
       generateHighQualityLinkPreview: false,
     });
     instance.sock = sock;
+    instance.phone = await detectOwnPhone(instance, state, sock) || instance.phone;
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+      try {
+        await saveCreds();
+        const detectedPhone = await detectOwnPhone(instance, state, sock);
+        if (detectedPhone && detectedPhone !== instance.phone) {
+          instance.phone = detectedPhone;
+          if (instance.status === 'connected') {
+            await emitWebhook(id, 'connection.update', {
+              status: 'connected',
+              phone: instance.phone,
+              name: sock.user?.name || null,
+            });
+          }
+        }
+      } catch (error) {
+        logger.warn({ instanceId: id, err: error instanceof Error ? error.message : String(error) }, 'Failed to persist WhatsApp credentials');
+      }
+    });
 
     sock.ev.on('connection.update', async (update) => {
       if (update.qr) {
@@ -385,7 +453,7 @@ async function startInstance(instanceId) {
         instance.status = 'connected';
         instance.qrDataUrl = null;
         instance.lastError = null;
-        instance.phone = normalizePhoneFromJid(sock.user?.id || '');
+        instance.phone = await detectOwnPhone(instance, state, sock) || instance.phone;
         await emitWebhook(id, 'connection.update', {
           status: 'connected',
           phone: instance.phone || null,
@@ -418,15 +486,24 @@ async function startInstance(instanceId) {
       }
     });
 
-    function extractMessagePayload(message, instanceRef, contactMap) {
+    async function extractMessagePayload(message, instanceRef, contactMap) {
       const rawJid = message.key?.remoteJid;
       if (!rawJid || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter')) return null;
 
       let preferredJid = rawJid;
-      if (rawJid.endsWith('@lid')) {
-        if (message.key?.remoteJidAlt) preferredJid = message.key.remoteJidAlt;
-        else if (instanceRef.lidMappings?.has(rawJid)) preferredJid = instanceRef.lidMappings.get(rawJid);
+      if (isLidJid(rawJid)) {
+        const alternateJid = message.key?.remoteJidAlt;
+        if (alternateJid && !isLidJid(alternateJid)) {
+          preferredJid = toPnJid(alternateJid) || alternateJid;
+          instanceRef.lidMappings.set(rawJid, preferredJid);
+        } else {
+          const mapped = await resolvePnForLid(instanceRef, rawJid);
+          if (!mapped) return { unresolvedLid: rawJid };
+          preferredJid = mapped;
+        }
       }
+
+      if (isLidJid(preferredJid)) return { unresolvedLid: rawJid };
       const phone = normalizePhoneFromJid(preferredJid);
       if (!phone) return null;
 
@@ -439,11 +516,22 @@ async function startInstance(instanceId) {
         ? message.messageTimestamp
         : Number(message.messageTimestamp || Math.floor(Date.now() / 1000));
 
-      const pushName = message.pushName || contactMap?.get(preferredJid) || contactMap?.get(rawJid) || null;
+      const pushName = firstText(
+        message.pushName,
+        contactMap?.get(preferredJid),
+        contactMap?.get(rawJid),
+        instanceRef.contactNames.get(preferredJid),
+        instanceRef.contactNames.get(rawJid)
+      );
+      if (pushName) {
+        rememberContactName(instanceRef, preferredJid, pushName);
+        rememberContactName(instanceRef, rawJid, pushName);
+      }
 
       return {
         id: messageId,
         jid: preferredJid,
+        rawJid,
         phone,
         fromMe,
         origin,
@@ -459,42 +547,112 @@ async function startInstance(instanceId) {
       };
     }
 
+    async function publishContactUpdates(items) {
+      const payloads = [];
+      for (const item of items || []) {
+        const rawJid = String(item?.id || '');
+        const name = firstText(item?.notify, item?.name, item?.verifiedName);
+        if (!rawJid || !name) continue;
+        rememberContactName(instance, rawJid, name);
+        let resolvedJid = rawJid;
+        if (isLidJid(rawJid)) resolvedJid = await resolvePnForLid(instance, rawJid) || rawJid;
+        if (resolvedJid !== rawJid) rememberContactName(instance, resolvedJid, name);
+        const phone = isLidJid(resolvedJid) ? null : normalizePhoneFromJid(resolvedJid) || null;
+        payloads.push({ jid: resolvedJid, rawJid, phone, name });
+      }
+      if (payloads.length) await emitWebhook(id, 'contacts.batch', { contacts: payloads.slice(0, 500) });
+    }
+
+    async function processLiveMessage(message) {
+      const payload = await extractMessagePayload(message, instance);
+      if (!payload) return;
+      if (payload.unresolvedLid) {
+        queuePendingLidMessage(instance, payload.unresolvedLid, message);
+        logger.debug({ lid: payload.unresolvedLid, messageId: message.key?.id }, 'Deferring WhatsApp message until LID phone mapping is available');
+        return;
+      }
+
+      const summary = payload.rawSummary;
+      if (payload.mediaAvailableOnDevice) cacheMediaMessage(instance, message, summary, null);
+      delete payload.rawSummary;
+      await emitWebhook(id, 'message', payload);
+    }
+
+    async function flushPendingLidMessages(lid) {
+      const pending = instance.pendingLidMessages.get(lid) || [];
+      if (!pending.length) return;
+      instance.pendingLidMessages.delete(lid);
+      await Promise.allSettled(pending.map(({ message }) => processLiveMessage(message)));
+    }
+
+    sock.ev.on('contacts.upsert', (contacts) => {
+      void publishContactUpdates(contacts).catch((error) => {
+        logger.debug({ err: error instanceof Error ? error.message : String(error) }, 'Unable to publish WhatsApp contact updates');
+      });
+    });
+
+    sock.ev.on('contacts.update', (contacts) => {
+      void publishContactUpdates(contacts).catch((error) => {
+        logger.debug({ err: error instanceof Error ? error.message : String(error) }, 'Unable to publish WhatsApp contact updates');
+      });
+    });
+
+    sock.ev.on('chats.upsert', (chats) => {
+      void publishContactUpdates(chats).catch(() => undefined);
+    });
+
+    sock.ev.on('chats.update', (chats) => {
+      void publishContactUpdates(chats).catch(() => undefined);
+    });
+
     sock.ev.on('lid-mapping.update', async ({ lid, pn }) => {
       if (lid && pn) {
-        const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
+        const fullPn = toPnJid(pn) || (pn.includes('@') ? pn : `${pn}@s.whatsapp.net`);
         instance.lidMappings.set(lid, fullPn);
+        const knownName = firstText(instance.contactNames.get(lid), instance.contactNames.get(fullPn));
+        if (knownName) {
+          rememberContactName(instance, lid, knownName);
+          rememberContactName(instance, fullPn, knownName);
+        }
         await emitWebhook(id, 'lid-mapping.update', { lid, pn: fullPn });
+        await flushPendingLidMessages(lid);
       }
     });
 
     sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, lidPnMappings, syncType, progress, isLatest }) => {
       logger.info({ count: messages?.length || 0, chatsCount: chats?.length || 0, syncType, progress, isLatest }, 'Received messaging-history.set');
+      const mappingWebhooks = [];
       if (Array.isArray(lidPnMappings)) {
         for (const { lid, pn } of lidPnMappings) {
           if (lid && pn) {
-            const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
+            const fullPn = toPnJid(pn) || (pn.includes('@') ? pn : `${pn}@s.whatsapp.net`);
             instance.lidMappings.set(lid, fullPn);
-            await emitWebhook(id, 'lid-mapping.update', { lid, pn: fullPn });
+            mappingWebhooks.push(emitWebhook(id, 'lid-mapping.update', { lid, pn: fullPn }));
           }
         }
       }
+      if (mappingWebhooks.length) void Promise.allSettled(mappingWebhooks);
 
-      const contactMap = new Map();
+      const contactMap = new Map(instance.contactNames);
       for (const contact of contacts || []) {
-        if (contact.id && (contact.notify || contact.name)) {
-          contactMap.set(contact.id, contact.notify || contact.name);
+        const name = firstText(contact.notify, contact.name, contact.verifiedName);
+        if (contact.id && name) {
+          contactMap.set(contact.id, name);
+          rememberContactName(instance, contact.id, name);
         }
       }
       for (const chat of chats || []) {
         if (chat.id && chat.name) {
           contactMap.set(chat.id, chat.name);
+          rememberContactName(instance, chat.id, chat.name);
         }
       }
+      void publishContactUpdates([...(contacts || []), ...(chats || [])]).catch(() => undefined);
 
       const payloads = [];
       for (const message of messages || []) {
-        const payload = extractMessagePayload(message, instance, contactMap);
-        if (!payload) continue;
+        const payload = await extractMessagePayload(message, instance, contactMap);
+        if (!payload || payload.unresolvedLid) continue;
         const summary = payload.rawSummary;
         if (payload.mediaAvailableOnDevice) cacheMediaMessage(instance, message, summary, null);
         delete payload.rawSummary;
@@ -516,32 +674,22 @@ async function startInstance(instanceId) {
       }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-      for (const message of messages || []) {
-        const payload = extractMessagePayload(message, instance);
-        if (!payload) continue;
-        const summary = payload.rawSummary;
-        delete payload.rawSummary;
-
-        if (payload.mediaAvailableOnDevice) {
-          const buffer = await downloadMessageMedia(instance, message, summary);
-          if (buffer && buffer.length <= 12 * 1024 * 1024) {
-            payload.mediaBase64 = buffer.toString('base64');
-          }
-        }
-
-        await emitWebhook(id, 'message', payload);
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type && type !== 'notify') {
+        logger.debug({ type, count: messages?.length || 0 }, 'Skipping non-realtime messages.upsert; history is handled by messaging-history.set');
+        return;
       }
+      await Promise.allSettled((messages || []).map((message) => processLiveMessage(message)));
     });
 
     sock.ev.on('messages.update', async (updates) => {
-      for (const update of updates || []) {
-        if (!update.key?.id || update.update?.status == null) continue;
+      await Promise.allSettled((updates || []).map(async (update) => {
+        if (!update.key?.id || update.update?.status == null) return;
         await emitWebhook(id, 'message.status', {
           id: update.key.id,
           status: Number(update.update.status),
         });
-      }
+      }));
     });
 
     return instance;
