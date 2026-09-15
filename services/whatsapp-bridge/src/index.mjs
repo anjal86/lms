@@ -70,46 +70,154 @@ function targetJid(value) {
 
 function unwrapMessage(message) {
   let current = message || {};
-  for (let depth = 0; depth < 4; depth += 1) {
+  for (let depth = 0; depth < 10; depth += 1) {
     if (current.ephemeralMessage?.message) current = current.ephemeralMessage.message;
     else if (current.viewOnceMessage?.message) current = current.viewOnceMessage.message;
     else if (current.viewOnceMessageV2?.message) current = current.viewOnceMessageV2.message;
     else if (current.viewOnceMessageV2Extension?.message) current = current.viewOnceMessageV2Extension.message;
     else if (current.documentWithCaptionMessage?.message) current = current.documentWithCaptionMessage.message;
+    else if (current.deviceSentMessage?.message) current = current.deviceSentMessage.message;
+    else if (current.editedMessage?.message) current = current.editedMessage.message;
+    else if (current.associatedChildMessage?.message) current = current.associatedChildMessage.message;
+    else if (current.groupMentionedMessage?.message) current = current.groupMentionedMessage.message;
+    else if (current.lottieStickerMessage?.message) current = current.lottieStickerMessage.message;
+    else if (current.protocolMessage?.editedMessage?.message) current = current.protocolMessage.editedMessage.message;
+    else if (current.protocolMessage?.editedMessage) current = current.protocolMessage.editedMessage;
     else break;
   }
   return current;
 }
 
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function interactiveReplyText(message) {
+  const nativeFlow = message.interactiveResponseMessage?.nativeFlowResponseMessage;
+  const paramsJson = nativeFlow?.paramsJson;
+  if (typeof paramsJson === 'string' && paramsJson.trim()) {
+    try {
+      const parsed = JSON.parse(paramsJson);
+      if (parsed && typeof parsed === 'object') {
+        return firstText(
+          parsed.title,
+          parsed.display_text,
+          parsed.displayText,
+          parsed.text,
+          parsed.name,
+          parsed.id,
+          parsed.row_id,
+          parsed.selectedRowId
+        );
+      }
+    } catch {
+      // Keep checking other interactive fields.
+    }
+  }
+  return firstText(
+    message.interactiveResponseMessage?.body?.text,
+    nativeFlow?.name
+  );
+}
+
+function nestedText(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 2) return null;
+  const preferredKeys = ['text', 'caption', 'title', 'displayText', 'selectedDisplayText', 'description', 'name'];
+  for (const key of preferredKeys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  for (const child of Object.values(value)) {
+    if (!child || typeof child !== 'object' || Array.isArray(child)) continue;
+    const candidate = nestedText(child, depth + 1);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
 function messageSummary(rawMessage) {
   const message = unwrapMessage(rawMessage);
-  if (typeof message.conversation === 'string') return { type: 'text', body: message.conversation };
-  if (typeof message.extendedTextMessage?.text === 'string') return { type: 'text', body: message.extendedTextMessage.text };
+  if (typeof message.conversation === 'string') return { type: 'text', body: message.conversation, hasMedia: false };
+  if (typeof message.extendedTextMessage?.text === 'string') return { type: 'text', body: message.extendedTextMessage.text, hasMedia: false };
+
+  const buttonText = firstText(
+    message.buttonsResponseMessage?.selectedDisplayText,
+    message.buttonsResponseMessage?.selectedButtonId,
+    message.templateButtonReplyMessage?.selectedDisplayText,
+    message.templateButtonReplyMessage?.selectedId,
+    message.listResponseMessage?.title,
+    message.listResponseMessage?.description,
+    message.listResponseMessage?.singleSelectReply?.selectedRowId,
+    interactiveReplyText(message)
+  );
+  if (buttonText) return { type: 'text', body: buttonText, hasMedia: false };
+
+  const pollName = firstText(
+    message.pollCreationMessage?.name,
+    message.pollCreationMessageV2?.name,
+    message.pollCreationMessageV3?.name
+  );
+  if (pollName) return { type: 'text', body: pollName, hasMedia: false };
+
   if (message.imageMessage) return {
     type: 'image',
     body: message.imageMessage.caption || '[Photo]',
     mimeType: message.imageMessage.mimetype || 'image/jpeg',
+    hasMedia: true,
   };
   if (message.videoMessage) return {
     type: 'video',
     body: message.videoMessage.caption || '[Video]',
     mimeType: message.videoMessage.mimetype || 'video/mp4',
+    hasMedia: true,
   };
   if (message.audioMessage) return {
     type: 'audio',
     body: '[Voice message]',
     mimeType: message.audioMessage.mimetype || 'audio/ogg',
+    hasMedia: true,
   };
   if (message.documentMessage) return {
     type: 'file',
-    body: `[File: ${message.documentMessage.fileName || 'Attachment'}]`,
+    body: message.documentMessage.caption || `[File: ${message.documentMessage.fileName || 'Attachment'}]`,
     fileName: message.documentMessage.fileName || null,
     mimeType: message.documentMessage.mimetype || 'application/octet-stream',
+    hasMedia: true,
   };
-  if (message.stickerMessage) return { type: 'media', body: '[Sticker]', mimeType: 'image/webp' };
-  if (message.contactMessage || message.contactsArrayMessage) return { type: 'media', body: '[Contact]' };
-  if (message.locationMessage || message.liveLocationMessage) return { type: 'media', body: '[Location]' };
-  return { type: 'media', body: '[WhatsApp message]' };
+  if (message.stickerMessage) return {
+    type: 'image',
+    body: '[Sticker]',
+    mimeType: message.stickerMessage.mimetype || 'image/webp',
+    hasMedia: true,
+  };
+
+  if (message.contactMessage) {
+    const name = firstText(message.contactMessage.displayName, message.contactMessage.vcard);
+    return { type: 'text', body: name ? `Contact: ${name}` : '[Contact]', hasMedia: false };
+  }
+  if (message.contactsArrayMessage) {
+    const names = Array.isArray(message.contactsArrayMessage.contacts)
+      ? message.contactsArrayMessage.contacts.map((contact) => firstText(contact?.displayName)).filter(Boolean)
+      : [];
+    return { type: 'text', body: names.length ? `Contacts: ${names.join(', ')}` : '[Contacts]', hasMedia: false };
+  }
+  if (message.locationMessage || message.liveLocationMessage) {
+    const location = message.locationMessage || message.liveLocationMessage;
+    const lat = Number(location.degreesLatitude);
+    const lng = Number(location.degreesLongitude);
+    const label = firstText(location.name, location.address);
+    const coordinates = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat}, ${lng}` : null;
+    return { type: 'text', body: firstText(label, coordinates ? `Location: ${coordinates}` : null) || '[Location]', hasMedia: false };
+  }
+  if (message.reactionMessage?.text) return { type: 'text', body: `Reaction: ${message.reactionMessage.text}`, hasMedia: false };
+  if (message.protocolMessage?.type != null) return { type: 'text', body: '[WhatsApp system message]', hasMedia: false };
+
+  const fallback = nestedText(message);
+  if (fallback) return { type: 'text', body: fallback, hasMedia: false };
+  return { type: 'text', body: '[WhatsApp message]', hasMedia: false };
 }
 
 function apiFingerprint(jid, summary) {
@@ -184,6 +292,39 @@ function pruneMediaMessages(instance) {
     const oldestKeys = Array.from(instance.mediaMessages.keys()).slice(0, instance.mediaMessages.size - 500);
     for (const key of oldestKeys) instance.mediaMessages.delete(key);
   }
+}
+
+function cacheMediaMessage(instance, message, summary, buffer = null) {
+  const messageId = message.key?.id || '';
+  if (!messageId || !summary?.hasMedia) return;
+  pruneMediaMessages(instance);
+  instance.mediaMessages.set(messageId, {
+    message,
+    summary,
+    buffer,
+    receivedAt: Date.now(),
+  });
+}
+
+async function downloadMessageMedia(instance, message, summary) {
+  if (!summary?.hasMedia || !instance.sock) return null;
+  const messageId = message.key?.id || '';
+  try {
+    const buffer = await downloadMediaMessage(
+      message,
+      'buffer',
+      {},
+      { logger: waLogger, reuploadRequest: (msg) => instance.sock?.updateMediaMessage(msg) }
+    );
+    if (buffer && buffer.length > 0) {
+      cacheMediaMessage(instance, message, summary, buffer);
+      return buffer;
+    }
+  } catch (mediaError) {
+    logger.warn({ messageId, err: mediaError instanceof Error ? mediaError.message : String(mediaError) }, 'Failed to download WhatsApp media');
+  }
+  cacheMediaMessage(instance, message, summary, null);
+  return null;
 }
 
 async function startInstance(instanceId) {
@@ -277,61 +418,63 @@ async function startInstance(instanceId) {
       }
     });
 
-function extractMessagePayload(message, instance, contactMap) {
-  const rawJid = message.key?.remoteJid;
-  if (!rawJid || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter')) return null;
+    function extractMessagePayload(message, instanceRef, contactMap) {
+      const rawJid = message.key?.remoteJid;
+      if (!rawJid || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter')) return null;
 
-  let preferredJid = rawJid;
-  if (rawJid.endsWith('@lid')) {
-    if (message.key?.remoteJidAlt) preferredJid = message.key.remoteJidAlt;
-    else if (instance.lidMappings?.has(rawJid)) preferredJid = instance.lidMappings.get(rawJid);
-  }
-  const phone = normalizePhoneFromJid(preferredJid);
-  if (!phone) return null;
+      let preferredJid = rawJid;
+      if (rawJid.endsWith('@lid')) {
+        if (message.key?.remoteJidAlt) preferredJid = message.key.remoteJidAlt;
+        else if (instanceRef.lidMappings?.has(rawJid)) preferredJid = instanceRef.lidMappings.get(rawJid);
+      }
+      const phone = normalizePhoneFromJid(preferredJid);
+      if (!phone) return null;
 
-  const summary = messageSummary(message.message);
-  const messageId = message.key?.id || '';
-  const fromMe = Boolean(message.key?.fromMe);
-  const fingerprint = apiFingerprint(preferredJid, summary);
-  const origin = fromMe && isRecentApiSend(instance, fingerprint, messageId) ? 'bridge_api' : fromMe ? 'device' : 'customer';
-  const timestampValue = typeof message.messageTimestamp === 'number'
-    ? message.messageTimestamp
-    : Number(message.messageTimestamp || Math.floor(Date.now() / 1000));
+      const summary = messageSummary(message.message);
+      const messageId = message.key?.id || '';
+      const fromMe = Boolean(message.key?.fromMe);
+      const fingerprint = apiFingerprint(preferredJid, summary);
+      const origin = fromMe && isRecentApiSend(instanceRef, fingerprint, messageId) ? 'bridge_api' : fromMe ? 'device' : 'customer';
+      const timestampValue = typeof message.messageTimestamp === 'number'
+        ? message.messageTimestamp
+        : Number(message.messageTimestamp || Math.floor(Date.now() / 1000));
 
-  const pushName = message.pushName || contactMap?.get(preferredJid) || contactMap?.get(rawJid) || null;
+      const pushName = message.pushName || contactMap?.get(preferredJid) || contactMap?.get(rawJid) || null;
 
-  return {
-    id: messageId,
-    jid: preferredJid,
-    phone,
-    fromMe,
-    origin,
-    pushName,
-    timestamp: new Date(timestampValue * 1000).toISOString(),
-    messageType: summary.type,
-    body: summary.body,
-    fileName: summary.fileName || null,
-    mimeType: summary.mimeType || null,
-    mediaAvailableOnDevice: summary.type !== 'text',
-    mediaBase64: null,
-    rawSummary: summary,
-  };
-}
+      return {
+        id: messageId,
+        jid: preferredJid,
+        phone,
+        fromMe,
+        origin,
+        pushName,
+        timestamp: new Date(timestampValue * 1000).toISOString(),
+        messageType: summary.type,
+        body: summary.body,
+        fileName: summary.fileName || null,
+        mimeType: summary.mimeType || null,
+        mediaAvailableOnDevice: summary.hasMedia === true,
+        mediaBase64: null,
+        rawSummary: summary,
+      };
+    }
 
-    sock.ev.on('lid-mapping.update', ({ lid, pn }) => {
+    sock.ev.on('lid-mapping.update', async ({ lid, pn }) => {
       if (lid && pn) {
         const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
         instance.lidMappings.set(lid, fullPn);
+        await emitWebhook(id, 'lid-mapping.update', { lid, pn: fullPn });
       }
     });
 
-    sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, lidPnMappings, syncType }) => {
-      logger.info({ count: messages?.length || 0, chatsCount: chats?.length || 0, syncType }, 'Received messaging-history.set');
+    sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, lidPnMappings, syncType, progress, isLatest }) => {
+      logger.info({ count: messages?.length || 0, chatsCount: chats?.length || 0, syncType, progress, isLatest }, 'Received messaging-history.set');
       if (Array.isArray(lidPnMappings)) {
         for (const { lid, pn } of lidPnMappings) {
           if (lid && pn) {
             const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
             instance.lidMappings.set(lid, fullPn);
+            await emitWebhook(id, 'lid-mapping.update', { lid, pn: fullPn });
           }
         }
       }
@@ -348,19 +491,28 @@ function extractMessagePayload(message, instance, contactMap) {
         }
       }
 
-      const batch = [];
+      const payloads = [];
       for (const message of messages || []) {
         const payload = extractMessagePayload(message, instance, contactMap);
         if (!payload) continue;
+        const summary = payload.rawSummary;
+        if (payload.mediaAvailableOnDevice) cacheMediaMessage(instance, message, summary, null);
         delete payload.rawSummary;
-        batch.push(payload);
-        if (batch.length >= 50) {
-          await emitWebhook(id, 'messages.batch', { messages: [...batch] });
-          batch.length = 0;
-        }
+        payloads.push(payload);
       }
-      if (batch.length > 0) {
-        await emitWebhook(id, 'messages.batch', { messages: [...batch] });
+
+      const batchSize = 50;
+      const batchTotal = Math.max(1, Math.ceil(payloads.length / batchSize));
+      for (let offset = 0; offset < payloads.length; offset += batchSize) {
+        const batchIndex = Math.floor(offset / batchSize);
+        await emitWebhook(id, 'messages.batch', {
+          messages: payloads.slice(offset, offset + batchSize),
+          sync_type: syncType == null ? null : String(syncType),
+          progress: Number.isFinite(Number(progress)) ? Number(progress) : null,
+          is_latest: Boolean(isLatest),
+          batch_index: batchIndex,
+          batch_total: batchTotal,
+        });
       }
     });
 
@@ -370,38 +522,11 @@ function extractMessagePayload(message, instance, contactMap) {
         if (!payload) continue;
         const summary = payload.rawSummary;
         delete payload.rawSummary;
-        const isMedia = payload.mediaAvailableOnDevice;
-        const messageId = payload.id;
 
-        if (isMedia && instance.sock) {
-          try {
-            const buffer = await downloadMediaMessage(
-              message,
-              'buffer',
-              {},
-              { logger: waLogger, reuploadRequest: (msg) => instance.sock?.updateMediaMessage(msg) }
-            );
-            if (buffer && buffer.length > 0) {
-              pruneMediaMessages(instance);
-              instance.mediaMessages.set(messageId, {
-                message,
-                summary,
-                buffer,
-                receivedAt: Date.now(),
-              });
-              if (buffer.length <= 12 * 1024 * 1024) {
-                payload.mediaBase64 = buffer.toString('base64');
-              }
-            }
-          } catch (mediaError) {
-            logger.warn({ messageId, err: mediaError instanceof Error ? mediaError.message : String(mediaError) }, 'Failed to download WhatsApp media');
-            pruneMediaMessages(instance);
-            instance.mediaMessages.set(messageId, {
-              message,
-              summary,
-              buffer: null,
-              receivedAt: Date.now(),
-            });
+        if (payload.mediaAvailableOnDevice) {
+          const buffer = await downloadMessageMedia(instance, message, summary);
+          if (buffer && buffer.length <= 12 * 1024 * 1024) {
+            payload.mediaBase64 = buffer.toString('base64');
           }
         }
 
@@ -520,7 +645,7 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Length': buffer.length,
-        'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
+        'Content-Disposition': `inline; filename=\"${encodeURIComponent(fileName)}\"`,
         'Cache-Control': 'private, max-age=86400',
       });
       return res.end(buffer);
@@ -535,10 +660,13 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && historyMatch) {
       const rawChatJid = decodeURIComponent(historyMatch[1]);
       const body = await readJson(req, 64 * 1024);
-      const count = Number(body.count || 50);
+      const count = Math.min(100, Math.max(1, Number(body.count || 50)));
       const oldestMsgId = String(body.oldestMsgId || '');
       const oldestMsgFromMe = Boolean(body.oldestMsgFromMe);
-      const oldestMsgTimestamp = Number(body.oldestMsgTimestamp || Math.floor(Date.now() / 1000));
+      const rawTimestamp = Number(body.oldestMsgTimestamp || Date.now());
+      const oldestMsgTimestamp = Number.isFinite(rawTimestamp) && rawTimestamp < 1_000_000_000_000
+        ? rawTimestamp * 1000
+        : rawTimestamp;
 
       const oldestKey = oldestMsgId ? {
         remoteJid: rawChatJid,
@@ -547,7 +675,7 @@ const server = createServer(async (req, res) => {
       } : undefined;
 
       const result = await instance.sock.fetchMessageHistory(count, oldestKey, oldestMsgTimestamp);
-      return json(res, 200, { ok: true, result });
+      return json(res, 200, { ok: true, result, request_id: result || null });
     }
 
     if (req.method === 'POST' && action === 'messages/text') {
@@ -555,7 +683,7 @@ const server = createServer(async (req, res) => {
       const jid = targetJid(body.to);
       const text = String(body.text || '').trim();
       if (!text) return json(res, 400, { error: 'Message text is required.' });
-      const summary = { type: 'text', body: text };
+      const summary = { type: 'text', body: text, hasMedia: false };
       rememberApiSend(instance, apiFingerprint(jid, summary));
       const sent = await instance.sock.sendMessage(jid, { text });
       const messageId = sent?.key?.id || '';
@@ -577,16 +705,16 @@ const server = createServer(async (req, res) => {
       let summary;
       if (mimeType.startsWith('image/')) {
         content = { image: buffer, mimetype: mimeType };
-        summary = { type: 'image', body: '[Photo]' };
+        summary = { type: 'image', body: '[Photo]', mimeType, hasMedia: true };
       } else if (mimeType.startsWith('video/')) {
         content = { video: buffer, mimetype: mimeType };
-        summary = { type: 'video', body: '[Video]' };
+        summary = { type: 'video', body: '[Video]', mimeType, hasMedia: true };
       } else if (mimeType.startsWith('audio/')) {
         content = { audio: buffer, mimetype: mimeType, ptt: false };
-        summary = { type: 'audio', body: '[Voice message]' };
+        summary = { type: 'audio', body: '[Voice message]', mimeType, hasMedia: true };
       } else {
         content = { document: buffer, mimetype: mimeType, fileName };
-        summary = { type: 'file', body: `[File: ${fileName}]`, fileName };
+        summary = { type: 'file', body: `[File: ${fileName}]`, fileName, mimeType, hasMedia: true };
       }
       rememberApiSend(instance, apiFingerprint(jid, summary));
       const sent = await instance.sock.sendMessage(jid, content);
