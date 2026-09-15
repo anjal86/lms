@@ -3,17 +3,20 @@ export function extractPhoneNumbers(text: string | null | undefined): string[] {
 
   // Keep matches bounded so a 16+ digit booking/account reference cannot be sliced into
   // a phone-looking substring. Supports international prefixes, spaces, dots, dashes,
-  // parentheses, and ordinary local numbers.
+  // parentheses, and ordinary local numbers. Detection is intentionally phrase-independent.
   const regex = /(?<!\d)(?:(?:\+|00)\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{3,5}(?!\d)/g;
   const matches = text.match(regex) || [];
   const valid: string[] = [];
+  const seenDigits = new Set<string>();
 
   for (const match of matches) {
     const cleaned = match.trim();
     const digitOnly = cleaned.replace(/\D/g, '');
     if (digitOnly.length < 8 || digitOnly.length > 15) continue;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) continue;
-    if (!valid.includes(cleaned)) valid.push(cleaned);
+    if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[ T].*)?$/.test(cleaned)) continue;
+    if (seenDigits.has(digitOnly)) continue;
+    seenDigits.add(digitOnly);
+    valid.push(cleaned);
   }
 
   return valid;
