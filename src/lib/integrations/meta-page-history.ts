@@ -51,6 +51,18 @@ function previewBody(message: MetaRecord | null) {
   return '[Attachment]';
 }
 
+function previewMessageType(message: MetaRecord | null) {
+  if (!message) return 'text';
+  const attachments = rows(record(message.attachments).data);
+  if (!attachments.length) return 'text';
+  const first = attachments[0];
+  const mime = String(first.mime_type || '');
+  if (mime.startsWith('image/') || Object.keys(record(first.image_data)).length) return 'image';
+  if (mime.startsWith('audio/') || String(first.name || '').includes('audioclip')) return 'audio';
+  if (mime.startsWith('video/') || Object.keys(record(first.video_data)).length) return 'video';
+  return 'file';
+}
+
 function conversationUrl(
   provider: Provider,
   accountId: string,
@@ -67,7 +79,10 @@ function conversationUrl(
     ? 'id,updated_time,snippet,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key'
     : 'id,updated_time,participants';
   url.searchParams.set('fields', `${baseFields},messages.limit(1){${messageFields}}`);
-  url.searchParams.set('limit', '25');
+  // Meta accepts larger conversation pages than the old 25-row discovery window.
+  // A 100-row page lets automatic Inbox maintenance catch up without requiring the
+  // user to click Refresh repeatedly while the saved cursor still keeps requests bounded.
+  url.searchParams.set('limit', '100');
   if (afterCursor) url.searchParams.set('after', afterCursor);
   url.searchParams.set('access_token', token);
   return url;
@@ -112,6 +127,7 @@ function discoveryKey(provider: Provider, accountId: string) {
 
 async function saveDiscoveryState(input: {
   connectionId: string;
+  workspaceId: string;
   config: Record<string, unknown>;
   key: string;
   nextCursor: string | null;
@@ -136,6 +152,7 @@ async function saveDiscoveryState(input: {
         inbox_history_discovery: nextRoot,
       },
     })
+    .eq('workspace_id', input.workspaceId)
     .eq('id', input.connectionId);
   if (error) throw error;
 }
@@ -179,7 +196,7 @@ export async function discoverSelectedMetaPageHistory(input: {
   ]);
   if (connectionError) throw connectionError;
   if (secretError) throw secretError;
-  if (!connection || !secret || connection.provider !== input.provider) {
+  if (!connection || !connection.workspace_id || !secret || connection.provider !== input.provider) {
     return emptyResult('Selected provider connection is unavailable.');
   }
 
@@ -257,6 +274,7 @@ export async function discoverSelectedMetaPageHistory(input: {
         .from('lead_conversations')
         .select('id,lead_id,metadata')
         .eq('workspace_id', connection.workspace_id)
+        .eq('connection_id', input.connectionId)
         .eq('provider', input.provider)
         .eq('external_thread_id', externalThreadId)
         .maybeSingle();
@@ -268,7 +286,11 @@ export async function discoverSelectedMetaPageHistory(input: {
             meta_page_name: pageName,
             meta_conversation_id: String(metaConversation.id || ''),
             scoped_thread_key: metaConversation.scoped_thread_key || metaConversation.id,
-            message_count: metaConversation.message_count || null,
+            // Do not use the conversations-edge message_count as proof that the CRM
+            // has the complete thread. Opening the thread performs the authoritative
+            // messages-edge backfill instead of stopping after the one preview row.
+            message_count: null,
+            provider_message_count_hint: metaConversation.message_count || null,
             history_discovered_at: new Date().toISOString(),
           }
         : {
@@ -290,8 +312,9 @@ export async function discoverSelectedMetaPageHistory(input: {
             provider: input.provider,
             external_thread_id: externalThreadId,
             external_contact_id: customerId,
-            customer_name: String(customer?.name || customer?.username || (input.provider === 'facebook' ? 'Messenger Traveler' : 'Instagram Traveler')),
-            customer_phone: `${input.provider}:${customerId}`,
+            customer_name: String(customer?.name || customer?.username || (input.provider === 'facebook' ? 'Messenger Customer' : 'Instagram Customer')),
+            // Meta scoped IDs are identities, not telephone numbers.
+            customer_phone: null,
             last_message_preview: body,
             last_message_at: updatedAt,
             status: 'open',
@@ -306,6 +329,7 @@ export async function discoverSelectedMetaPageHistory(input: {
               .from('lead_conversations')
               .select('id,lead_id')
               .eq('workspace_id', connection.workspace_id)
+              .eq('connection_id', input.connectionId)
               .eq('provider', input.provider)
               .eq('external_thread_id', externalThreadId)
               .maybeSingle();
@@ -331,17 +355,21 @@ export async function discoverSelectedMetaPageHistory(input: {
         const { error: updateError } = await admin
           .from('lead_conversations')
           .update(patch)
+          .eq('workspace_id', connection.workspace_id)
+          .eq('connection_id', input.connectionId)
           .eq('id', existing.id);
         if (updateError) throw updateError;
       }
 
-      // Page-wide history discovery stores only the newest preview message. Full
-      // message history remains a separate per-thread/incremental concern.
+      // Page-wide discovery stores the newest preview so a newly discovered thread is
+      // never rendered as an empty chat. Full history is fetched when that thread opens.
       if (conversationId && preview?.id) {
         const externalMessageId = String(preview.id);
         const { data: duplicate } = await admin
           .from('lead_messages')
           .select('id')
+          .eq('workspace_id', connection.workspace_id)
+          .eq('connection_id', input.connectionId)
           .eq('provider', input.provider)
           .eq('external_message_id', externalMessageId)
           .maybeSingle();
@@ -349,13 +377,14 @@ export async function discoverSelectedMetaPageHistory(input: {
         if (!duplicate) {
           const senderId = String(record(preview.from).id || '');
           const { error: insertError } = await admin.from('lead_messages').insert({
+            workspace_id: connection.workspace_id,
             conversation_id: conversationId,
             lead_id: leadId,
             connection_id: input.connectionId,
             provider: input.provider,
             external_message_id: externalMessageId,
             direction: senderId === input.accountId ? 'outbound' : 'inbound',
-            message_type: 'text',
+            message_type: previewMessageType(preview),
             body,
             metadata: {
               from: preview.from,
@@ -380,6 +409,7 @@ export async function discoverSelectedMetaPageHistory(input: {
   try {
     await saveDiscoveryState({
       connectionId: input.connectionId,
+      workspaceId: connection.workspace_id,
       config: connectionConfig,
       key: stateKey,
       nextCursor: graphResult.nextCursor,
