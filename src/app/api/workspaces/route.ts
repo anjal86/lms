@@ -24,8 +24,10 @@ export async function GET() {
 
   const admin = createSupabaseAdminClient();
 
-  // Pick up any invitations that were created before this session.
-  await auth.supabase.rpc('claim_my_workspace_invitations').catch(() => null);
+  // Pick up any invitations that were created before this session. Failure here must
+  // not prevent an existing member from opening the workspace switcher.
+  const { error: claimError } = await auth.supabase.rpc('claim_my_workspace_invitations');
+  if (claimError) console.warn('Unable to auto-claim workspace invitations:', claimError.message);
 
   const { data: profile, error: profileError } = await admin
     .from('profiles')
