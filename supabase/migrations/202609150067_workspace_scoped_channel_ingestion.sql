@@ -142,7 +142,7 @@ begin
     for update;
   end if;
 
-  if found then
+  if v_existing_message.id is not null then
     if v_effective_lead_id is not null then
       update public.lead_messages
       set lead_id = coalesce(lead_id, v_effective_lead_id),
