@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 
 const RequestSchema = z.object({
   count: z.coerce.number().int().min(1).max(100).default(50),
+  mode: z.enum(['older', 'repair']).default('older'),
 });
 
 const ACTIVE_STATUSES = ['queued', 'requested', 'receiving'];
@@ -131,7 +132,7 @@ export async function POST(
 
   const existing = await latestJob(resolved.admin, id);
   if (existing && ACTIVE_STATUSES.includes(existing.status)) {
-    return NextResponse.json({ accepted: true, already_running: true, job: existing }, { status: 202 });
+    return NextResponse.json({ accepted: true, already_running: true, mode: parsed.data.mode, job: existing }, { status: 202 });
   }
 
   const { data: activeConnectionJob } = await resolved.admin
@@ -145,32 +146,33 @@ export async function POST(
 
   if (activeConnectionJob) {
     return NextResponse.json({
-      error: 'Another chat on this WhatsApp account is already syncing older messages.',
+      error: 'Another chat on this WhatsApp account is already syncing history.',
       job: activeConnectionJob,
     }, { status: 409 });
   }
 
-  const { data: oldestMessage, error: messageError } = await resolved.admin
+  const repairMode = parsed.data.mode === 'repair';
+  const { data: anchorMessage, error: messageError } = await resolved.admin
     .from('lead_messages')
     .select('id,external_message_id,direction,sent_at,metadata')
     .eq('workspace_id', resolved.actor.profile.workspace_id)
     .eq('conversation_id', id)
     .not('external_message_id', 'is', null)
-    .order('sent_at', { ascending: true })
+    .order('sent_at', { ascending: !repairMode })
     .limit(1)
     .maybeSingle();
 
   if (messageError) {
-    return NextResponse.json({ error: 'Unable to determine the oldest local WhatsApp message.' }, { status: 500 });
+    return NextResponse.json({ error: 'Unable to determine a local WhatsApp message anchor.' }, { status: 500 });
   }
-  if (!oldestMessage?.external_message_id) {
+  if (!anchorMessage?.external_message_id) {
     return NextResponse.json({
       error: 'No WhatsApp message anchor is available yet. Reconnect the account once so WhatsApp can deliver its initial history sync.',
     }, { status: 409 });
   }
 
   const conversationMetadata = objectValue(resolved.conversation.metadata);
-  const messageMetadata = objectValue(oldestMessage.metadata);
+  const messageMetadata = objectValue(anchorMessage.metadata);
   const metadataJid = typeof messageMetadata.jid === 'string' ? messageMetadata.jid : null;
   const conversationJid = typeof conversationMetadata.whatsapp_jid === 'string'
     ? conversationMetadata.whatsapp_jid
@@ -182,7 +184,7 @@ export async function POST(
   const remoteJid = metadataJid || conversationJid || externalThreadJid;
 
   if (!remoteJid) {
-    return NextResponse.json({ error: 'The WhatsApp chat JID is missing, so older history cannot be requested safely.' }, { status: 409 });
+    return NextResponse.json({ error: 'The WhatsApp chat JID is missing, so history cannot be requested safely.' }, { status: 409 });
   }
 
   const now = new Date().toISOString();
@@ -208,10 +210,10 @@ export async function POST(
   try {
     const result = await fetchWhatsappHistory(resolved.connection.id, {
       count: parsed.data.count,
-      oldestMsgId: oldestMessage.external_message_id,
+      oldestMsgId: anchorMessage.external_message_id,
       oldestMsgRemoteJid: remoteJid,
-      oldestMsgFromMe: oldestMessage.direction === 'outbound',
-      oldestMsgTimestamp: new Date(oldestMessage.sent_at).getTime(),
+      oldestMsgFromMe: anchorMessage.direction === 'outbound',
+      oldestMsgTimestamp: new Date(anchorMessage.sent_at).getTime(),
     });
 
     const { data: requestedJob } = await resolved.admin
@@ -226,7 +228,7 @@ export async function POST(
       .select('*')
       .single();
 
-    return NextResponse.json({ accepted: true, job: requestedJob || job }, { status: 202 });
+    return NextResponse.json({ accepted: true, mode: parsed.data.mode, job: requestedJob || job }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'WhatsApp history request failed.';
     const { data: failedJob } = await resolved.admin
@@ -241,6 +243,6 @@ export async function POST(
       .select('*')
       .single();
 
-    return NextResponse.json({ error: message, job: failedJob || job }, { status: 503 });
+    return NextResponse.json({ error: message, mode: parsed.data.mode, job: failedJob || job }, { status: 503 });
   }
 }
