@@ -125,6 +125,10 @@ const migrations = [
     file: '202609150060_routable_account_release_integrity.sql',
     applied: () => exists("select exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_routable_external_uidx' and position('status' in indexdef) > 0 and position('disconnected' in indexdef) > 0)"),
   },
+  {
+    file: '202609150061_channel_history_workspace_integrity.sql',
+    applied: () => exists("select to_regprocedure('public.enforce_conversation_connection_workspace()') is not null and to_regprocedure('public.enforce_message_conversation_workspace()') is not null and exists(select 1 from pg_trigger where tgname='trg_conversation_connection_workspace' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_message_conversation_workspace' and not tgisinternal)"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
