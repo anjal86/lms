@@ -1,51 +1,80 @@
 import { NextResponse } from 'next/server';
-import { getApiActor, isManagement } from '@/lib/auth/api-actor';
-import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { getApiActor } from '@/lib/auth/api-actor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api']);
 
 function sanitizeSearchTerm(value: string) {
   return value.replace(/[,%()'"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
-function sanitizeAccountId(value: string | null) {
+function sanitizeProvider(value: string | null) {
+  const provider = (value || '').toLowerCase();
+  return PROVIDERS.has(provider) ? provider : '';
+}
+
+function sanitizeUuid(value: string | null) {
   const trimmed = value?.trim() || '';
-  return /^[A-Za-z0-9:_-]{1,128}$/.test(trimmed) ? trimmed : '';
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
+    ? trimmed
+    : '';
 }
 
 function readCookie(request: Request, name: string) {
   const cookieHeader = request.headers.get('cookie') || '';
   for (const pair of cookieHeader.split(';')) {
     const [rawName, ...rawValue] = pair.trim().split('=');
-    if (rawName === name) {
-      try {
-        return decodeURIComponent(rawValue.join('='));
-      } catch {
-        return rawValue.join('=');
-      }
+    if (rawName !== name) continue;
+    try {
+      return decodeURIComponent(rawValue.join('='));
+    } catch {
+      return rawValue.join('=');
     }
   }
   return '';
 }
 
-function selectedAccountScope(request: Request, url: URL) {
-  const explicitAccountId = sanitizeAccountId(url.searchParams.get('accountId'));
-  const explicitProvider = url.searchParams.get('accountProvider');
-  if (explicitAccountId && ['facebook', 'instagram', 'whatsapp'].includes(explicitProvider || '')) {
-    return { accountId: explicitAccountId, accountProvider: explicitProvider as 'facebook' | 'instagram' | 'whatsapp' } as const;
+async function resolveAccountScope(
+  request: Request,
+  url: URL,
+  actor: Awaited<ReturnType<typeof getApiActor>> extends infer T ? Exclude<T, { error: unknown }> : never
+) {
+  const explicitId = sanitizeUuid(url.searchParams.get('accountId'));
+  const explicitProvider = sanitizeProvider(url.searchParams.get('accountProvider'));
+
+  if (explicitId) {
+    const { data } = await actor.supabase
+      .from('integration_connections')
+      .select('id,provider,display_name,external_account_id')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', explicitId)
+      .maybeSingle();
+    if (!data || (explicitProvider && data.provider !== explicitProvider)) return { forbidden: true } as const;
+    return { connection: data, legacy: false } as const;
   }
 
+  // Compatibility with the old top-level Facebook/Instagram account cookie. New UI
+  // always sends the concrete connection UUID explicitly.
   const cookieValue = readCookie(request, 'inbox_page_filter');
-  if (!cookieValue || cookieValue === 'all') return { accountId: '', accountProvider: '' } as const;
+  if (!cookieValue || cookieValue === 'all') return { connection: null, legacy: false } as const;
   const separator = cookieValue.indexOf(':');
-  if (separator <= 0) return { accountId: '', accountProvider: '' } as const;
-  const accountProvider = cookieValue.slice(0, separator);
-  const accountId = sanitizeAccountId(cookieValue.slice(separator + 1));
-  if (!accountId || !['facebook', 'instagram'].includes(accountProvider)) {
-    return { accountId: '', accountProvider: '' } as const;
+  if (separator <= 0) return { connection: null, legacy: false } as const;
+  const cookieProvider = sanitizeProvider(cookieValue.slice(0, separator));
+  const externalAccountId = cookieValue.slice(separator + 1).trim().slice(0, 240);
+  if (!cookieProvider || !externalAccountId || !['facebook', 'instagram'].includes(cookieProvider)) {
+    return { connection: null, legacy: false } as const;
   }
-  return { accountId, accountProvider } as const;
+
+  const { data } = await actor.supabase
+    .from('integration_connections')
+    .select('id,provider,display_name,external_account_id')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('provider', cookieProvider)
+    .eq('external_account_id', externalAccountId)
+    .maybeSingle();
+  return { connection: data || null, legacy: Boolean(data) } as const;
 }
 
 export async function GET(request: Request) {
@@ -54,15 +83,22 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const filter = url.searchParams.get('filter') || 'all';
-  const provider = url.searchParams.get('provider') || 'all';
+  const provider = sanitizeProvider(url.searchParams.get('provider')) || 'all';
   const requestedState = url.searchParams.get('state') || '';
   const priority = url.searchParams.get('priority') || '';
   const sort = url.searchParams.get('sort') || 'newest';
   const search = sanitizeSearchTerm(url.searchParams.get('search') || '');
-  const { accountId, accountProvider } = selectedAccountScope(request, url);
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
-  const management = isManagement(actor.profile);
+  const accountScope = await resolveAccountScope(request, url, actor);
+
+  if ('forbidden' in accountScope) {
+    return NextResponse.json({ error: 'You do not have access to that channel account.' }, { status: 403 });
+  }
+  const selectedConnection = accountScope.connection;
+  if (selectedConnection && provider !== 'all' && selectedConnection.provider !== provider) {
+    return NextResponse.json({ error: 'The selected account does not belong to this channel.' }, { status: 400 });
+  }
 
   await actor.supabase.rpc('wake_due_conversations', { p_workspace_id: actor.profile.workspace_id });
 
@@ -72,42 +108,6 @@ export async function GET(request: Request) {
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('user_id', actor.user.id);
   const collaboratorIds = (collaboratorRows || []).map((row) => row.conversation_id);
-
-  let whatsappAccessExpression: string | null = null;
-  let accessibleWhatsappConnectionIds: string[] = [];
-  if (!management || provider === 'whatsapp' || accountProvider === 'whatsapp') {
-    const admin = createSupabaseAdminClient();
-    const { data: connectionRows, error: connectionError } = await admin
-      .from('integration_connections')
-      .select('id,connected_by,visibility_scope,config')
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('provider', 'whatsapp');
-
-    if (connectionError) {
-      console.error('WhatsApp inbox scope lookup failed:', connectionError.message);
-      return NextResponse.json({ error: 'Unable to resolve WhatsApp inbox access.' }, { status: 500 });
-    }
-
-    accessibleWhatsappConnectionIds = (connectionRows || [])
-      .filter((row) => {
-        const config = row.config && typeof row.config === 'object' && !Array.isArray(row.config)
-          ? row.config as Record<string, unknown>
-          : {};
-        const baileys = config.transport === 'baileys';
-        return baileys && (management || row.visibility_scope === 'workspace' || row.connected_by === actor.user.id);
-      })
-      .map((row) => row.id);
-
-    if (!management) {
-      whatsappAccessExpression = accessibleWhatsappConnectionIds.length
-        ? `provider.neq.whatsapp,connection_id.in.(${accessibleWhatsappConnectionIds.join(',')})`
-        : 'provider.neq.whatsapp';
-    }
-  }
-
-  if (accountProvider === 'whatsapp' && accountId && !accessibleWhatsappConnectionIds.includes(accountId)) {
-    return NextResponse.json({ error: 'You do not have access to that WhatsApp account.' }, { status: 403 });
-  }
 
   let query = actor.supabase
     .from('lead_conversations')
@@ -146,14 +146,12 @@ export async function GET(request: Request) {
       updated_at,
       converted_at,
       metadata,
-      connection:integration_connections(id, display_name, external_account_id, visibility_scope, connected_by),
+      connection:integration_connections(id, provider, display_name, external_account_id, visibility_scope, connected_by, config),
       contact:contacts(id, display_name, primary_phone, primary_email, lifecycle_key, owner_id, tags, custom_data, last_seen_at),
       lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, assigned_to, created_at),
       assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role, status)
     `, { count: 'exact' })
     .eq('workspace_id', actor.profile.workspace_id);
-
-  if (whatsappAccessExpression) query = query.or(whatsappAccessExpression);
 
   if (filter === 'unconverted') query = query.is('lead_id', null);
   else if (filter === 'converted') query = query.not('lead_id', 'is', null);
@@ -170,11 +168,8 @@ export async function GET(request: Request) {
 
   if (['open', 'waiting', 'snoozed', 'closed'].includes(requestedState)) query = query.eq('workflow_state', requestedState);
   if (['low', 'normal', 'high', 'urgent'].includes(priority)) query = query.eq('priority', priority);
-  const shouldFilterAccount = accountId && accountProvider && (provider === 'all' || provider === accountProvider);
   if (provider !== 'all') query = query.eq('provider', provider);
-  if (shouldFilterAccount && accountProvider === 'facebook') query = query.eq('metadata->>meta_page_id', accountId);
-  else if (shouldFilterAccount && accountProvider === 'instagram') query = query.eq('metadata->>instagram_business_account_id', accountId);
-  else if (shouldFilterAccount && accountProvider === 'whatsapp') query = query.eq('connection_id', accountId);
+  if (selectedConnection) query = query.eq('connection_id', selectedConnection.id);
 
   if (search) {
     const pattern = `%${search}%`;
@@ -198,6 +193,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
+  const applyScope = <T extends { eq: (column: string, value: string) => T }>(base: T) => {
+    let scoped = base;
+    if (provider !== 'all') scoped = scoped.eq('provider', provider);
+    if (selectedConnection) scoped = scoped.eq('connection_id', selectedConnection.id);
+    return scoped;
+  };
+
   let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed');
   let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed');
   let hasPhoneQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).not('metadata->detected_phone', 'is', null).neq('workflow_state', 'closed');
@@ -208,19 +210,6 @@ export async function GET(request: Request) {
   let needsReplyQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('needs_reply', true).neq('workflow_state', 'closed');
   let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString());
   let highPriorityQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).in('priority', ['high', 'urgent']).neq('workflow_state', 'closed');
-
-  if (whatsappAccessExpression) {
-    unconvertedCountQuery = unconvertedCountQuery.or(whatsappAccessExpression);
-    allOpenQuery = allOpenQuery.or(whatsappAccessExpression);
-    hasPhoneQuery = hasPhoneQuery.or(whatsappAccessExpression);
-    unassignedQuery = unassignedQuery.or(whatsappAccessExpression);
-    waitingQuery = waitingQuery.or(whatsappAccessExpression);
-    snoozedQuery = snoozedQuery.or(whatsappAccessExpression);
-    unreadQuery = unreadQuery.or(whatsappAccessExpression);
-    needsReplyQuery = needsReplyQuery.or(whatsappAccessExpression);
-    overdueQuery = overdueQuery.or(whatsappAccessExpression);
-    highPriorityQuery = highPriorityQuery.or(whatsappAccessExpression);
-  }
 
   if (provider !== 'all') {
     unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
@@ -234,40 +223,17 @@ export async function GET(request: Request) {
     overdueQuery = overdueQuery.eq('provider', provider);
     highPriorityQuery = highPriorityQuery.eq('provider', provider);
   }
-
-  if (shouldFilterAccount && accountProvider === 'facebook') {
-    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>meta_page_id', accountId);
-    allOpenQuery = allOpenQuery.eq('metadata->>meta_page_id', accountId);
-    hasPhoneQuery = hasPhoneQuery.eq('metadata->>meta_page_id', accountId);
-    unassignedQuery = unassignedQuery.eq('metadata->>meta_page_id', accountId);
-    waitingQuery = waitingQuery.eq('metadata->>meta_page_id', accountId);
-    snoozedQuery = snoozedQuery.eq('metadata->>meta_page_id', accountId);
-    unreadQuery = unreadQuery.eq('metadata->>meta_page_id', accountId);
-    needsReplyQuery = needsReplyQuery.eq('metadata->>meta_page_id', accountId);
-    overdueQuery = overdueQuery.eq('metadata->>meta_page_id', accountId);
-    highPriorityQuery = highPriorityQuery.eq('metadata->>meta_page_id', accountId);
-  } else if (shouldFilterAccount && accountProvider === 'instagram') {
-    unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>instagram_business_account_id', accountId);
-    allOpenQuery = allOpenQuery.eq('metadata->>instagram_business_account_id', accountId);
-    hasPhoneQuery = hasPhoneQuery.eq('metadata->>instagram_business_account_id', accountId);
-    unassignedQuery = unassignedQuery.eq('metadata->>instagram_business_account_id', accountId);
-    waitingQuery = waitingQuery.eq('metadata->>instagram_business_account_id', accountId);
-    snoozedQuery = snoozedQuery.eq('metadata->>instagram_business_account_id', accountId);
-    unreadQuery = unreadQuery.eq('metadata->>instagram_business_account_id', accountId);
-    needsReplyQuery = needsReplyQuery.eq('metadata->>instagram_business_account_id', accountId);
-    overdueQuery = overdueQuery.eq('metadata->>instagram_business_account_id', accountId);
-    highPriorityQuery = highPriorityQuery.eq('metadata->>instagram_business_account_id', accountId);
-  } else if (shouldFilterAccount && accountProvider === 'whatsapp') {
-    unconvertedCountQuery = unconvertedCountQuery.eq('connection_id', accountId);
-    allOpenQuery = allOpenQuery.eq('connection_id', accountId);
-    hasPhoneQuery = hasPhoneQuery.eq('connection_id', accountId);
-    unassignedQuery = unassignedQuery.eq('connection_id', accountId);
-    waitingQuery = waitingQuery.eq('connection_id', accountId);
-    snoozedQuery = snoozedQuery.eq('connection_id', accountId);
-    unreadQuery = unreadQuery.eq('connection_id', accountId);
-    needsReplyQuery = needsReplyQuery.eq('connection_id', accountId);
-    overdueQuery = overdueQuery.eq('connection_id', accountId);
-    highPriorityQuery = highPriorityQuery.eq('connection_id', accountId);
+  if (selectedConnection) {
+    unconvertedCountQuery = unconvertedCountQuery.eq('connection_id', selectedConnection.id);
+    allOpenQuery = allOpenQuery.eq('connection_id', selectedConnection.id);
+    hasPhoneQuery = hasPhoneQuery.eq('connection_id', selectedConnection.id);
+    unassignedQuery = unassignedQuery.eq('connection_id', selectedConnection.id);
+    waitingQuery = waitingQuery.eq('connection_id', selectedConnection.id);
+    snoozedQuery = snoozedQuery.eq('connection_id', selectedConnection.id);
+    unreadQuery = unreadQuery.eq('connection_id', selectedConnection.id);
+    needsReplyQuery = needsReplyQuery.eq('connection_id', selectedConnection.id);
+    overdueQuery = overdueQuery.eq('connection_id', selectedConnection.id);
+    highPriorityQuery = highPriorityQuery.eq('connection_id', selectedConnection.id);
   }
 
   const [unconvertedCountRes, allOpenRes, hasPhoneRes, unassignedRes, waitingRes, snoozedRes, unreadRes, needsReplyRes, overdueRes, highPriorityRes] = await Promise.all([
@@ -291,11 +257,8 @@ export async function GET(request: Request) {
       .eq('workspace_id', actor.profile.workspace_id)
       .in('id', collaboratorIds)
       .neq('workflow_state', 'closed');
-    if (whatsappAccessExpression) collaborationCountQuery = collaborationCountQuery.or(whatsappAccessExpression);
     if (provider !== 'all') collaborationCountQuery = collaborationCountQuery.eq('provider', provider);
-    if (accountId && accountProvider === 'facebook') collaborationCountQuery = collaborationCountQuery.eq('metadata->>meta_page_id', accountId);
-    else if (accountId && accountProvider === 'instagram') collaborationCountQuery = collaborationCountQuery.eq('metadata->>instagram_business_account_id', accountId);
-    else if (accountId && accountProvider === 'whatsapp') collaborationCountQuery = collaborationCountQuery.eq('connection_id', accountId);
+    if (selectedConnection) collaborationCountQuery = collaborationCountQuery.eq('connection_id', selectedConnection.id);
     const collaborationRes = await collaborationCountQuery;
     collaborations = collaborationRes.count || 0;
   }
@@ -304,7 +267,13 @@ export async function GET(request: Request) {
     conversations: data || [],
     total: count || 0,
     hasMore: offset + (data?.length || 0) < (count || 0),
-    scope: accountId && accountProvider ? { accountId, accountProvider } : null,
+    scope: selectedConnection ? {
+      accountId: selectedConnection.id,
+      accountProvider: selectedConnection.provider,
+      displayName: selectedConnection.display_name,
+      externalAccountId: selectedConnection.external_account_id,
+      legacyCookieResolved: accountScope.legacy,
+    } : null,
     metrics: {
       unconvertedOpen: unconvertedCountRes.count || 0,
       totalOpen: allOpenRes.count || 0,
