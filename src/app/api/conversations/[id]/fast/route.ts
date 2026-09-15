@@ -38,6 +38,7 @@ const CONVERSATION_SELECT = `
   updated_at,
   converted_at,
   metadata,
+  connection:integration_connections(id, provider, display_name, external_account_id, visibility_scope, connected_by, config),
   contact:contacts(id, display_name, primary_phone, primary_email, lifecycle_key, owner_id, tags, custom_data, last_seen_at),
   lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, budget_range, travel_dates, assigned_to, created_at),
   assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role, status)
