@@ -129,9 +129,11 @@ export async function GET(request: Request) {
 
   if (['open', 'waiting', 'snoozed', 'closed'].includes(requestedState)) query = query.eq('workflow_state', requestedState);
   if (['low', 'normal', 'high', 'urgent'].includes(priority)) query = query.eq('priority', priority);
+  const shouldFilterAccount = accountId && accountProvider && (provider === 'all' || provider === accountProvider);
   if (provider !== 'all') query = query.eq('provider', provider);
-  if (accountId && accountProvider === 'facebook') query = query.eq('metadata->>meta_page_id', accountId);
-  else if (accountId && accountProvider === 'instagram') query = query.eq('metadata->>instagram_business_account_id', accountId);
+  if (shouldFilterAccount && accountProvider === 'facebook') query = query.eq('metadata->>meta_page_id', accountId);
+  else if (shouldFilterAccount && accountProvider === 'instagram') query = query.eq('metadata->>instagram_business_account_id', accountId);
+
 
   if (search) {
     const pattern = `%${search}%`;
@@ -179,7 +181,7 @@ export async function GET(request: Request) {
     highPriorityQuery = highPriorityQuery.eq('provider', provider);
   }
 
-  if (accountId && accountProvider === 'facebook') {
+  if (shouldFilterAccount && accountProvider === 'facebook') {
     unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>meta_page_id', accountId);
     allOpenQuery = allOpenQuery.eq('metadata->>meta_page_id', accountId);
     hasPhoneQuery = hasPhoneQuery.eq('metadata->>meta_page_id', accountId);
@@ -190,7 +192,7 @@ export async function GET(request: Request) {
     needsReplyQuery = needsReplyQuery.eq('metadata->>meta_page_id', accountId);
     overdueQuery = overdueQuery.eq('metadata->>meta_page_id', accountId);
     highPriorityQuery = highPriorityQuery.eq('metadata->>meta_page_id', accountId);
-  } else if (accountId && accountProvider === 'instagram') {
+  } else if (shouldFilterAccount && accountProvider === 'instagram') {
     unconvertedCountQuery = unconvertedCountQuery.eq('metadata->>instagram_business_account_id', accountId);
     allOpenQuery = allOpenQuery.eq('metadata->>instagram_business_account_id', accountId);
     hasPhoneQuery = hasPhoneQuery.eq('metadata->>instagram_business_account_id', accountId);

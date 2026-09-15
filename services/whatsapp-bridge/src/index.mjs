@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/rules-of-hooks */
 import { createHmac } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -5,6 +6,7 @@ import path from 'node:path';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
@@ -170,6 +172,20 @@ function publicStatus(instanceId, instance) {
   };
 }
 
+function pruneMediaMessages(instance) {
+  const now = Date.now();
+  const maxAge = 2 * 60 * 60 * 1000;
+  for (const [id, item] of instance.mediaMessages) {
+    if (now - item.receivedAt > maxAge) {
+      instance.mediaMessages.delete(id);
+    }
+  }
+  if (instance.mediaMessages.size > 500) {
+    const oldestKeys = Array.from(instance.mediaMessages.keys()).slice(0, instance.mediaMessages.size - 500);
+    for (const key of oldestKeys) instance.mediaMessages.delete(key);
+  }
+}
+
 async function startInstance(instanceId) {
   const id = safeInstanceId(instanceId);
   if (!id) throw new Error('Invalid WhatsApp instance ID.');
@@ -188,6 +204,8 @@ async function startInstance(instanceId) {
     reconnectTimer: null,
     apiMessageIds: new Set(),
     apiFingerprints: new Map(),
+    mediaMessages: new Map(),
+    lidMappings: new Map(),
   };
   instance.starting = true;
   instance.status = 'connecting';
@@ -208,6 +226,7 @@ async function startInstance(instanceId) {
       browser: Browsers.ubuntu('Chrome'),
       markOnlineOnConnect: false,
       syncFullHistory: true,
+      shouldSyncHistoryMessage: () => true,
       generateHighQualityLinkPreview: false,
     });
     instance.sock = sock;
@@ -258,35 +277,135 @@ async function startInstance(instanceId) {
       }
     });
 
+function extractMessagePayload(message, instance, contactMap) {
+  const rawJid = message.key?.remoteJid;
+  if (!rawJid || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter')) return null;
+
+  let preferredJid = rawJid;
+  if (rawJid.endsWith('@lid')) {
+    if (message.key?.remoteJidAlt) preferredJid = message.key.remoteJidAlt;
+    else if (instance.lidMappings?.has(rawJid)) preferredJid = instance.lidMappings.get(rawJid);
+  }
+  const phone = normalizePhoneFromJid(preferredJid);
+  if (!phone) return null;
+
+  const summary = messageSummary(message.message);
+  const messageId = message.key?.id || '';
+  const fromMe = Boolean(message.key?.fromMe);
+  const fingerprint = apiFingerprint(preferredJid, summary);
+  const origin = fromMe && isRecentApiSend(instance, fingerprint, messageId) ? 'bridge_api' : fromMe ? 'device' : 'customer';
+  const timestampValue = typeof message.messageTimestamp === 'number'
+    ? message.messageTimestamp
+    : Number(message.messageTimestamp || Math.floor(Date.now() / 1000));
+
+  const pushName = message.pushName || contactMap?.get(preferredJid) || contactMap?.get(rawJid) || null;
+
+  return {
+    id: messageId,
+    jid: preferredJid,
+    phone,
+    fromMe,
+    origin,
+    pushName,
+    timestamp: new Date(timestampValue * 1000).toISOString(),
+    messageType: summary.type,
+    body: summary.body,
+    fileName: summary.fileName || null,
+    mimeType: summary.mimeType || null,
+    mediaAvailableOnDevice: summary.type !== 'text',
+    mediaBase64: null,
+    rawSummary: summary,
+  };
+}
+
+    sock.ev.on('lid-mapping.update', ({ lid, pn }) => {
+      if (lid && pn) {
+        const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
+        instance.lidMappings.set(lid, fullPn);
+      }
+    });
+
+    sock.ev.on('messaging-history.set', async ({ chats, contacts, messages, lidPnMappings, syncType }) => {
+      logger.info({ count: messages?.length || 0, chatsCount: chats?.length || 0, syncType }, 'Received messaging-history.set');
+      if (Array.isArray(lidPnMappings)) {
+        for (const { lid, pn } of lidPnMappings) {
+          if (lid && pn) {
+            const fullPn = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
+            instance.lidMappings.set(lid, fullPn);
+          }
+        }
+      }
+
+      const contactMap = new Map();
+      for (const contact of contacts || []) {
+        if (contact.id && (contact.notify || contact.name)) {
+          contactMap.set(contact.id, contact.notify || contact.name);
+        }
+      }
+      for (const chat of chats || []) {
+        if (chat.id && chat.name) {
+          contactMap.set(chat.id, chat.name);
+        }
+      }
+
+      const batch = [];
+      for (const message of messages || []) {
+        const payload = extractMessagePayload(message, instance, contactMap);
+        if (!payload) continue;
+        delete payload.rawSummary;
+        batch.push(payload);
+        if (batch.length >= 50) {
+          await emitWebhook(id, 'messages.batch', { messages: [...batch] });
+          batch.length = 0;
+        }
+      }
+      if (batch.length > 0) {
+        await emitWebhook(id, 'messages.batch', { messages: [...batch] });
+      }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const message of messages || []) {
-        const rawJid = message.key?.remoteJid;
-        if (!rawJid || rawJid === 'status@broadcast' || rawJid.endsWith('@g.us') || rawJid.endsWith('@newsletter')) continue;
-        const preferredJid = rawJid.endsWith('@lid') && message.key?.remoteJidAlt ? message.key.remoteJidAlt : rawJid;
-        const phone = normalizePhoneFromJid(preferredJid);
-        if (!phone) continue;
-        const summary = messageSummary(message.message);
-        const messageId = message.key?.id || '';
-        const fromMe = Boolean(message.key?.fromMe);
-        const fingerprint = apiFingerprint(preferredJid, summary);
-        const origin = fromMe && isRecentApiSend(instance, fingerprint, messageId) ? 'bridge_api' : fromMe ? 'device' : 'customer';
-        const timestampValue = typeof message.messageTimestamp === 'number'
-          ? message.messageTimestamp
-          : Number(message.messageTimestamp || Math.floor(Date.now() / 1000));
-        await emitWebhook(id, 'message', {
-          id: messageId,
-          jid: preferredJid,
-          phone,
-          fromMe,
-          origin,
-          pushName: message.pushName || null,
-          timestamp: new Date(timestampValue * 1000).toISOString(),
-          messageType: summary.type,
-          body: summary.body,
-          fileName: summary.fileName || null,
-          mimeType: summary.mimeType || null,
-          mediaAvailableOnDevice: summary.type !== 'text',
-        });
+        const payload = extractMessagePayload(message, instance);
+        if (!payload) continue;
+        const summary = payload.rawSummary;
+        delete payload.rawSummary;
+        const isMedia = payload.mediaAvailableOnDevice;
+        const messageId = payload.id;
+
+        if (isMedia && instance.sock) {
+          try {
+            const buffer = await downloadMediaMessage(
+              message,
+              'buffer',
+              {},
+              { logger: waLogger, reuploadRequest: (msg) => instance.sock?.updateMediaMessage(msg) }
+            );
+            if (buffer && buffer.length > 0) {
+              pruneMediaMessages(instance);
+              instance.mediaMessages.set(messageId, {
+                message,
+                summary,
+                buffer,
+                receivedAt: Date.now(),
+              });
+              if (buffer.length <= 12 * 1024 * 1024) {
+                payload.mediaBase64 = buffer.toString('base64');
+              }
+            }
+          } catch (mediaError) {
+            logger.warn({ messageId, err: mediaError instanceof Error ? mediaError.message : String(mediaError) }, 'Failed to download WhatsApp media');
+            pruneMediaMessages(instance);
+            instance.mediaMessages.set(messageId, {
+              message,
+              summary,
+              buffer: null,
+              receivedAt: Date.now(),
+            });
+          }
+        }
+
+        await emitWebhook(id, 'message', payload);
       }
     });
 
@@ -366,9 +485,69 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ok: true, instanceId, status: 'disconnected' });
     }
 
+    const mediaMatch = action.match(/^messages\/([^/]+)\/media$/);
+    if (req.method === 'GET' && mediaMatch) {
+      const messageId = decodeURIComponent(mediaMatch[1]);
+      const currentInstance = instances.get(instanceId);
+      if (!currentInstance) {
+        return json(res, 404, { error: 'Instance not found.' });
+      }
+      const cached = currentInstance.mediaMessages?.get(messageId);
+      if (!cached) {
+        return json(res, 404, { error: 'Media not found or expired.' });
+      }
+      let buffer = cached.buffer;
+      if (!buffer && currentInstance.sock) {
+        try {
+          buffer = await downloadMediaMessage(
+            cached.message,
+            'buffer',
+            {},
+            { logger: waLogger, reuploadRequest: (msg) => currentInstance.sock?.updateMediaMessage(msg) }
+          );
+          cached.buffer = buffer;
+        } catch (downloadErr) {
+          logger.warn({ messageId, err: downloadErr instanceof Error ? downloadErr.message : String(downloadErr) }, 'On-demand media download failed');
+          return json(res, 502, { error: 'Failed to download media from WhatsApp.' });
+        }
+      }
+      if (!buffer) {
+        return json(res, 404, { error: 'Media is empty or unavailable.' });
+      }
+
+      const mime = cached.summary?.mimeType || 'application/octet-stream';
+      const fileName = cached.summary?.fileName || `attachment-${messageId}`;
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': buffer.length,
+        'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
+        'Cache-Control': 'private, max-age=86400',
+      });
+      return res.end(buffer);
+    }
+
     const instance = instances.get(instanceId);
     if (!instance?.sock || instance.status !== 'connected') {
       return json(res, 409, { error: 'WhatsApp linked device is not connected.' });
+    }
+
+    const historyMatch = action.match(/^chats\/([^/]+)\/fetch-history$/);
+    if (req.method === 'POST' && historyMatch) {
+      const rawChatJid = decodeURIComponent(historyMatch[1]);
+      const body = await readJson(req, 64 * 1024);
+      const count = Number(body.count || 50);
+      const oldestMsgId = String(body.oldestMsgId || '');
+      const oldestMsgFromMe = Boolean(body.oldestMsgFromMe);
+      const oldestMsgTimestamp = Number(body.oldestMsgTimestamp || Math.floor(Date.now() / 1000));
+
+      const oldestKey = oldestMsgId ? {
+        remoteJid: rawChatJid,
+        id: oldestMsgId,
+        fromMe: oldestMsgFromMe,
+      } : undefined;
+
+      const result = await instance.sock.fetchMessageHistory(count, oldestKey, oldestMsgTimestamp);
+      return json(res, 200, { ok: true, result });
     }
 
     if (req.method === 'POST' && action === 'messages/text') {

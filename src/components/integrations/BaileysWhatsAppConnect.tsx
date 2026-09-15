@@ -41,7 +41,7 @@ export default function BaileysWhatsAppConnect({ connection, onChanged }: Props)
     } catch (pollError) {
       setError(pollError instanceof Error ? pollError.message : 'Unable to check WhatsApp linked device.');
     }
-  }, [connection?.id, connection?.status, onChanged]);
+  }, [connection, onChanged]);
 
   useEffect(() => {
     if (!connection?.id || connection.status === 'disconnected') {
@@ -52,7 +52,7 @@ export default function BaileysWhatsAppConnect({ connection, onChanged }: Props)
     if (connection.status === 'connected') return;
     const timer = window.setInterval(() => void poll(), 2500);
     return () => window.clearInterval(timer);
-  }, [connection?.id, connection?.status, poll]);
+  }, [connection, poll]);
 
   const connect = async () => {
     setBusy(true);

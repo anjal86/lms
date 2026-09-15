@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { resolveMetaMessageMedia } from '@/lib/integrations/meta-message-media';
+import { fetchWhatsappBridgeMedia } from '@/lib/integrations/whatsapp-baileys';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -139,7 +140,38 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       });
     }
   } catch {
-    // The staging object may already be released after Meta accepted the message.
+    // The staging object may already be released after provider accepted the message.
+  }
+
+  if (conversation.provider === 'whatsapp' && conversation.connection_id) {
+    const { data: recentMessages } = await admin
+      .from('lead_messages')
+      .select('provider_message_id,external_message_id,metadata,sent_at')
+      .eq('conversation_id', id)
+      .order('sent_at', { ascending: false })
+      .limit(100);
+
+    const storedMessage = (recentMessages || []).find((message) => record(message.metadata).storage_path === path);
+    const messageId = storedMessage?.external_message_id || storedMessage?.provider_message_id;
+    if (messageId) {
+      try {
+        const media = await fetchWhatsappBridgeMedia(conversation.connection_id, messageId);
+        if (media && media.buffer.length > 0) {
+          const metadata = record(storedMessage?.metadata);
+          const contentType = media.contentType || (typeof metadata.mime_type === 'string' ? metadata.mime_type : 'application/octet-stream');
+          return new Response(media.buffer, {
+            headers: {
+              'Content-Type': contentType,
+              'Cache-Control': 'private, max-age=300',
+              'Content-Disposition': 'inline',
+            },
+          });
+        }
+      } catch (waErr) {
+        console.warn('Unable to stream media from WhatsApp bridge:', waErr);
+      }
+    }
+    return NextResponse.json({ error: 'Attachment not found.' }, { status: 404 });
   }
 
   if ((conversation.provider !== 'facebook' && conversation.provider !== 'instagram') || !conversation.connection_id) {

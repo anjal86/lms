@@ -1,16 +1,42 @@
 import 'server-only';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const DEFAULT_LOCAL_BRIDGE_URL = 'http://127.0.0.1:3101';
 
+function getEnvValue(name: string): string | null {
+  const existing = process.env[name]?.trim();
+  if (existing) return existing;
+  try {
+    const envPath = path.join(process.cwd(), '.env.local');
+    if (existsSync(envPath)) {
+      const content = readFileSync(envPath, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+        const [key, ...rest] = trimmed.split('=');
+        if (key.trim() === name) {
+          const value = rest.join('=').trim().replace(/^['"]|['"]$/g, '');
+          process.env[name] = value;
+          return value;
+        }
+      }
+    }
+  } catch {
+    // Ignore error reading file
+  }
+  return null;
+}
+
 function requiredSecret(name: 'WHATSAPP_BRIDGE_API_KEY' | 'WHATSAPP_BRIDGE_WEBHOOK_SECRET') {
-  const value = process.env[name]?.trim();
+  const value = getEnvValue(name);
   if (!value) throw new Error(`${name} is not configured.`);
   return value;
 }
 
 export function whatsappBridgeUrl() {
-  return (process.env.WHATSAPP_BRIDGE_URL?.trim() || DEFAULT_LOCAL_BRIDGE_URL).replace(/\/$/, '');
+  return (getEnvValue('WHATSAPP_BRIDGE_URL') || DEFAULT_LOCAL_BRIDGE_URL).replace(/\/$/, '');
 }
 
 export async function whatsappBridgeRequest<T = Record<string, unknown>>(
@@ -41,6 +67,31 @@ export async function whatsappBridgeRequest<T = Record<string, unknown>>(
   }
 }
 
+export async function fetchWhatsappBridgeMedia(instanceId: string, messageId: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const url = `${whatsappBridgeUrl()}/instances/${encodeURIComponent(instanceId)}/messages/${encodeURIComponent(messageId)}/media`;
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: {
+        'x-bridge-api-key': requiredSecret('WHATSAPP_BRIDGE_API_KEY'),
+      },
+    });
+    if (!response.ok) return null;
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return { buffer, contentType };
+  } catch (error) {
+    console.warn('Failed to fetch media from WhatsApp bridge:', error instanceof Error ? error.message : error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function verifyWhatsappBridgeSignature(rawBody: string, signature: string | null) {
   if (!signature || !/^[a-f0-9]{64}$/i.test(signature)) return false;
   const expected = createHmac('sha256', requiredSecret('WHATSAPP_BRIDGE_WEBHOOK_SECRET'))
@@ -50,3 +101,4 @@ export function verifyWhatsappBridgeSignature(rawBody: string, signature: string
   const expectedBuffer = Buffer.from(expected, 'hex');
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
+

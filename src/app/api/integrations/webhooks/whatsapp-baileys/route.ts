@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { verifyWhatsappBridgeSignature } from '@/lib/integrations/whatsapp-baileys';
+import { fetchWhatsappBridgeMedia, verifyWhatsappBridgeSignature } from '@/lib/integrations/whatsapp-baileys';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,24 @@ type BridgeEnvelope = {
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function safeName(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'attachment';
+}
+
+function mimeExtension(mime: string): string {
+  const lower = mime.toLowerCase();
+  if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg';
+  if (lower.includes('png')) return 'png';
+  if (lower.includes('webp')) return 'webp';
+  if (lower.includes('gif')) return 'gif';
+  if (lower.includes('mp4')) return 'mp4';
+  if (lower.includes('quicktime')) return 'mov';
+  if (lower.includes('ogg') || lower.includes('opus')) return 'ogg';
+  if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3';
+  if (lower.includes('pdf')) return 'pdf';
+  return 'bin';
 }
 
 function connectionConfig(value: unknown) {
@@ -106,19 +125,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  if (event === 'messages.batch') {
+    const rawMessages = Array.isArray(data.messages) ? data.messages : [];
+    let count = 0;
+    for (const item of rawMessages) {
+      const msgData = record(item);
+      const res = await ingestSingleMessage(msgData, instanceId, admin, now);
+      if (res) count += 1;
+    }
+    await admin.from('integration_connections').update({ last_event_at: now, last_sync_at: now }).eq('id', instanceId);
+    return NextResponse.json({ ok: true, count });
+  }
+
   if (event !== 'message') return NextResponse.json({ ignored: true });
 
+  const result = await ingestSingleMessage(data, instanceId, admin, now);
+  await admin.from('integration_connections').update({ last_event_at: now, last_error: null }).eq('id', instanceId);
+  return NextResponse.json({ ok: true, result });
+}
+
+async function ingestSingleMessage(
+  data: Record<string, unknown>,
+  instanceId: string,
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  now: string
+) {
   const externalMessageId = String(data.id || '');
   const phone = String(data.phone || '').replace(/\D/g, '');
   const origin = String(data.origin || 'customer');
   const fromMe = Boolean(data.fromMe);
-  if (!externalMessageId || !phone) return NextResponse.json({ ignored: true, reason: 'Message has no ID or phone number.' });
+  if (!externalMessageId || !phone) return null;
 
-  // Messages sent by the CRM are inserted before transport delivery and finalized with
-  // the provider ID, so the echo from Baileys must not create a second timeline row.
   if (fromMe && origin === 'bridge_api') {
-    await admin.from('integration_connections').update({ last_event_at: now }).eq('id', instanceId);
-    return NextResponse.json({ ok: true, echo: true });
+    return { echo: true };
   }
 
   const { data: existing } = await admin
@@ -128,7 +167,7 @@ export async function POST(request: Request) {
     .eq('connection_id', instanceId)
     .eq('external_message_id', externalMessageId)
     .maybeSingle();
-  if (existing) return NextResponse.json({ ok: true, duplicate: true });
+  if (existing) return { duplicate: true };
 
   const sentAt = typeof data.timestamp === 'string' && !Number.isNaN(new Date(data.timestamp).getTime())
     ? new Date(data.timestamp).toISOString()
@@ -139,7 +178,7 @@ export async function POST(request: Request) {
   const customerName = typeof data.pushName === 'string' && data.pushName.trim()
     ? data.pushName.trim()
     : `WhatsApp ${phone}`;
-  const metadata = {
+  const metadata: Record<string, unknown> = {
     transport: 'baileys',
     jid,
     origin,
@@ -171,9 +210,77 @@ export async function POST(request: Request) {
 
   if (ingestError) {
     console.error('Baileys WhatsApp message ingest failed:', ingestError.message);
-    return NextResponse.json({ error: 'Unable to log WhatsApp message.' }, { status: 500 });
+    return null;
   }
 
-  await admin.from('integration_connections').update({ last_event_at: now, last_error: null }).eq('id', instanceId);
-  return NextResponse.json({ ok: true, result: ingestResult || null });
+  const ingested = record(ingestResult);
+  const conversationId = typeof ingested.conversation_id === 'string' ? ingested.conversation_id : null;
+  const messageId = typeof ingested.message_id === 'string' ? ingested.message_id : null;
+
+  if (conversationId && messageId && messageType !== 'text') {
+    let mediaBuffer: Buffer | null = null;
+    let resolvedMimeType = typeof data.mimeType === 'string' ? data.mimeType : 'application/octet-stream';
+
+    if (typeof data.mediaBase64 === 'string' && data.mediaBase64.length > 0) {
+      try {
+        mediaBuffer = Buffer.from(data.mediaBase64, 'base64');
+      } catch {
+        // Fallback to fetch from bridge
+      }
+    }
+
+    if (!mediaBuffer && data.mediaAvailableOnDevice) {
+      const fetched = await fetchWhatsappBridgeMedia(instanceId, externalMessageId);
+      if (fetched) {
+        mediaBuffer = fetched.buffer;
+        if (fetched.contentType) resolvedMimeType = fetched.contentType;
+      }
+    }
+
+    if (mediaBuffer && mediaBuffer.length > 0) {
+      try {
+        const { data: convData } = await admin
+          .from('lead_conversations')
+          .select('workspace_id')
+          .eq('id', conversationId)
+          .maybeSingle();
+
+        const workspaceId = convData?.workspace_id || 'global';
+        const rawFileName = typeof data.fileName === 'string' ? data.fileName : null;
+        const ext = mimeExtension(resolvedMimeType) || 'bin';
+        const cleanName = safeName(rawFileName || `whatsapp-${messageType}-${externalMessageId.slice(-8)}.${ext}`);
+        const storagePath = `${workspaceId}/${conversationId}/${randomUUID()}-${cleanName}`;
+
+        const { error: uploadError } = await admin.storage
+          .from('conversation-media')
+          .upload(storagePath, mediaBuffer, {
+            contentType: resolvedMimeType,
+            upsert: false,
+          });
+
+        if (!uploadError) {
+          const attachmentUrl = `/api/conversations/${conversationId}/attachments?path=${encodeURIComponent(storagePath)}`;
+          await admin
+            .from('lead_messages')
+            .update({
+              metadata: {
+                ...metadata,
+                storage_path: storagePath,
+                attachment_url: attachmentUrl,
+                preview_url: messageType === 'image' ? attachmentUrl : null,
+                file_name: cleanName,
+                mime_type: resolvedMimeType,
+                size: mediaBuffer.length,
+              },
+            })
+            .eq('id', messageId);
+        }
+      } catch (storageErr) {
+        console.warn('Error handling inbound WhatsApp media upload:', storageErr);
+      }
+    }
+  }
+
+  return ingestResult;
 }
+
