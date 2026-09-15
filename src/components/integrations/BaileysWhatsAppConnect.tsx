@@ -4,8 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
-  CheckCircle2,
-  ChevronRight,
+  Check,
   Link2,
   Loader2,
   Plus,
@@ -58,23 +57,18 @@ function stateFor(connection: Connection): UiState {
 }
 
 function statusLabel(state: UiState) {
-  switch (state) {
-    case 'connected': return 'Connected';
-    case 'awaiting_scan': return 'Scan QR';
-    case 'connecting': return 'Connecting';
-    case 'attention': return 'Needs attention';
-    default: return 'Disconnected';
-  }
+  if (state === 'connected') return 'Connected';
+  if (state === 'awaiting_scan') return 'Scan QR code';
+  if (state === 'connecting') return 'Connecting';
+  if (state === 'attention') return 'Needs attention';
+  return 'Disconnected';
 }
 
-function statusDotColor(state: UiState) {
-  switch (state) {
-    case 'connected': return 'bg-emerald-500';
-    case 'awaiting_scan':
-    case 'connecting': return 'bg-amber-500';
-    case 'attention': return 'bg-rose-500';
-    default: return 'bg-zinc-300';
-  }
+function statusDot(state: UiState) {
+  if (state === 'connected') return 'bg-emerald-500';
+  if (state === 'awaiting_scan' || state === 'connecting') return 'bg-amber-500';
+  if (state === 'attention') return 'bg-rose-500';
+  return 'bg-zinc-300';
 }
 
 export default function BaileysWhatsAppConnect({
@@ -106,38 +100,31 @@ export default function BaileysWhatsAppConnect({
       setCanCreateShared(Boolean(payload.permissions?.can_create_shared));
       setSelectedId((current) => (current && next.some((item) => item.id === current) ? current : next[0]?.id || null));
       setError(null);
-    } catch (pollError) {
-      setError(pollError instanceof Error ? pollError.message : 'Unable to load WhatsApp accounts.');
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : 'Unable to load WhatsApp accounts.');
     } finally {
       if (!quiet) setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!isOpen) return;
-    void refresh();
+    if (isOpen) void refresh();
   }, [isOpen, refresh]);
 
-  // Keyboard shortcut: Esc to close
   useEffect(() => {
     if (!isOpen || !onClose) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (confirmDisconnectId) setConfirmDisconnectId(null);
-        else if (addOpen) setAddOpen(false);
-        else onClose();
-      }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (confirmDisconnectId) setConfirmDisconnectId(null);
+      else if (addOpen) setAddOpen(false);
+      else onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose, addOpen, confirmDisconnectId]);
+  }, [addOpen, confirmDisconnectId, isOpen, onClose]);
 
   const hasPending = useMemo(
-    () =>
-      connections.some((item) => {
-        const state = stateFor(item);
-        return state === 'awaiting_scan' || state === 'connecting';
-      }),
+    () => connections.some((item) => ['awaiting_scan', 'connecting'].includes(stateFor(item))),
     [connections]
   );
 
@@ -145,24 +132,21 @@ export default function BaileysWhatsAppConnect({
     if (!isOpen || !hasPending) return;
     const timer = window.setInterval(() => void refresh(true), 2500);
     return () => window.clearInterval(timer);
-  }, [isOpen, hasPending, refresh]);
+  }, [hasPending, isOpen, refresh]);
 
   const selected = connections.find((item) => item.id === selectedId) || null;
   const selectedState = selected ? stateFor(selected) : null;
   const connectedCount = connections.filter((item) => stateFor(item) === 'connected').length;
 
   const createConnection = async () => {
-    if (!displayName.trim()) return;
+    if (displayName.trim().length < 2) return;
     setCreating(true);
     setError(null);
     try {
       const response = await fetch('/api/integrations/whatsapp/baileys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          displayName: displayName.trim(),
-          visibilityScope,
-        }),
+        body: JSON.stringify({ displayName: displayName.trim(), visibilityScope }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to start WhatsApp setup.');
@@ -225,46 +209,34 @@ export default function BaileysWhatsAppConnect({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end bg-zinc-950/30 backdrop-blur-xs transition-opacity"
+      className="fixed inset-0 z-50 flex justify-end bg-zinc-950/25"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="whatsapp-drawer-title"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && onClose) onClose();
+      aria-labelledby="whatsapp-connection-title"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && onClose) onClose();
       }}
     >
-      <div className="flex h-full w-full max-w-2xl sm:max-w-3xl flex-col border-l border-zinc-200 bg-white shadow-2xl animate-in slide-in-from-right duration-200">
-        {/* Drawer Header */}
-        <header className="flex shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-6 py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-600">
-              <Smartphone className="h-4 w-4" />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 id="whatsapp-drawer-title" className="text-base font-semibold text-zinc-950">
-                  WhatsApp Linked Devices
-                </h2>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-600">
-                  <span className={`h-1.5 w-1.5 rounded-full ${connectedCount > 0 ? 'bg-emerald-500' : 'bg-zinc-300'}`} />
-                  {connectedCount} of {connections.length} active
-                </span>
-              </div>
-              <p className="text-xs text-zinc-500">
-                Pair personal or business phones via QR code to stream conversations directly into the CRM inbox.
-              </p>
-            </div>
+      <div className="flex h-full w-full max-w-3xl flex-col border-l border-zinc-200 bg-white shadow-xl">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-zinc-200 px-5 py-4 sm:px-6">
+          <div className="min-w-0">
+            <h2 id="whatsapp-connection-title" className="text-base font-semibold text-zinc-950">WhatsApp connections</h2>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              {connections.length === 0
+                ? 'Connect a phone to start syncing messages.'
+                : `${connectedCount} of ${connections.length} ${connections.length === 1 ? 'account' : 'accounts'} connected`}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               onClick={() => void refresh()}
               disabled={refreshing}
-              className="button-secondary button-sm"
-              aria-label="Refresh WhatsApp status"
+              className="button-ghost button-sm px-2"
+              aria-label="Refresh connections"
+              title="Refresh"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
             <button
               type="button"
@@ -273,46 +245,35 @@ export default function BaileysWhatsAppConnect({
                 setConfirmDisconnectId(null);
               }}
               className="button-primary button-sm"
-              aria-label="Add new WhatsApp account"
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>Add account</span>
+              Add account
             </button>
             {onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="button-ghost button-sm px-2 text-zinc-400 hover:text-zinc-600"
-                aria-label="Close drawer"
-              >
+              <button type="button" onClick={onClose} className="button-ghost button-sm px-2" aria-label="Close">
                 <X className="h-4 w-4" />
               </button>
             )}
           </div>
         </header>
 
-        {/* Global Error Banner if any */}
         {error && (
-          <div className="flex items-center gap-2 border-b border-rose-200 bg-rose-50 px-6 py-2.5 text-xs text-rose-700">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
-            <span className="flex-1">{error}</span>
+          <div className="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-5 py-2.5 text-xs text-rose-700 sm:px-6">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">{error}</span>
+            <button type="button" onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700" aria-label="Dismiss error">
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
 
-        {/* Main Body (Split Sidebar + Content) */}
-        <div className="flex flex-1 flex-col overflow-hidden sm:flex-row">
-          {/* Accounts Navigation Sidebar */}
-          <aside className="flex w-full shrink-0 flex-col border-b border-zinc-200 bg-zinc-50/70 p-3 sm:w-64 sm:border-b-0 sm:border-r">
-            <div className="flex items-center justify-between px-2 pb-2 pt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-              <span>ACCOUNTS ({connections.length})</span>
-            </div>
-
-            <div className="flex-1 space-y-1 overflow-y-auto">
+        <div className="grid min-h-0 flex-1 md:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="min-h-0 border-b border-zinc-200 bg-zinc-50/50 md:border-b-0 md:border-r">
+            <div className="flex gap-2 overflow-x-auto p-3 md:block md:h-full md:overflow-y-auto">
               {connections.map((item) => {
                 const state = stateFor(item);
-                const phone = item.bridge?.phone || item.external_account_id || null;
                 const active = item.id === selectedId && !addOpen;
-
+                const phone = item.bridge?.phone || item.external_account_id;
                 return (
                   <button
                     key={item.id}
@@ -322,427 +283,248 @@ export default function BaileysWhatsAppConnect({
                       setAddOpen(false);
                       setConfirmDisconnectId(null);
                     }}
-                    className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                      active
-                        ? 'border-zinc-300 bg-white shadow-xs ring-1 ring-zinc-950/5'
-                        : 'border-transparent hover:border-zinc-200 hover:bg-white/80'
+                    className={`mb-0 flex min-w-[190px] items-center gap-2.5 rounded-lg px-3 py-2.5 text-left md:mb-1 md:w-full md:min-w-0 ${
+                      active ? 'bg-white ring-1 ring-zinc-200' : 'hover:bg-white'
                     }`}
                   >
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotColor(state)}`} />
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot(state)}`} />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-semibold text-zinc-900">
-                        {item.display_name || 'WhatsApp'}
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="font-mono text-[11px] text-zinc-500">
-                          {phone ? `+${phone}` : statusLabel(state)}
-                        </span>
-                        <span className="rounded bg-zinc-100 px-1 py-0.2 text-[9px] font-medium text-zinc-600">
-                          {item.visibility_scope === 'workspace' ? 'Shared' : 'Personal'}
-                        </span>
-                      </div>
+                      <div className="truncate text-xs font-semibold text-zinc-900">{item.display_name || 'WhatsApp'}</div>
+                      <div className="mt-0.5 truncate text-[10px] text-zinc-500">{phone ? `+${phone}` : statusLabel(state)}</div>
                     </div>
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
                   </button>
                 );
               })}
 
               {connections.length === 0 && (
-                <div className="rounded-lg border border-dashed border-zinc-200 bg-white p-4 text-center text-xs text-zinc-500">
-                  No accounts linked yet. Click &quot;Add account&quot; to link your phone.
-                </div>
+                <div className="p-3 text-xs leading-5 text-zinc-500">No accounts connected yet.</div>
               )}
-            </div>
-
-            <div className="mt-auto pt-3 border-t border-zinc-200/70">
-              <button
-                type="button"
-                onClick={() => {
-                  setAddOpen(true);
-                  setConfirmDisconnectId(null);
-                }}
-                className={`flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
-                  addOpen
-                    ? 'border-zinc-900 bg-zinc-900 text-white'
-                    : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950'
-                }`}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Connect another phone
-              </button>
             </div>
           </aside>
 
-          {/* Right Workspace Panel */}
-          <main className="flex-1 overflow-y-auto p-6 bg-white">
+          <main className="min-h-0 overflow-y-auto">
             {addOpen ? (
-              <div className="mx-auto max-w-lg">
+              <div className="mx-auto max-w-lg px-5 py-6 sm:px-8 sm:py-8">
                 <button
                   type="button"
                   onClick={() => setAddOpen(false)}
-                  className="mb-4 inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-900"
+                  className="mb-6 inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-900"
                 >
-                  <ArrowLeft className="h-3.5 w-3.5" /> Back to accounts
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back
                 </button>
 
-                <div>
-                  <h3 className="text-base font-semibold text-zinc-950">Connect a WhatsApp account</h3>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Create the account profile, then point your WhatsApp mobile app camera at the generated QR code.
-                  </p>
+                <h3 className="text-lg font-semibold text-zinc-950">Connect WhatsApp</h3>
+                <p className="mt-1 text-sm text-zinc-500">Give this account a name. You’ll scan a QR code next.</p>
+
+                <div className="mt-6">
+                  <label htmlFor="whatsapp-account-name" className="text-xs font-semibold text-zinc-700">Account name</label>
+                  <input
+                    id="whatsapp-account-name"
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && displayName.trim().length >= 2 && !creating) void createConnection();
+                    }}
+                    className="field mt-2 h-10 text-sm"
+                    maxLength={120}
+                    placeholder="e.g. Sales WhatsApp"
+                    autoFocus
+                  />
                 </div>
 
-                <div className="mt-5 space-y-4">
-                  <div>
-                    <label htmlFor="whatsapp-account-name" className="text-xs font-semibold text-zinc-800">
-                      Account name
-                    </label>
-                    <input
-                      id="whatsapp-account-name"
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      className="field mt-1.5 h-9 text-sm"
-                      maxLength={120}
-                      placeholder="e.g. Sales Desk, Anjal WhatsApp"
-                      autoFocus
-                    />
-                    <p className="mt-1 text-[11px] text-zinc-400">
-                      Use a descriptive label staff can easily recognize in the unified Inbox.
-                    </p>
-                  </div>
-
-                  <div>
-                    <span className="text-xs font-semibold text-zinc-800">Who can use this account?</span>
-                    <div className={`mt-1.5 grid gap-2.5 ${canCreateShared ? 'sm:grid-cols-2' : ''}`}>
+                {canCreateShared && (
+                  <div className="mt-6">
+                    <div className="text-xs font-semibold text-zinc-700">Access</div>
+                    <div className="mt-2 overflow-hidden rounded-lg border border-zinc-200">
                       <button
                         type="button"
                         onClick={() => setVisibilityScope('personal')}
-                        className={`rounded-lg border p-3 text-left transition-all ${
-                          visibilityScope === 'personal'
-                            ? 'border-zinc-950 bg-zinc-50/80 shadow-xs ring-1 ring-zinc-950'
-                            : 'border-zinc-200 bg-white hover:border-zinc-300'
-                        }`}
+                        className={`flex w-full items-center gap-3 px-3.5 py-3 text-left ${visibilityScope === 'personal' ? 'bg-zinc-50' : 'bg-white hover:bg-zinc-50/70'}`}
                       >
-                        <div className="flex items-center gap-2 text-xs font-semibold text-zinc-900">
-                          <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                          Personal account
+                        <ShieldCheck className="h-4 w-4 text-zinc-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-zinc-900">Personal</div>
+                          <div className="mt-0.5 text-[11px] text-zinc-500">You and managers</div>
                         </div>
-                        <p className="mt-1 text-[11px] leading-4 text-zinc-500">
-                          Only you and workspace managers can access conversations.
-                        </p>
+                        {visibilityScope === 'personal' && <Check className="h-4 w-4 text-zinc-900" />}
                       </button>
-
-                      {canCreateShared && (
-                        <button
-                          type="button"
-                          onClick={() => setVisibilityScope('workspace')}
-                          className={`rounded-lg border p-3 text-left transition-all ${
-                            visibilityScope === 'workspace'
-                              ? 'border-zinc-950 bg-zinc-50/80 shadow-xs ring-1 ring-zinc-950'
-                              : 'border-zinc-200 bg-white hover:border-zinc-300'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 text-xs font-semibold text-zinc-900">
-                            <Users className="h-4 w-4 text-blue-600" />
-                            Shared with team
-                          </div>
-                          <p className="mt-1 text-[11px] leading-4 text-zinc-500">
-                            All staff with Inbox permissions can collaborate on conversations.
-                          </p>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50/60 p-3 text-xs text-zinc-600">
-                    <strong>Pairing requirement:</strong> Ensure you have your mobile phone ready with WhatsApp installed.
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setAddOpen(false)}
-                      className="button-secondary"
-                      disabled={creating}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void createConnection()}
-                      className="button-primary"
-                      disabled={creating || displayName.trim().length < 2}
-                    >
-                      {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
-                      Create &amp; show QR code
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : selected ? (
-              <div className="mx-auto max-w-xl space-y-5">
-                {/* Account Details Header */}
-                <div className="flex items-start justify-between gap-4 border-b border-zinc-100 pb-4">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-700">
-                      <Smartphone className="h-5 w-5" />
-                    </span>
-                    <div>
-                      <h3 className="text-base font-semibold text-zinc-950">
-                        {selected.display_name || 'WhatsApp Account'}
-                      </h3>
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 text-xs text-zinc-600">
-                          <span className={`h-2 w-2 rounded-full ${statusDotColor(selectedState || 'disconnected')}`} />
-                          {statusLabel(selectedState || 'disconnected')}
-                        </span>
-                        <span className="text-zinc-300">•</span>
-                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
-                          {selected.visibility_scope === 'workspace' ? 'Shared with workspace' : 'Personal account'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => void refresh()}
-                    disabled={refreshing}
-                    className="button-secondary button-sm"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                    <span>Check status</span>
-                  </button>
-                </div>
-
-                {/* Connected phone number if known */}
-                {(selected.bridge?.phone || selected.external_account_id) && (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50/50 px-4 py-3">
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Connected phone</div>
-                    <div className="mt-0.5 font-mono text-sm font-semibold text-zinc-900">
-                      +{selected.bridge?.phone || selected.external_account_id}
+                      <button
+                        type="button"
+                        onClick={() => setVisibilityScope('workspace')}
+                        className={`flex w-full items-center gap-3 border-t border-zinc-200 px-3.5 py-3 text-left ${visibilityScope === 'workspace' ? 'bg-zinc-50' : 'bg-white hover:bg-zinc-50/70'}`}
+                      >
+                        <Users className="h-4 w-4 text-zinc-500" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-zinc-900">Shared</div>
+                          <div className="mt-0.5 text-[11px] text-zinc-500">Available to the team</div>
+                        </div>
+                        {visibilityScope === 'workspace' && <Check className="h-4 w-4 text-zinc-900" />}
+                      </button>
                     </div>
                   </div>
                 )}
 
-                {/* State: Awaiting Scan */}
-                {selectedState === 'awaiting_scan' && selected.bridge?.qrDataUrl && (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50/40 p-5">
-                    <div>
-                      <div className="text-sm font-semibold text-zinc-950">Scan QR Code with your phone</div>
-                      <p className="mt-1 text-xs text-zinc-500">
-                        Open WhatsApp on the device you want to connect and scan the code below.
-                      </p>
+                <div className="mt-8 flex justify-end gap-2">
+                  <button type="button" onClick={() => setAddOpen(false)} className="button-secondary" disabled={creating}>Cancel</button>
+                  <button
+                    type="button"
+                    onClick={() => void createConnection()}
+                    className="button-primary"
+                    disabled={creating || displayName.trim().length < 2}
+                  >
+                    {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+                    Continue
+                  </button>
+                </div>
+              </div>
+            ) : selected ? (
+              <div className="mx-auto max-w-xl px-5 py-6 sm:px-8 sm:py-8">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate text-lg font-semibold text-zinc-950">{selected.display_name || 'WhatsApp'}</h3>
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot(selectedState || 'disconnected')}`} />
                     </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
+                      <span>{statusLabel(selectedState || 'disconnected')}</span>
+                      <span className="text-zinc-300">·</span>
+                      <span>{selected.visibility_scope === 'workspace' ? 'Shared' : 'Personal'}</span>
+                      {(selected.bridge?.phone || selected.external_account_id) && (
+                        <>
+                          <span className="text-zinc-300">·</span>
+                          <span className="font-mono">+{selected.bridge?.phone || selected.external_account_id}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
-                    <div className="mt-5 flex flex-col items-center gap-6 sm:flex-row sm:items-start">
-                      {/* QR container */}
-                      <div className="flex shrink-0 flex-col items-center">
-                        <div className="rounded-lg border border-zinc-200 bg-white p-3 shadow-xs">
+                <div className="mt-8">
+                  {selectedState === 'awaiting_scan' && selected.bridge?.qrDataUrl && (
+                    <div className="grid items-start gap-7 sm:grid-cols-[210px_minmax(0,1fr)]">
+                      <div>
+                        <div className="rounded-xl border border-zinc-200 bg-white p-3">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={selected.bridge.qrDataUrl}
                             alt={`QR code for ${selected.display_name || 'WhatsApp'}`}
-                            className="aspect-square h-[190px] w-[190px]"
+                            className="aspect-square w-full"
                           />
                         </div>
-                        <div className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-700">
+                        <div className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-zinc-500">
                           <Loader2 className="h-3 w-3 animate-spin" />
-                          <span>Waiting for scan from phone...</span>
+                          Waiting for scan
                         </div>
                       </div>
+                      <div className="pt-1">
+                        <h4 className="text-sm font-semibold text-zinc-950">Scan with WhatsApp</h4>
+                        <ol className="mt-4 space-y-3 text-xs leading-5 text-zinc-600">
+                          <li><span className="font-semibold text-zinc-900">1.</span> Open WhatsApp on your phone.</li>
+                          <li><span className="font-semibold text-zinc-900">2.</span> Open Linked devices.</li>
+                          <li><span className="font-semibold text-zinc-900">3.</span> Tap Link a device and scan this code.</li>
+                        </ol>
+                        <button
+                          type="button"
+                          onClick={() => void reconnect(selected.id)}
+                          disabled={busyId === selected.id}
+                          className="button-secondary button-sm mt-5"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${busyId === selected.id ? 'animate-spin' : ''}`} />
+                          New QR code
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
-                      {/* Instructions */}
-                      <div className="flex-1 space-y-3.5 text-xs text-zinc-700">
-                        <div className="flex items-start gap-2.5">
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[10px] font-bold text-white">
-                            1
-                          </span>
-                          <span className="pt-0.5">
-                            Open <strong>WhatsApp</strong> on your mobile phone.
-                          </span>
-                        </div>
-                        <div className="flex items-start gap-2.5">
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[10px] font-bold text-white">
-                            2
-                          </span>
-                          <span className="pt-0.5">
-                            Go to <strong>Settings</strong> (or ⋮ menu) → <strong>Linked Devices</strong>.
-                          </span>
-                        </div>
-                        <div className="flex items-start gap-2.5">
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[10px] font-bold text-white">
-                            3
-                          </span>
-                          <span className="pt-0.5">
-                            Tap <strong>Link a Device</strong> and point your camera at the QR code.
-                          </span>
-                        </div>
+                  {selectedState === 'connecting' && (
+                    <div className="flex min-h-48 flex-col items-center justify-center text-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
+                      <div className="mt-3 text-sm font-semibold text-zinc-900">Preparing connection</div>
+                      <div className="mt-1 text-xs text-zinc-500">Your QR code will appear here.</div>
+                    </div>
+                  )}
 
-                        <div className="pt-2">
-                          <button
-                            type="button"
-                            onClick={() => void reconnect(selected.id)}
-                            disabled={busyId === selected.id}
-                            className="button-secondary button-sm"
-                          >
-                            <RefreshCw className={`h-3 w-3 ${busyId === selected.id ? 'animate-spin' : ''}`} />
-                            Regenerate QR code
+                  {selectedState === 'connected' && (
+                    <div className="flex min-h-44 flex-col items-center justify-center text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                        <Check className="h-5 w-5" />
+                      </span>
+                      <div className="mt-3 text-sm font-semibold text-zinc-950">WhatsApp is connected</div>
+                      <div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">Messages will sync automatically with the CRM inbox.</div>
+                    </div>
+                  )}
+
+                  {selectedState === 'attention' && (
+                    <div className="flex min-h-44 flex-col items-center justify-center text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+                        <WifiOff className="h-5 w-5" />
+                      </span>
+                      <div className="mt-3 text-sm font-semibold text-zinc-950">Reconnect this account</div>
+                      <div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">
+                        {selected.bridge?.lastError || selected.last_error || 'The WhatsApp session is no longer active.'}
+                      </div>
+                      <button type="button" onClick={() => void reconnect(selected.id)} disabled={busyId === selected.id} className="button-primary button-sm mt-4">
+                        {busyId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                        Reconnect
+                      </button>
+                    </div>
+                  )}
+
+                  {selectedState === 'disconnected' && (
+                    <div className="flex min-h-44 flex-col items-center justify-center text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
+                        <Smartphone className="h-5 w-5" />
+                      </span>
+                      <div className="mt-3 text-sm font-semibold text-zinc-950">Account disconnected</div>
+                      <div className="mt-1 max-w-sm text-xs leading-5 text-zinc-500">Your CRM history is safe. Reconnect to resume WhatsApp syncing.</div>
+                      <button type="button" onClick={() => void reconnect(selected.id)} disabled={busyId === selected.id} className="button-primary button-sm mt-4">
+                        {busyId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                        Connect
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {selected.can_manage !== false && selectedState === 'connected' && (
+                  <div className="mt-8 border-t border-zinc-100 pt-4">
+                    {confirmDisconnectId === selected.id ? (
+                      <div className="flex flex-col gap-3 rounded-lg bg-rose-50 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-rose-900">Disconnect this account?</div>
+                          <div className="mt-0.5 text-[11px] text-rose-700">Existing CRM messages will remain available.</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setConfirmDisconnectId(null)} className="button-secondary button-sm" disabled={busyId === selected.id}>Cancel</button>
+                          <button type="button" onClick={() => void disconnect(selected.id)} className="button-primary button-sm bg-rose-600 hover:bg-rose-700" disabled={busyId === selected.id}>
+                            {busyId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
+                            Disconnect
                           </button>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* State: Connecting */}
-                {selectedState === 'connecting' && (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-5 text-center">
-                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-zinc-600" />
-                    <div className="mt-3 text-sm font-semibold text-zinc-900">Preparing WhatsApp connection</div>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      The QR code is being generated. This takes about 2 seconds...
-                    </p>
-                  </div>
-                )}
-
-                {/* State: Connected */}
-                {selectedState === 'connected' && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-5">
-                    <div className="flex items-start gap-3">
-                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-                      <div>
-                        <div className="text-sm font-semibold text-emerald-950">Linked and syncing in real time</div>
-                        <p className="mt-1 text-xs leading-5 text-emerald-800">
-                          Inbound messages, older history, and outgoing replies sync automatically with your CRM Inbox.
-                        </p>
-                        <div className="mt-3 text-[11px] text-emerald-700">
-                          Session status: <strong>Online</strong> • Local linked device container is active.
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* State: Attention */}
-                {selectedState === 'attention' && (
-                  <div className="rounded-lg border border-rose-200 bg-rose-50 p-5">
-                    <div className="flex items-start gap-3">
-                      <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-                      <div>
-                        <div className="text-sm font-semibold text-rose-900">Connection needs attention</div>
-                        <p className="mt-1 text-xs leading-5 text-rose-700">
-                          {selected.bridge?.lastError || selected.last_error || 'The linked session is not active.'}
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => void reconnect(selected.id)}
-                          disabled={busyId === selected.id}
-                          className="button-primary button-sm mt-3"
-                        >
-                          <Link2 className="h-3.5 w-3.5" /> Reconnect account
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* State: Disconnected */}
-                {selectedState === 'disconnected' && (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-5">
-                    <div className="flex items-start gap-3">
-                      <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-zinc-500" />
-                      <div>
-                        <div className="text-sm font-semibold text-zinc-900">This account is disconnected</div>
-                        <p className="mt-1 text-xs leading-5 text-zinc-500">
-                          Existing messages and leads remain safely saved in your database. Reconnect to send and receive new messages.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => void reconnect(selected.id)}
-                          disabled={busyId === selected.id}
-                          className="button-primary button-sm mt-3"
-                        >
-                          <Link2 className="h-3.5 w-3.5" /> Reconnect via QR
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Disconnect Confirmation / Actions */}
-                {confirmDisconnectId === selected.id ? (
-                  <div className="rounded-lg border border-rose-200 bg-rose-50/80 p-4">
-                    <div className="text-xs font-semibold text-rose-900">Disconnect this WhatsApp phone?</div>
-                    <p className="mt-1 text-xs leading-5 text-rose-700">
-                      Messages already stored in the CRM will remain intact. New WhatsApp messages will stop syncing until you re-link this device.
-                    </p>
-                    <div className="mt-3 flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDisconnectId(null)}
-                        className="button-secondary button-sm"
-                        disabled={busyId === selected.id}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void disconnect(selected.id)}
-                        className="button-primary button-sm bg-rose-600 hover:bg-rose-700"
-                        disabled={busyId === selected.id}
-                      >
-                        {busyId === selected.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Unplug className="h-3.5 w-3.5" />
-                        )}
-                        Confirm disconnect
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between border-t border-zinc-100 pt-4 text-xs text-zinc-400">
-                    <span>Keep the paired phone connected to the internet.</span>
-                    {selected.can_manage !== false && selectedState === 'connected' && (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDisconnectId(selected.id)}
-                        className="button-ghost button-sm text-rose-600 hover:text-rose-700"
-                      >
-                        <Unplug className="h-3.5 w-3.5" /> Disconnect device
+                    ) : (
+                      <button type="button" onClick={() => setConfirmDisconnectId(selected.id)} className="text-xs font-medium text-zinc-400 hover:text-rose-600">
+                        Disconnect account
                       </button>
                     )}
                   </div>
                 )}
               </div>
             ) : (
-              <div className="flex min-h-[300px] flex-col items-center justify-center text-center">
-                <span className="flex h-12 w-12 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-600">
-                  <QrCode className="h-6 w-6" />
+              <div className="flex h-full min-h-80 flex-col items-center justify-center px-6 text-center">
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
+                  <Smartphone className="h-5 w-5" />
                 </span>
-                <h3 className="mt-4 text-base font-semibold text-zinc-950">No WhatsApp account selected</h3>
-                <p className="mt-1.5 max-w-sm text-xs text-zinc-500">
-                  Select an account from the sidebar or click &quot;Connect another phone&quot; to link a device.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setAddOpen(true)}
-                  className="button-primary button-sm mt-4"
-                >
+                <div className="mt-3 text-sm font-semibold text-zinc-950">Connect WhatsApp</div>
+                <div className="mt-1 max-w-xs text-xs leading-5 text-zinc-500">Link a phone to bring WhatsApp conversations into your CRM inbox.</div>
+                <button type="button" onClick={() => setAddOpen(true)} className="button-primary button-sm mt-4">
                   <Plus className="h-3.5 w-3.5" />
-                  Connect WhatsApp
+                  Add account
                 </button>
               </div>
             )}
           </main>
         </div>
-
-        {/* Drawer Footer */}
-        <footer className="flex shrink-0 items-center justify-between border-t border-zinc-200 bg-zinc-50/60 px-6 py-3 text-[11px] text-zinc-500">
-          <span>WhatsApp Linked Device uses persistent Docker sessions.</span>
-          <span className="font-mono">Port 3101 • Baileys v7</span>
-        </footer>
       </div>
     </div>
   );
