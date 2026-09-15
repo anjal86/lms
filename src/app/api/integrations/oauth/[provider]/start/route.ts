@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { getProvider, metaScopes, type IntegrationProvider } from '@/lib/integrations/catalog';
 import { integrationEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
 
@@ -14,13 +14,10 @@ export async function GET(request: Request, context: { params: Promise<{ provide
     return NextResponse.json({ error: 'This provider does not use account sign-in.' }, { status: 400 });
   }
 
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL('/login', request.url));
-
-  const { data: profile } = await supabase.from('profiles').select('role,is_active').eq('id', user.id).maybeSingle();
-  if (!profile?.is_active || !['admin', 'manager'].includes(profile.role)) {
-    return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
+  const actor = await getApiActor(request);
+  if ('error' in actor) return actor.error;
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
   }
 
   const appUrl = publicAppUrl(request.url);
@@ -31,8 +28,8 @@ export async function GET(request: Request, context: { params: Promise<{ provide
     const error = definition.connectMode === 'meta_oauth' ? 'meta_not_configured' : 'tiktok_not_configured';
     return NextResponse.redirect(new URL(`/connections?error=${error}&setup=${provider}`, appUrl));
   }
-  let destination: string;
 
+  let destination: string;
   if (definition.connectMode === 'meta_oauth') {
     const appId = process.env.META_APP_ID?.trim();
     const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
@@ -54,7 +51,12 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   }
 
   const response = NextResponse.redirect(destination);
-  response.cookies.set('wanderlust_integration_oauth', JSON.stringify({ state, provider, userId: user.id }), {
+  response.cookies.set('wanderlust_integration_oauth', JSON.stringify({
+    state,
+    provider,
+    userId: actor.user.id,
+    workspaceId: actor.profile.workspace_id,
+  }), {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
