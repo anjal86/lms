@@ -115,12 +115,15 @@ async function updateHistoryJob(
   const batchIndex = Number(batchData.batch_index);
   const batchTotal = Number(batchData.batch_total);
   const isLatest = batchData.is_latest === true;
+  const receivedAfter = Number(job.messages_received || 0) + rawMessages.length;
+  const requestedCount = Math.max(1, Number(job.requested_count || 50));
   const finalChunk = isLatest && (
     !Number.isFinite(batchTotal)
     || batchTotal <= 1
     || (Number.isFinite(batchIndex) && batchIndex >= batchTotal - 1)
   );
-  const complete = finalChunk || progress === 100;
+  const reachedRequestedCount = receivedAfter >= requestedCount;
+  const complete = finalChunk || progress === 100 || reachedRequestedCount;
   const range = timestampRange(rawMessages);
 
   const oldest = [job.oldest_message_at, range.oldest]
@@ -136,9 +139,9 @@ async function updateHistoryJob(
     .from('whatsapp_history_sync_jobs')
     .update({
       status: complete ? 'completed' : 'receiving',
-      messages_received: Number(job.messages_received || 0) + rawMessages.length,
+      messages_received: receivedAfter,
       sync_type: typeof batchData.sync_type === 'string' ? batchData.sync_type : job.sync_type,
-      progress: progress ?? job.progress,
+      progress: progress ?? (complete ? 100 : job.progress),
       is_latest: isLatest || Boolean(job.is_latest),
       oldest_message_at: oldest.length ? new Date(Math.min(...oldest)).toISOString() : null,
       newest_message_at: newest.length ? new Date(Math.max(...newest)).toISOString() : null,
