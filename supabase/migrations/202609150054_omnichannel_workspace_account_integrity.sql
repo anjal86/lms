@@ -90,7 +90,7 @@ from (
     c.workspace_id,
     c.provider,
     public.normalize_contact_identity(c.external_contact_id, 'external') as identity_normalized,
-    min(c.connection_id) as connection_id,
+    (array_agg(c.connection_id order by c.connection_id::text))[1] as connection_id,
     count(distinct c.connection_id) as connection_count
   from public.lead_conversations c
   where c.connection_id is not null
