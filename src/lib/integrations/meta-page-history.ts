@@ -7,7 +7,10 @@ import { metaFetchJson } from '@/lib/integrations/meta-http';
 type Provider = 'facebook' | 'instagram';
 type MetaRecord = Record<string, unknown>;
 
+const DISCOVERY_VERSION = 2;
+
 type PageDiscoveryState = {
+  version?: number;
   after_cursor?: string | null;
   complete?: boolean;
   updated_at?: string;
@@ -138,6 +141,7 @@ async function saveDiscoveryState(input: {
   const nextRoot = {
     ...existingRoot,
     [input.key]: {
+      version: DISCOVERY_VERSION,
       after_cursor: input.nextCursor,
       complete: input.complete,
       updated_at: new Date().toISOString(),
@@ -204,13 +208,15 @@ export async function discoverSelectedMetaPageHistory(input: {
   const stateKey = discoveryKey(input.provider, input.accountId);
   const discoveryRoot = record(connectionConfig.inbox_history_discovery);
   const discoveryState = record(discoveryRoot[stateKey]) as PageDiscoveryState;
-  const savedCursor = typeof discoveryState.after_cursor === 'string' && discoveryState.after_cursor
+  const discoveryStateIsCurrent = discoveryState.version === DISCOVERY_VERSION;
+  const savedCursor = discoveryStateIsCurrent && typeof discoveryState.after_cursor === 'string' && discoveryState.after_cursor
     ? discoveryState.after_cursor
     : null;
 
-  // Once the historical walk reaches the end, recent/new conversations are kept
-  // current by the normal live Meta sync. Do not restart page 1 on every poll.
-  if (discoveryState.complete === true) {
+  // Version 2 repairs the old global-dedupe/25-row discovery behavior. Any cursor
+  // written by an older version is intentionally restarted once so already-discovered
+  // blank threads get their current connection metadata and preview message repaired.
+  if (discoveryStateIsCurrent && discoveryState.complete === true) {
     return {
       conversationsDiscovered: 0,
       conversationsScanned: 0,
