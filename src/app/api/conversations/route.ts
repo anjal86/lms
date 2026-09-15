@@ -6,6 +6,8 @@ export const dynamic = 'force-dynamic';
 
 const PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api']);
 
+type AuthenticatedActor = Exclude<Awaited<ReturnType<typeof getApiActor>>, { error: unknown }>;
+
 function sanitizeSearchTerm(value: string) {
   return value.replace(/[,%()'"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
@@ -36,13 +38,28 @@ function readCookie(request: Request, name: string) {
   return '';
 }
 
-async function resolveAccountScope(
-  request: Request,
-  url: URL,
-  actor: Awaited<ReturnType<typeof getApiActor>> extends infer T ? Exclude<T, { error: unknown }> : never
-) {
-  const explicitId = sanitizeUuid(url.searchParams.get('accountId'));
-  const explicitProvider = sanitizeProvider(url.searchParams.get('accountProvider'));
+function referrerScope(request: Request) {
+  const referrer = request.headers.get('referer');
+  if (!referrer) return { accountId: '', accountProvider: '' };
+  try {
+    const requestUrl = new URL(request.url);
+    const referrerUrl = new URL(referrer);
+    if (referrerUrl.origin !== requestUrl.origin || referrerUrl.pathname !== '/inbox') {
+      return { accountId: '', accountProvider: '' };
+    }
+    return {
+      accountId: sanitizeUuid(referrerUrl.searchParams.get('accountId')),
+      accountProvider: sanitizeProvider(referrerUrl.searchParams.get('accountProvider')),
+    };
+  } catch {
+    return { accountId: '', accountProvider: '' };
+  }
+}
+
+async function resolveAccountScope(request: Request, url: URL, actor: AuthenticatedActor) {
+  const referrer = referrerScope(request);
+  const explicitId = sanitizeUuid(url.searchParams.get('accountId')) || referrer.accountId;
+  const explicitProvider = sanitizeProvider(url.searchParams.get('accountProvider')) || referrer.accountProvider;
 
   if (explicitId) {
     const { data } = await actor.supabase
@@ -55,17 +72,14 @@ async function resolveAccountScope(
     return { connection: data, legacy: false } as const;
   }
 
-  // Compatibility with the old top-level Facebook/Instagram account cookie. New UI
-  // always sends the concrete connection UUID explicitly.
+  // Compatibility with the old account cookie. New UI always uses a concrete UUID.
   const cookieValue = readCookie(request, 'inbox_page_filter');
   if (!cookieValue || cookieValue === 'all') return { connection: null, legacy: false } as const;
   const separator = cookieValue.indexOf(':');
   if (separator <= 0) return { connection: null, legacy: false } as const;
   const cookieProvider = sanitizeProvider(cookieValue.slice(0, separator));
   const externalAccountId = cookieValue.slice(separator + 1).trim().slice(0, 240);
-  if (!cookieProvider || !externalAccountId || !['facebook', 'instagram'].includes(cookieProvider)) {
-    return { connection: null, legacy: false } as const;
-  }
+  if (!cookieProvider || !externalAccountId) return { connection: null, legacy: false } as const;
 
   const { data } = await actor.supabase
     .from('integration_connections')
@@ -192,13 +206,6 @@ export async function GET(request: Request) {
     console.error('Conversation list failed:', error.message);
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
-
-  const applyScope = <T extends { eq: (column: string, value: string) => T }>(base: T) => {
-    let scoped = base;
-    if (provider !== 'all') scoped = scoped.eq('provider', provider);
-    if (selectedConnection) scoped = scoped.eq('connection_id', selectedConnection.id);
-    return scoped;
-  };
 
   let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed');
   let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed');
