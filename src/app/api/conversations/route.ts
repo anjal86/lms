@@ -144,16 +144,22 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'The selected account does not belong to this channel.' }, { status: 400 });
   }
 
-  // Find all active/connected accounts in this workspace
   const { data: activeConnections } = await actor.supabase
     .from('integration_connections')
     .select('id,provider,display_name,external_account_id,status')
     .eq('workspace_id', actor.profile.workspace_id)
     .in('status', ['connected', 'paused']);
 
-  const activeConnectionIds = (activeConnections || []).map((conn) => conn.id);
+  const activeConnectionIds = (activeConnections || []).map((connection) => connection.id);
+  const activeProviders = Array.from(new Set(
+    (activeConnections || [])
+      .map((connection) => connection.provider)
+      .filter((value) => PROVIDERS.has(value))
+  ));
 
   let scopedConnectionIds: string[] = [];
+  let connectionScopeFilter = '';
+
   if (selectedConnection) {
     if (!activeConnectionIds.includes(selectedConnection.id)) {
       return NextResponse.json({
@@ -183,8 +189,9 @@ export async function GET(request: Request) {
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     scopedConnectionIds = [selectedConnection.id];
+    connectionScopeFilter = `connection_id.eq.${selectedConnection.id}`;
   } else if (provider !== 'all') {
-    scopedConnectionIds = (activeConnections || []).filter((c) => c.provider === provider).map((c) => c.id);
+    scopedConnectionIds = (activeConnections || []).filter((connection) => connection.provider === provider).map((connection) => connection.id);
     if (scopedConnectionIds.length === 0) {
       return NextResponse.json({
         conversations: [],
@@ -206,6 +213,7 @@ export async function GET(request: Request) {
         },
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
+    connectionScopeFilter = `connection_id.in.(${scopedConnectionIds.join(',')}),and(connection_id.is.null,provider.eq.${provider})`;
   } else {
     scopedConnectionIds = activeConnectionIds;
     if (scopedConnectionIds.length === 0) {
@@ -229,6 +237,10 @@ export async function GET(request: Request) {
         },
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
+    const legacyScope = activeProviders.length > 0
+      ? `,and(connection_id.is.null,provider.in.(${activeProviders.join(',')}))`
+      : '';
+    connectionScopeFilter = `connection_id.in.(${scopedConnectionIds.join(',')})${legacyScope}`;
   }
 
   await actor.supabase.rpc('wake_due_conversations', { p_workspace_id: actor.profile.workspace_id });
@@ -283,7 +295,7 @@ export async function GET(request: Request) {
       assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role, status)
     `, { count: 'exact' })
     .eq('workspace_id', actor.profile.workspace_id)
-    .in('connection_id', scopedConnectionIds);
+    .or(connectionScopeFilter);
 
   if (filter === 'unconverted') query = query.is('lead_id', null);
   else if (filter === 'converted') query = query.not('lead_id', 'is', null);
@@ -324,16 +336,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
-  let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let hasPhoneQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).not('metadata->detected_phone', 'is', null).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let unassignedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('assigned_to', null).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let waitingQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'waiting').in('connection_id', scopedConnectionIds);
-  let snoozedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'snoozed').in('connection_id', scopedConnectionIds);
-  let unreadQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).gt('unread_count', 0).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let needsReplyQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('needs_reply', true).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
-  let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString()).in('connection_id', scopedConnectionIds);
-  let highPriorityQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).in('priority', ['high', 'urgent']).neq('workflow_state', 'closed').in('connection_id', scopedConnectionIds);
+  let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let hasPhoneQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).not('metadata->detected_phone', 'is', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let unassignedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('assigned_to', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let waitingQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'waiting').or(connectionScopeFilter);
+  let snoozedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'snoozed').or(connectionScopeFilter);
+  let unreadQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).gt('unread_count', 0).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let needsReplyQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('needs_reply', true).neq('workflow_state', 'closed').or(connectionScopeFilter);
+  let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString()).or(connectionScopeFilter);
+  let highPriorityQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).in('priority', ['high', 'urgent']).neq('workflow_state', 'closed').or(connectionScopeFilter);
 
   if (provider !== 'all') {
     unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
@@ -363,12 +375,14 @@ export async function GET(request: Request) {
 
   let collaborations = 0;
   if (collaboratorIds.length) {
-    const collaborationCountQuery = actor.supabase
-      .from('conversation_collaborators')
-      .select('conversation_id', { count: 'exact', head: true })
+    let collaborationCountQuery = actor.supabase
+      .from('lead_conversations')
+      .select('id', { count: 'exact', head: true })
       .eq('workspace_id', actor.profile.workspace_id)
-      .eq('user_id', actor.user.id)
-      .in('conversation_id', scopedConnectionIds);
+      .in('id', collaboratorIds)
+      .neq('workflow_state', 'closed')
+      .or(connectionScopeFilter);
+    if (provider !== 'all') collaborationCountQuery = collaborationCountQuery.eq('provider', provider);
     const collaborationRes = await collaborationCountQuery;
     collaborations = collaborationRes.count || 0;
   }
