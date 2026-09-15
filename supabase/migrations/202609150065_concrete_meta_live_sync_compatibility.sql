@@ -12,6 +12,7 @@ language plpgsql
 set search_path = public
 as $$
 declare
+  v_config jsonb := coalesce(new.config, '{}'::jsonb);
   v_page_id text;
   v_page_name text;
   v_ig_id text;
@@ -22,18 +23,19 @@ begin
     return new;
   end if;
 
-  if coalesce((new.config->>'authorization_container')::boolean, false)
-     or coalesce((new.config->>'legacy_container')::boolean, false) then
+  if lower(coalesce(v_config->>'authorization_container','false')) = 'true'
+     or lower(coalesce(v_config->>'legacy_container','false')) = 'true' then
     return new;
   end if;
 
-  if jsonb_typeof(new.config->'pages') = 'array'
-     and jsonb_array_length(new.config->'pages') > 0 then
-    return new;
+  if jsonb_typeof(v_config->'pages') = 'array' then
+    if jsonb_array_length(v_config->'pages') > 0 then
+      return new;
+    end if;
   end if;
 
-  v_page_id := nullif(new.config->>'page_id','');
-  v_page_name := coalesce(nullif(new.config->>'page_name',''), nullif(new.display_name,''), v_page_id);
+  v_page_id := nullif(v_config->>'page_id','');
+  v_page_name := coalesce(nullif(v_config->>'page_name',''), nullif(new.display_name,''), v_page_id);
   if v_page_id is null then
     return new;
   end if;
@@ -44,11 +46,11 @@ begin
       'name', v_page_name
     );
   else
-    v_ig_id := coalesce(nullif(new.config->>'instagram_business_account_id',''), nullif(new.external_account_id,''));
+    v_ig_id := coalesce(nullif(v_config->>'instagram_business_account_id',''), nullif(new.external_account_id,''));
     if v_ig_id is null then
       return new;
     end if;
-    v_ig_username := nullif(new.config->>'instagram_username','');
+    v_ig_username := nullif(v_config->>'instagram_username','');
     v_page := jsonb_build_object(
       'id', v_page_id,
       'name', v_page_name,
@@ -60,7 +62,7 @@ begin
     );
   end if;
 
-  new.config := jsonb_set(coalesce(new.config, '{}'::jsonb), '{pages}', jsonb_build_array(v_page), true);
+  new.config := jsonb_set(v_config, '{pages}', jsonb_build_array(v_page), true);
   return new;
 end;
 $$;
@@ -77,13 +79,13 @@ update public.integration_connections
 set config = config
 where provider in ('facebook','instagram')
   and status <> 'disconnected'
-  and coalesce((config->>'authorization_container')::boolean, false) = false
-  and coalesce((config->>'legacy_container')::boolean, false) = false
+  and lower(coalesce(config->>'authorization_container','false')) <> 'true'
+  and lower(coalesce(config->>'legacy_container','false')) <> 'true'
   and nullif(config->>'page_id','') is not null
-  and (
-    jsonb_typeof(config->'pages') is distinct from 'array'
-    or jsonb_array_length(coalesce(config->'pages','[]'::jsonb)) = 0
-  );
+  and case
+    when jsonb_typeof(config->'pages') = 'array' then jsonb_array_length(config->'pages') = 0
+    else true
+  end;
 
 comment on function public.normalize_concrete_meta_connection_config() is
   'Keeps concrete Meta account config compatible with live polling without changing tenant ownership.';
