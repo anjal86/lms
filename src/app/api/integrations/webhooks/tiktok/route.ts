@@ -65,19 +65,34 @@ function fieldValue(entry: Record<string, unknown>, names: string[]) {
 }
 
 async function findConnection(advertiserId: string | null) {
+  if (!advertiserId) return null;
+
   const admin = createSupabaseAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from('integration_connections')
-    .select('id,config')
+    .select('id,workspace_id,external_account_id,config')
     .eq('provider', 'tiktok')
     .eq('status', 'connected');
+  if (error) throw error;
+
   const connections = data || [];
-  if (!advertiserId) return connections[0] || null;
-  return connections.find((connection) => {
+  const exact = connections.filter((connection) => connection.external_account_id === advertiserId);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) {
+    console.error(`TikTok advertiser ${advertiserId} is connected to multiple workspaces; webhook routing is ambiguous.`);
+    return null;
+  }
+
+  const legacy = connections.filter((connection) => {
     const config = (connection.config || {}) as Record<string, unknown>;
     const ids = Array.isArray(config.advertiser_ids) ? config.advertiser_ids.map(String) : [];
     return ids.includes(advertiserId);
-  }) || connections[0] || null;
+  });
+  if (legacy.length === 1) return legacy[0];
+  if (legacy.length > 1) {
+    console.error(`TikTok advertiser ${advertiserId} matches multiple legacy connections; reconnect the advertiser.`);
+  }
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -98,9 +113,19 @@ export async function POST(request: Request) {
   }
 
   const advertiserId = scalar(payload, ['adv_id', 'advertiser_id']);
+  if (!advertiserId) {
+    console.error('TikTok webhook did not include an advertiser id; refusing to guess a workspace.');
+    return NextResponse.json({ received: true, processed: false, count: 0, error: 'Advertiser id is required for routing.' });
+  }
+
   const connection = await findConnection(advertiserId);
   if (!connection) {
-    return NextResponse.json({ received: true, processed: false, error: 'No connected TikTok advertiser.' });
+    return NextResponse.json({
+      received: true,
+      processed: false,
+      count: 0,
+      error: `No unique connected TikTok advertiser matches ${advertiserId}.`,
+    });
   }
 
   const entries = Array.isArray(payload.entry)
@@ -136,6 +161,7 @@ export async function POST(request: Request) {
         notes: 'Imported automatically from TikTok Lead Generation.',
         metadata: {
           advertiser_id: advertiserId,
+          workspace_id: connection.workspace_id,
           payload: entry,
           request_id: payload.request_id || null,
           webhook_time: payload.time || null,

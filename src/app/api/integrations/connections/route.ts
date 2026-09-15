@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider } from '@/lib/integrations/catalog';
 import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
+import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -18,32 +19,25 @@ const ManualConnectionSchema = z.object({
 
 const PatchSchema = z.object({
   id: uuidSchema,
-  action: z.enum(['pause', 'resume', 'disconnect']),
+  action: z.enum(['pause', 'resume', 'disconnect', 'sync']),
 });
 
-async function getActor() {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: 'Unauthorized.' }, { status: 401 }) } as const;
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id,role,is_active')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_active) return { error: NextResponse.json({ error: 'Account disabled.' }, { status: 403 }) } as const;
-  return { supabase, user, profile } as const;
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 export async function GET(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
   const { data, error } = await actor.supabase
     .from('integration_connections')
-    .select('id,provider,display_name,external_account_id,status,capabilities,config,last_sync_at,last_event_at,last_error,created_at,updated_at')
-    .order('created_at', { ascending: true });
+    .select('id,workspace_id,provider,display_name,external_account_id,status,capabilities,config,visibility_scope,connected_by,last_sync_at,last_event_at,last_error,created_at,updated_at')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .order('provider', { ascending: true })
+    .order('display_name', { ascending: true });
 
   const appUrl = publicAppUrl(request.url);
   const catalog = integrationCatalogWithEnvStatus();
@@ -63,24 +57,22 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load connections.' }, { status: 500 });
   }
 
-  return NextResponse.json({ connections: data || [], catalog, setup, migrationRequired: false });
+  const connections = (data || []).filter((connection) => {
+    const config = asRecord(connection.config);
+    return config.hidden_from_account_picker !== true && config.removed_from_connections_ui !== true;
+  });
+
+  return NextResponse.json({ connections, catalog, setup, migrationRequired: false });
 }
 
 export async function POST(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!['admin', 'manager'].includes(actor.profile.role)) {
-    return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
   }
 
-  let raw: unknown;
-  try {
-    raw = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-  }
-
-  const parsed = ManualConnectionSchema.safeParse(raw);
+  const parsed = ManualConnectionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Validation failed.', fields: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
@@ -89,19 +81,29 @@ export async function POST(request: Request) {
   if (!provider) return NextResponse.json({ error: 'Unsupported provider.' }, { status: 400 });
 
   const admin = createSupabaseAdminClient();
+  const config = {
+    ...(parsed.data.config || {}),
+    transport: parsed.data.provider === 'email'
+      ? (typeof parsed.data.config?.transport === 'string' ? parsed.data.config.transport : 'unconfigured')
+      : parsed.data.provider === 'website'
+        ? 'webhook'
+        : 'api',
+  };
   const { data, error } = await admin
     .from('integration_connections')
     .insert({
+      workspace_id: actor.profile.workspace_id,
       provider: parsed.data.provider,
       display_name: parsed.data.display_name,
       external_account_id: parsed.data.external_account_id || null,
       status: 'connected',
       capabilities: provider.capabilities,
-      config: parsed.data.config || {},
+      config,
       connected_by: actor.user.id,
+      visibility_scope: 'workspace',
       last_sync_at: new Date().toISOString(),
     })
-    .select('id,provider,display_name,external_account_id,status,capabilities,config,last_sync_at,last_event_at,last_error,created_at,updated_at')
+    .select('id,workspace_id,provider,display_name,external_account_id,status,capabilities,config,visibility_scope,connected_by,last_sync_at,last_event_at,last_error,created_at,updated_at')
     .single();
 
   if (error) {
@@ -113,26 +115,65 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!['admin', 'manager'].includes(actor.profile.role)) {
-    return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
   }
 
-  let raw: unknown;
-  try {
-    raw = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-  }
-  const parsed = PatchSchema.safeParse(raw);
+  const parsed = PatchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid connection action.' }, { status: 400 });
 
   const admin = createSupabaseAdminClient();
+  const { data: target } = await admin
+    .from('integration_connections')
+    .select('id,workspace_id,provider,status')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', parsed.data.id)
+    .maybeSingle();
+  if (!target) return NextResponse.json({ error: 'Connection not found.' }, { status: 404 });
+
+  if (parsed.data.action === 'sync') {
+    if (!['facebook', 'instagram'].includes(target.provider)) {
+      return NextResponse.json({ error: 'Manual history sync is currently available for Facebook and Instagram.' }, { status: 400 });
+    }
+    if (!['connected', 'token_expiring', 'paused'].includes(target.status)) {
+      return NextResponse.json({ error: 'Reconnect this account before syncing its history.' }, { status: 409 });
+    }
+
+    try {
+      const historySync = await discoverMetaConversationHistory({
+        connectionIds: [target.id],
+        maxPages: 8,
+      });
+      const now = new Date().toISOString();
+      const firstError = historySync.errors[0] || null;
+      await admin
+        .from('integration_connections')
+        .update({ last_sync_at: now, last_error: firstError })
+        .eq('workspace_id', actor.profile.workspace_id)
+        .eq('id', target.id);
+      return NextResponse.json({
+        success: historySync.errors.length === 0,
+        historySync,
+      });
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : 'Unable to sync channel history.';
+      await admin
+        .from('integration_connections')
+        .update({ last_error: message })
+        .eq('workspace_id', actor.profile.workspace_id)
+        .eq('id', target.id);
+      console.error('Meta history sync failed:', syncError);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
   const status = parsed.data.action === 'pause' ? 'paused' : parsed.data.action === 'resume' ? 'connected' : 'disconnected';
   const { data, error } = await admin
     .from('integration_connections')
     .update({ status, last_error: null })
+    .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', parsed.data.id)
     .select('id,provider,display_name,status,updated_at')
     .single();
@@ -147,4 +188,81 @@ export async function PATCH(request: Request) {
   }
 
   return NextResponse.json({ connection: data });
+}
+
+const DeleteConnectionSchema = z.object({
+  id: uuidSchema,
+});
+
+export async function DELETE(request: Request) {
+  const actor = await getApiActor(request);
+  if ('error' in actor) return actor.error;
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
+  }
+
+  const url = new URL(request.url);
+  const idFromQuery = url.searchParams.get('id');
+  const body = await request.json().catch(() => ({}));
+  const idToParse = body.id || idFromQuery;
+
+  const parsed = DeleteConnectionSchema.safeParse({ id: idToParse });
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'A valid connection ID is required.' }, { status: 400 });
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: target, error: targetError } = await admin
+    .from('integration_connections')
+    .select('id,workspace_id,provider,display_name,config')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', parsed.data.id)
+    .maybeSingle();
+
+  if (targetError) {
+    console.error('Connection removal lookup failed:', targetError.message);
+    return NextResponse.json({ error: 'Unable to load this connection.' }, { status: 500 });
+  }
+  if (!target) {
+    return NextResponse.json({ error: 'Connection not found in this workspace.' }, { status: 404 });
+  }
+
+  const now = new Date().toISOString();
+  const config = asRecord(target.config);
+
+  // Erase credentials, but keep the connection row as a tombstone. Conversations,
+  // messages and audit history retain their exact source-account foreign key.
+  const { error: secretError } = await admin.from('integration_secrets').delete().eq('connection_id', target.id);
+  if (secretError) {
+    console.error('Connection credential removal failed:', secretError.message);
+    return NextResponse.json({ error: 'Unable to remove stored connection credentials.' }, { status: 500 });
+  }
+
+  const { error: updateError } = await admin
+    .from('integration_connections')
+    .update({
+      status: 'disconnected',
+      last_error: null,
+      config: {
+        ...config,
+        removed_from_connections_ui: true,
+        removed_at: now,
+        removed_by: actor.user.id,
+      },
+      updated_at: now,
+    })
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', target.id);
+
+  if (updateError) {
+    console.error('Failed to remove integration connection:', updateError.message);
+    return NextResponse.json({ error: 'Unable to remove connection.' }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    removedId: target.id,
+    display_name: target.display_name,
+    historyPreserved: true,
+  });
 }

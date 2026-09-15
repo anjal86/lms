@@ -10,6 +10,7 @@ export type MetaSyncProvider = 'facebook' | 'instagram';
 type MetaRecord = Record<string, unknown>;
 type SyncThread = {
   provider: MetaSyncProvider;
+  workspaceId: string | null;
   connectionId: string;
   accountId: string;
   accountName: string;
@@ -179,6 +180,7 @@ async function resolveProfiles(input: {
 }
 
 async function facebookThreads(input: {
+  workspaceId?: string | null;
   connectionId: string;
   pageId: string;
   pageName: string;
@@ -280,6 +282,7 @@ async function facebookThreads(input: {
 
     threads.push({
       provider: 'facebook',
+      workspaceId: input.workspaceId || null,
       connectionId: input.connectionId,
       accountId: input.pageId,
       accountName: input.pageName,
@@ -314,6 +317,7 @@ async function facebookThreads(input: {
 }
 
 async function instagramThreads(input: {
+  workspaceId?: string | null;
   connectionId: string;
   instagramId: string;
   accountName: string;
@@ -414,6 +418,7 @@ async function instagramThreads(input: {
 
     threads.push({
       provider: 'instagram',
+      workspaceId: input.workspaceId || null,
       connectionId: input.connectionId,
       accountId: input.instagramId,
       accountName: input.accountName,
@@ -456,14 +461,55 @@ async function persistThread(thread: SyncThread) {
     last_message_at: thread.updatedAt,
     metadata: thread.metadata,
   };
+  if (thread.workspaceId) conversationPatch.workspace_id = thread.workspaceId;
   if (thread.avatarResolved) conversationPatch.customer_avatar_url = thread.customerAvatarUrl;
 
-  const { data: conversation, error: conversationError } = await admin
+  const existingConversation = await admin
     .from('lead_conversations')
-    .upsert(conversationPatch, { onConflict: 'provider,external_thread_id' })
     .select('id,lead_id')
-    .single();
-  if (conversationError || !conversation) throw conversationError || new Error('Conversation upsert failed.');
+    .eq('provider', thread.provider)
+    .eq('connection_id', thread.connectionId)
+    .eq('external_thread_id', thread.externalThreadId)
+    .maybeSingle();
+  if (existingConversation.error) throw existingConversation.error;
+  let conversation = existingConversation.data;
+
+  if (conversation) {
+    const { data: updated, error: updateError } = await admin
+      .from('lead_conversations')
+      .update(conversationPatch)
+      .eq('id', conversation.id)
+      .eq('connection_id', thread.connectionId)
+      .select('id,lead_id')
+      .single();
+    if (updateError || !updated) throw updateError || new Error('Conversation update failed.');
+    conversation = updated;
+  } else {
+    const { data: created, error: createError } = await admin
+      .from('lead_conversations')
+      .insert(conversationPatch)
+      .select('id,lead_id')
+      .single();
+    if (createError || !created) {
+      if (createError?.code !== '23505') {
+        throw createError || new Error('Conversation insert failed.');
+      }
+
+      const retry = await admin
+        .from('lead_conversations')
+        .select('id,lead_id')
+        .eq('provider', thread.provider)
+        .eq('connection_id', thread.connectionId)
+        .eq('external_thread_id', thread.externalThreadId)
+        .maybeSingle();
+      if (retry.error || !retry.data) throw retry.error || createError || new Error('Conversation retry lookup failed.');
+      conversation = retry.data;
+    } else {
+      conversation = created;
+    }
+  }
+
+  if (!conversation) throw new Error('Conversation persistence failed.');
 
   let inserted = 0;
   for (const message of [...thread.messages].reverse()) {
@@ -632,7 +678,7 @@ export async function syncMetaConversations(options?: {
 
   let query = admin
     .from('integration_connections')
-    .select('id,provider,display_name,config,status,last_external_timestamp')
+    .select('id,workspace_id,provider,display_name,config,status,last_external_timestamp')
     .in('status', ['connected', 'token_expiring'])
     .in('provider', ['facebook', 'instagram']);
   if (options?.connectionId) query = query.eq('id', options.connectionId);
@@ -674,6 +720,7 @@ export async function syncMetaConversations(options?: {
             const instagramId = String(instagramAccount.id || '');
             if (!instagramId) continue;
             threads = await instagramThreads({
+              workspaceId: connection.workspace_id || null,
               connectionId: connection.id,
               instagramId,
               accountName: String(instagramAccount.username || page.name || connection.display_name || 'Instagram'),
@@ -685,6 +732,7 @@ export async function syncMetaConversations(options?: {
             });
           } else {
             threads = await facebookThreads({
+              workspaceId: connection.workspace_id || null,
               connectionId: connection.id,
               pageId,
               pageName: String(page.name || connection.display_name || 'Facebook Page'),

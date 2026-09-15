@@ -95,7 +95,47 @@ const migrations = [
   },
   {
     file: '202609150053_whatsapp_single_owner_assignment.sql',
-    applied: () => exists("select position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
+    applied: () => exists("select (position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 or position('v_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0) and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
+  },
+  {
+    file: '202609150054_omnichannel_workspace_account_integrity.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='contact_identities' and column_name='connection_id') and exists(select 1 from pg_indexes where schemaname='public' and indexname='inbound_channel_events_connection_event_uidx') and position('workspace_id = v_workspace_id' in pg_get_functiondef(to_regprocedure('public.claim_inbound_channel_event(uuid,text,text,text,jsonb)'))) > 0"),
+  },
+  {
+    file: '202609150055_omnichannel_concrete_account_backfill.sql',
+    applied: () => exists("select exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_routable_external_uidx') and exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_workspace_owned_external_uidx')"),
+  },
+  {
+    file: '202609150056_connection_scoped_delivery_receipts.sql',
+    applied: () => exists("select to_regprocedure('public.update_message_delivery_scoped(uuid,text,text,text,timestamptz,text,text)') is not null"),
+  },
+  {
+    file: '202609150057_omnichannel_reply_capabilities.sql',
+    applied: () => exists("select to_regprocedure('public.provider_supports_outbound_reply(text)') is not null"),
+  },
+  {
+    file: '202609150058_multi_company_workspace_membership.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='workspace_members' and column_name='role') and to_regclass('public.workspace_invitations') is not null and to_regprocedure('public.current_workspace_role()') is not null and to_regprocedure('public.switch_workspace(uuid)') is not null and to_regprocedure('public.create_workspace_for_current_user(text,text)') is not null"),
+  },
+  {
+    file: '202609150059_workspace_scoped_staff_routing.sql',
+    applied: () => exists("select position('from public.workspace_members wm' in lower(pg_get_functiondef(to_regprocedure('public.route_lead_atomic(uuid,text,uuid,boolean)')))) > 0 and position('wm.role=''agent''' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation_worker(uuid,text)')))) > 0 and position('wm.workspace_id=v_conversation.workspace_id' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)')))) > 0"),
+  },
+  {
+    file: '202609150060_routable_account_release_integrity.sql',
+    applied: () => exists("select exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_routable_external_uidx' and position('status' in indexdef) > 0 and position('disconnected' in indexdef) > 0)"),
+  },
+  {
+    file: '202609150061_channel_history_workspace_integrity.sql',
+    applied: () => exists("select to_regprocedure('public.enforce_conversation_connection_workspace()') is not null and to_regprocedure('public.enforce_message_conversation_workspace()') is not null and exists(select 1 from pg_trigger where tgname='trg_conversation_connection_workspace' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_message_conversation_workspace' and not tgisinternal)"),
+  },
+  {
+    file: '202609150062_message_reply_state_integrity.sql',
+    applied: () => exists("select position('v_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('needs_reply = true' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and exists(select 1 from pg_trigger where tgname='trg_track_message_operations' and not tgisinternal and (tgtype & 16) = 16)"),
+  },
+  {
+    file: '202609150063_meta_history_completion.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='meta_history_complete') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='meta_history_error') and exists(select 1 from pg_indexes where schemaname='public' and indexname='lead_conversations_meta_history_pending_idx') and to_regclass('public.idx_lead_messages_provider_ext_msg_full') is null and to_regclass('public.idx_lead_conversations_provider_thread_full') is null"),
   },
 ];
 

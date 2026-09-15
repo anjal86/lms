@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { uuidSchema } from '@/lib/validation';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { actorHasPermission } from '@/lib/auth/permissions';
 
@@ -11,7 +12,7 @@ const PatchSchema = z.object({
   primary_phone: z.string().trim().max(80).nullable().optional(),
   primary_email: z.string().trim().email().max(200).nullable().optional(),
   lifecycle_key: z.string().trim().min(1).max(80).optional(),
-  owner_id: z.string().uuid().nullable().optional(),
+  owner_id: uuidSchema.nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(80)).max(100).optional(),
   custom_data: z.record(z.string(), z.unknown()).optional(),
 });

@@ -36,13 +36,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { isAuthenticated, isHydrated, currentUser } = useApp();
   const isPublicAuthPage = PUBLIC_AUTH_PATHS.has(pathname);
-  const redirectTarget = isHydrated && isAuthenticated
+  const isOnboarding = pathname === '/onboarding';
+  const hasWorkspace = Boolean(currentUser.workspace_id);
+  const needsWorkspace = isHydrated && isAuthenticated && !hasWorkspace;
+  const redirectTarget = isHydrated && isAuthenticated && hasWorkspace && !isOnboarding
     ? (currentUser.role === 'agent' ? agentRedirect(pathname) : undefined) || legacyLeadTarget(pathname, currentUser.role)
     : undefined;
 
   useEffect(() => {
+    if (needsWorkspace && !isOnboarding) {
+      router.replace('/onboarding');
+      return;
+    }
     if (redirectTarget) router.replace(redirectTarget);
-  }, [redirectTarget, router]);
+  }, [isOnboarding, needsWorkspace, redirectTarget, router]);
 
   if (isPublicAuthPage) return <>{children}</>;
 
@@ -69,6 +76,22 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
+
+  if (needsWorkspace && !isOnboarding) {
+    return (
+      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
+        <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
+          Preparing workspace setup…
+        </div>
+      </div>
+    );
+  }
+
+  // Onboarding is intentionally outside the business shell because a new account may
+  // not have a workspace/configuration yet. Existing members may also use it to create
+  // another company without leaking the current company's navigation into setup.
+  if (isOnboarding) return <>{children}</>;
 
   if (redirectTarget) {
     return (

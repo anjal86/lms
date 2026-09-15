@@ -1,4 +1,5 @@
 export type Role = 'admin' | 'manager' | 'agent';
+export type WorkspaceRole = 'owner' | Role;
 
 export type AgentStatus = 'available' | 'in_call' | 'on_break' | 'offline';
 
@@ -13,6 +14,9 @@ export interface UserPreferences {
 export interface Profile {
   id: string;
   workspace_id?: string;
+  workspace_role?: WorkspaceRole;
+  workspace_permissions?: Record<string, unknown>;
+  workspace_joined_at?: string | null;
   employee_code?: string;
   email: string;
   full_name: string;

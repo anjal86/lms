@@ -1,6 +1,6 @@
 'use client';
 
-import { Facebook, Globe, Instagram, Mail, MessageCircle, MessageSquare } from 'lucide-react';
+import { Facebook, Globe, Instagram, Mail, MessageCircle, MessageSquare, Send } from 'lucide-react';
 
 export type InboxListConversation = {
   id: string;
@@ -12,6 +12,12 @@ export type InboxListConversation = {
   last_message_preview?: string | null;
   needs_reply: boolean;
   priority: string;
+  connection?: {
+    id?: string | null;
+    provider?: string | null;
+    display_name?: string | null;
+    external_account_id?: string | null;
+  } | null;
   assigned_profile?: { full_name?: string | null; avatar_url?: string | null } | null;
 };
 
@@ -24,7 +30,14 @@ type Props = {
   onSelect: () => void;
 };
 
-const PROVIDER_ICONS: Record<string, typeof MessageSquare> = { facebook: Facebook, instagram: Instagram, whatsapp: MessageCircle, email: Mail, website: Globe };
+const PROVIDER_ICONS: Record<string, typeof MessageSquare> = {
+  facebook: Facebook,
+  instagram: Instagram,
+  whatsapp: MessageCircle,
+  tiktok: Send,
+  email: Mail,
+  website: Globe,
+};
 
 function initials(value?: string | null) {
   return (value || 'C').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'C';
@@ -48,12 +61,13 @@ export default function InboxConversationListItem({ conversation, selected, cont
   const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare;
   const unread = conversation.unread_count > 0;
   const assignee = conversation.assigned_profile?.full_name || 'Unassigned';
+  const account = conversation.connection?.display_name || conversation.provider;
 
   return <button
     type="button"
     data-conversation-item="true"
     aria-current={selected ? 'true' : undefined}
-    aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages`}
+    aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, via ${account}`}
     onClick={onSelect}
     className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-blue-600 bg-blue-50/40' : 'border-l-transparent bg-white'}`}
   >
@@ -75,9 +89,11 @@ export default function InboxConversationListItem({ conversation, selected, cont
           <p className={`min-w-0 flex-1 truncate text-xs leading-5 ${unread ? 'font-semibold text-zinc-800' : 'text-zinc-500'}`}>{conversation.last_message_preview || 'No message preview'}</p>
           {unread && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white">{conversation.unread_count}</span>}
         </div>
-        <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[10px]">
-          <span className="inline-flex min-w-0 max-w-[112px] items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 font-semibold text-zinc-600"><span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white text-[8px] ring-1 ring-zinc-200">{initials(assignee)}</span><span className="truncate">{assignee}</span></span>
-          {conversation.priority !== 'normal' && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 font-bold uppercase text-amber-700">{conversation.priority}</span>}
+        <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-zinc-400">
+          <span className="max-w-[150px] truncate font-medium capitalize">{account}</span>
+          <span>·</span>
+          <span className="max-w-[90px] truncate">{assignee}</span>
+          {conversation.priority !== 'normal' && <span className="ml-1 shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 font-bold uppercase text-amber-700">{conversation.priority}</span>}
           <span className={`ml-auto shrink-0 font-semibold ${statusDanger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : 'text-zinc-400'}`}>{statusText}</span>
         </div>
       </div>
