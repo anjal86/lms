@@ -2,6 +2,7 @@ import 'server-only';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { whatsappBridgeRequest } from '@/lib/integrations/whatsapp-baileys';
 
 export type SupportedSendProvider = 'facebook' | 'instagram' | 'whatsapp';
 
@@ -39,6 +40,8 @@ type SendAttachmentInput = {
 };
 
 type ConnectionConfig = {
+  transport?: string;
+  instance_id?: string;
   pages?: Array<{
     id?: string;
     instagram_business_account?: { id?: string };
@@ -74,18 +77,23 @@ async function connectionMaterial(connectionId: string) {
   if (!['connected', 'active'].includes(connection.status)) {
     throw new ChannelDeliveryError('This channel is not connected.', { status: 409, code: 'connection_not_ready' });
   }
-  if (secretError || !secrets) {
-    throw new ChannelDeliveryError('The channel credentials are unavailable.', { status: 409, code: 'credentials_missing' });
-  }
-  if (secrets.token_expires_at && new Date(secrets.token_expires_at).getTime() <= Date.now()) {
-    throw new ChannelDeliveryError('The channel token has expired. Reconnect the channel.', { status: 409, code: 'token_expired' });
+
+  const config = (connection.config || {}) as ConnectionConfig;
+  const usesBaileys = connection.provider === 'whatsapp' && config.transport === 'baileys';
+  if (!usesBaileys) {
+    if (secretError || !secrets) {
+      throw new ChannelDeliveryError('The channel credentials are unavailable.', { status: 409, code: 'credentials_missing' });
+    }
+    if (secrets.token_expires_at && new Date(secrets.token_expires_at).getTime() <= Date.now()) {
+      throw new ChannelDeliveryError('The channel token has expired. Reconnect the channel.', { status: 409, code: 'token_expired' });
+    }
   }
 
   return {
     connection,
-    config: (connection.config || {}) as ConnectionConfig,
-    accessToken: decryptIntegrationSecret(secrets.access_token),
-    secretPayload: decryptSecretPayload(secrets.secret_payload || {}) as Record<string, unknown>,
+    config,
+    accessToken: secrets ? decryptIntegrationSecret(secrets.access_token) : null,
+    secretPayload: secrets ? decryptSecretPayload(secrets.secret_payload || {}) as Record<string, unknown> : {},
   };
 }
 
@@ -275,6 +283,86 @@ async function sendFacebookOrInstagramAttachment(
   return { externalMessageId, provider };
 }
 
+function whatsappRecipient(input: { externalContactId: string | null }) {
+  const recipient = String(input.externalContactId || '').replace(/\D/g, '');
+  if (!recipient) {
+    throw new ChannelDeliveryError('This WhatsApp conversation is missing the traveler number.', {
+      status: 409,
+      code: 'provider_identifiers_missing',
+    });
+  }
+  return recipient;
+}
+
+async function sendBaileysWhatsApp(
+  input: SendTextInput,
+  material: Awaited<ReturnType<typeof connectionMaterial>>
+) {
+  const recipient = whatsappRecipient(input);
+  try {
+    const result = await whatsappBridgeRequest<{ messageId?: string }>(
+      `/instances/${material.connection.id}/messages/text`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ to: recipient, text: input.body }),
+      }
+    );
+    const externalMessageId = String(result.messageId || '');
+    if (!externalMessageId) throw new Error('WhatsApp linked device returned no message ID.');
+    return { externalMessageId, provider: 'whatsapp' as const };
+  } catch (error) {
+    throw new ChannelDeliveryError(error instanceof Error ? error.message : 'WhatsApp linked-device delivery failed.', {
+      status: 502,
+      code: 'baileys_send_failed',
+    });
+  }
+}
+
+async function sendBaileysWhatsAppAttachment(
+  input: SendAttachmentInput,
+  material: Awaited<ReturnType<typeof connectionMaterial>>
+) {
+  const recipient = whatsappRecipient(input);
+  if (!input.attachment.storagePath) {
+    throw new ChannelDeliveryError('The attachment staging file is unavailable.', {
+      status: 409,
+      code: 'attachment_staging_missing',
+    });
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: blob, error } = await admin.storage.from('conversation-media').download(input.attachment.storagePath);
+  if (error || !blob) {
+    throw new ChannelDeliveryError('Unable to load the attachment for WhatsApp delivery.', {
+      status: 409,
+      code: 'attachment_staging_missing',
+    });
+  }
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  try {
+    const result = await whatsappBridgeRequest<{ messageId?: string }>(
+      `/instances/${material.connection.id}/messages/media`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          to: recipient,
+          fileName: input.attachment.fileName,
+          mimeType: input.attachment.mimeType,
+          dataBase64: buffer.toString('base64'),
+        }),
+      }
+    );
+    const externalMessageId = String(result.messageId || '');
+    if (!externalMessageId) throw new Error('WhatsApp linked device returned no message ID.');
+    return { externalMessageId, provider: 'whatsapp' as const };
+  } catch (sendError) {
+    throw new ChannelDeliveryError(sendError instanceof Error ? sendError.message : 'WhatsApp attachment delivery failed.', {
+      status: 502,
+      code: 'baileys_attachment_send_failed',
+    });
+  }
+}
+
 function whatsappSender(material: Awaited<ReturnType<typeof connectionMaterial>>, input: { externalThreadId: string | null }) {
   const wabaId = providerAccountId(input.externalThreadId);
   const account = material.config.whatsapp_business_accounts?.find((item) => item.id === wabaId)
@@ -442,6 +530,7 @@ export async function sendChannelText(input: SendTextInput) {
   if (input.provider === 'facebook' || input.provider === 'instagram') {
     return sendFacebookOrInstagram(input.provider, input, material);
   }
+  if (material.config.transport === 'baileys') return sendBaileysWhatsApp(input, material);
   return sendWhatsApp(input, material);
 }
 
@@ -451,5 +540,6 @@ export async function sendChannelAttachment(input: SendAttachmentInput) {
   if (input.provider === 'facebook' || input.provider === 'instagram') {
     return sendFacebookOrInstagramAttachment(input.provider, input, material);
   }
+  if (material.config.transport === 'baileys') return sendBaileysWhatsAppAttachment(input, material);
   return sendWhatsAppAttachment(input, material);
 }
