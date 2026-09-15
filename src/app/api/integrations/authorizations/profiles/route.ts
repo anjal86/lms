@@ -63,6 +63,7 @@ export async function GET(request: Request) {
   const rows = (data || []) as ConnectionRow[];
   const authorizationRows = rows.filter((row) => {
     const config = asRecord(row.config);
+    if (config.removed_authorization_profile === true || config.removed_from_connections_ui === true) return false;
     return (
       config.authorization_container === true ||
       config.legacy_container === true ||
@@ -71,7 +72,7 @@ export async function GET(request: Request) {
     );
   });
 
-  const authIdSet = new Set(authorizationRows.map((a) => a.id));
+  const authIdSet = new Set(authorizationRows.map((authorization) => authorization.id));
 
   const groups = new Map<string, {
     key: string;
@@ -110,6 +111,7 @@ export async function GET(request: Request) {
   for (const row of rows) {
     if (authIdSet.has(row.id)) continue;
     const config = asRecord(row.config);
+    if (config.removed_from_connections_ui === true) continue;
     const authorizationId = typeof config.authorization_id === 'string'
       ? config.authorization_id
       : typeof config.legacy_parent_id === 'string'
@@ -131,7 +133,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // Calculate composite status
   for (const group of groups.values()) {
     if (group.authorizations.some((item) => item.status === 'connected')) {
       group.status = 'connected';
