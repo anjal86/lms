@@ -23,6 +23,10 @@ type ConnectionRow = {
   config: unknown;
 };
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function canUseConnection(connection: ConnectionRow, userId: string, management: boolean) {
   return management || connection.visibility_scope === 'workspace' || connection.connected_by === userId;
 }
@@ -37,7 +41,7 @@ async function getConversationAndConnection(
   const admin = createSupabaseAdminClient();
   const { data: conversation, error: conversationError } = await admin
     .from('lead_conversations')
-    .select('id,workspace_id,provider,connection_id,external_thread_id')
+    .select('id,workspace_id,provider,connection_id,external_thread_id,metadata')
     .eq('id', conversationId)
     .eq('workspace_id', actor.profile.workspace_id)
     .maybeSingle();
@@ -45,7 +49,7 @@ async function getConversationAndConnection(
   if (conversationError || !conversation) {
     return { error: NextResponse.json({ error: 'Conversation not found.' }, { status: 404 }) } as const;
   }
-  if (conversation.provider !== 'whatsapp' || !conversation.connection_id || !conversation.external_thread_id) {
+  if (conversation.provider !== 'whatsapp' || !conversation.connection_id) {
     return { error: NextResponse.json({ error: 'This conversation is not backed by a WhatsApp connection.' }, { status: 400 }) } as const;
   }
 
@@ -130,9 +134,25 @@ export async function POST(
     return NextResponse.json({ accepted: true, already_running: true, job: existing }, { status: 202 });
   }
 
+  const { data: activeConnectionJob } = await resolved.admin
+    .from('whatsapp_history_sync_jobs')
+    .select('*')
+    .eq('connection_id', resolved.connection.id)
+    .in('status', ACTIVE_STATUSES)
+    .order('requested_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (activeConnectionJob) {
+    return NextResponse.json({
+      error: 'Another chat on this WhatsApp account is already syncing older messages.',
+      job: activeConnectionJob,
+    }, { status: 409 });
+  }
+
   const { data: oldestMessage, error: messageError } = await resolved.admin
     .from('lead_messages')
-    .select('id,external_message_id,direction,sent_at')
+    .select('id,external_message_id,direction,sent_at,metadata')
     .eq('workspace_id', resolved.actor.profile.workspace_id)
     .eq('conversation_id', id)
     .not('external_message_id', 'is', null)
@@ -147,6 +167,22 @@ export async function POST(
     return NextResponse.json({
       error: 'No WhatsApp message anchor is available yet. Reconnect the account once so WhatsApp can deliver its initial history sync.',
     }, { status: 409 });
+  }
+
+  const conversationMetadata = objectValue(resolved.conversation.metadata);
+  const messageMetadata = objectValue(oldestMessage.metadata);
+  const metadataJid = typeof messageMetadata.jid === 'string' ? messageMetadata.jid : null;
+  const conversationJid = typeof conversationMetadata.whatsapp_jid === 'string'
+    ? conversationMetadata.whatsapp_jid
+    : null;
+  const externalThreadJid = typeof resolved.conversation.external_thread_id === 'string'
+    && resolved.conversation.external_thread_id.includes('@')
+    ? resolved.conversation.external_thread_id
+    : null;
+  const remoteJid = metadataJid || conversationJid || externalThreadJid;
+
+  if (!remoteJid) {
+    return NextResponse.json({ error: 'The WhatsApp chat JID is missing, so older history cannot be requested safely.' }, { status: 409 });
   }
 
   const now = new Date().toISOString();
@@ -173,7 +209,7 @@ export async function POST(
     const result = await fetchWhatsappHistory(resolved.connection.id, {
       count: parsed.data.count,
       oldestMsgId: oldestMessage.external_message_id,
-      oldestMsgRemoteJid: resolved.conversation.external_thread_id,
+      oldestMsgRemoteJid: remoteJid,
       oldestMsgFromMe: oldestMessage.direction === 'outbound',
       oldestMsgTimestamp: new Date(oldestMessage.sent_at).getTime(),
     });
@@ -182,7 +218,7 @@ export async function POST(
       .from('whatsapp_history_sync_jobs')
       .update({
         status: 'requested',
-        request_id: result.request_id || null,
+        request_id: result.request_id || result.result || null,
         started_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
