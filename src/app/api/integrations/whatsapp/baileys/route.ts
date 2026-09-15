@@ -184,6 +184,7 @@ export async function POST(request: Request) {
         status: bridge.connected ? 'connected' : 'pending',
         can_manage: true,
         is_owner: connection.connected_by === userId,
+        bridge,
       },
       bridge,
     });
@@ -230,6 +231,9 @@ export async function GET(request: Request) {
     connections: hydrated,
     connection: first,
     bridge: first?.bridge || null,
+    permissions: {
+      can_create_shared: management,
+    },
   });
 }
 
