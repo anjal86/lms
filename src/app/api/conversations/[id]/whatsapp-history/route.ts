@@ -36,7 +36,7 @@ async function getConversationAndConnection(
   conversationId: string
 ) {
   const actor = await getApiActor(request);
-  if ('error' in actor) return actor;
+  if ('error' in actor) return { error: actor.error };
 
   const admin = createSupabaseAdminClient();
   const { data: conversation, error: conversationError } = await admin
