@@ -175,6 +175,7 @@ function messageHistoryUrl(provider: Provider, conversationId: string, token: st
 }
 
 async function insertMessages(input: {
+  workspaceId: string;
   conversationId: string;
   leadId: string | null;
   connectionId: string;
@@ -189,6 +190,7 @@ async function insertMessages(input: {
       const detail = messageDetails(message);
       const senderId = String(record(message.from).id || '');
       return {
+        workspace_id: input.workspaceId,
         conversation_id: input.conversationId,
         lead_id: input.leadId,
         connection_id: input.connectionId,
@@ -263,7 +265,7 @@ export async function discoverMetaConversationHistory(options?: { maxPages?: num
 
           let { data: localConversation } = await admin
             .from('lead_conversations')
-            .select('id,lead_id,last_message_at')
+            .select('id,workspace_id,lead_id,last_message_at')
             .eq('provider', state.provider)
             .eq('external_thread_id', externalThreadId)
             .maybeSingle();
@@ -308,13 +310,13 @@ export async function discoverMetaConversationHistory(options?: { maxPages?: num
                 unread_count: 0,
                 metadata,
               })
-              .select('id,lead_id,last_message_at')
+              .select('id,workspace_id,lead_id,last_message_at')
               .single();
             if (createError || !created) {
               if (createError?.code === '23505') {
                 const retry = await admin
                   .from('lead_conversations')
-                  .select('id,lead_id,last_message_at')
+                  .select('id,workspace_id,lead_id,last_message_at')
                   .eq('provider', state.provider)
                   .eq('external_thread_id', externalThreadId)
                   .maybeSingle();
@@ -330,6 +332,7 @@ export async function discoverMetaConversationHistory(options?: { maxPages?: num
 
           if (localConversation && preview) {
             messagesInserted += await insertMessages({
+              workspaceId: localConversation.workspace_id,
               conversationId: localConversation.id,
               leadId: localConversation.lead_id,
               connectionId: state.id,
@@ -356,7 +359,7 @@ export async function backfillMetaConversationMessages(conversationId: string, o
 
   const { data: conversation, error } = await admin
     .from('lead_conversations')
-    .select('id,lead_id,connection_id,provider,external_thread_id,external_contact_id,metadata,last_message_at')
+    .select('id,workspace_id,lead_id,connection_id,provider,external_thread_id,external_contact_id,metadata,last_message_at')
     .eq('id', conversationId)
     .maybeSingle();
   if (error) throw error;
@@ -394,6 +397,7 @@ export async function backfillMetaConversationMessages(conversationId: string, o
 
     const history = await pagedGraph(messageHistoryUrl(state.provider, metaConversationId, token, version), maxPages);
     const inserted = await insertMessages({
+      workspaceId: conversation.workspace_id,
       conversationId: conversation.id,
       leadId: conversation.lead_id,
       connectionId: state.id,
