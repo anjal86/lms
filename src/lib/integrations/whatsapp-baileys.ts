@@ -67,6 +67,24 @@ export async function whatsappBridgeRequest<T = Record<string, unknown>>(
   }
 }
 
+export type WhatsappHistoryRequest = {
+  count?: number;
+  oldestMsgId: string;
+  oldestMsgRemoteJid: string;
+  oldestMsgFromMe?: boolean;
+  oldestMsgTimestamp: number;
+};
+
+export function fetchWhatsappHistory(instanceId: string, input: WhatsappHistoryRequest) {
+  return whatsappBridgeRequest<{ ok: boolean; request_id?: string | null }>(
+    `/instances/${encodeURIComponent(instanceId)}/fetch-history`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
+}
+
 export async function fetchWhatsappBridgeMedia(instanceId: string, messageId: string) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -101,4 +119,3 @@ export function verifyWhatsappBridgeSignature(rawBody: string, signature: string
   const expectedBuffer = Buffer.from(expected, 'hex');
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
-
