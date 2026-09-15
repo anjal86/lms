@@ -202,6 +202,31 @@ export async function GET(
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
 
+  // Ensure this conversation belongs to an active connected account in this workspace
+  if (conversation.connection_id) {
+    const { data: connection } = await actor.supabase
+      .from('integration_connections')
+      .select('id, status')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', conversation.connection_id)
+      .maybeSingle();
+    if (!connection || connection.status === 'disconnected') {
+      return NextResponse.json({ error: 'This conversation belongs to a disconnected channel account.' }, { status: 404 });
+    }
+  } else {
+    const { data: activeProviderConnection } = await actor.supabase
+      .from('integration_connections')
+      .select('id')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('provider', conversation.provider)
+      .in('status', ['connected', 'paused'])
+      .limit(1)
+      .maybeSingle();
+    if (!activeProviderConnection) {
+      return NextResponse.json({ error: 'This conversation belongs to a disconnected channel account.' }, { status: 404 });
+    }
+  }
+
   const { count: beforeBackfillCount } = await actor.supabase
     .from('lead_messages')
     .select('id', { count: 'exact', head: true })

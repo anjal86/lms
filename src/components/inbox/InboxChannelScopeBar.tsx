@@ -31,6 +31,10 @@ export default function InboxChannelScopeBar() {
   const selectedId = params.get('accountId') || '';
 
   useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.cookie = 'inbox_page_filter=; Path=/; Max-Age=0; SameSite=Lax';
+    }
+
     let alive = true;
     const load = async () => {
       try {

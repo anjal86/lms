@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ExternalLink, KeyRound, Loader2, ShieldCheck, Unplug, X } from 'lucide-react';
+import { ExternalLink, KeyRound, Loader2, RefreshCw, ShieldAlert, ShieldCheck, Trash2, Unplug, X } from 'lucide-react';
 import AppOverlayPortal from '@/components/layout/AppOverlayPortal';
 
 type AuthorizationProfile = {
   key: string;
   kind: 'meta' | 'tiktok' | 'provider';
   display_name: string;
+  status?: 'connected' | 'paused' | 'disconnected';
   authorization_ids: string[];
   authorizations: Array<{ id: string; provider: string; status: string }>;
   connected_assets: number;
@@ -33,6 +34,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDisconnect, setPendingDisconnect] = useState<AuthorizationProfile | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AuthorizationProfile | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -76,6 +78,28 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
     }
   };
 
+  const deleteProfile = async () => {
+    if (!pendingDelete) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/integrations/authorizations', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authorizationIds: pendingDelete.authorization_ids }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to remove this account.');
+      setPendingDelete(null);
+      await load();
+      await onChanged?.();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Unable to remove this account.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
@@ -101,40 +125,76 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
           </div>
         ) : (
           <div className="divide-y divide-zinc-100">
-            {profiles.map((profile) => (
-              <div key={profile.key} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="truncate text-xs font-semibold text-zinc-900">{profile.display_name}</div>
-                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">Authorized</span>
+            {profiles.map((profile) => {
+              const isDisconnected = profile.status === 'disconnected';
+              return (
+                <div key={profile.key} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-xs font-semibold text-zinc-900">{profile.display_name}</div>
+                      {isDisconnected ? (
+                        <span className="flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
+                          <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" /> Disconnected
+                        </span>
+                      ) : profile.status === 'paused' ? (
+                        <span className="flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Paused
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Authorized
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-zinc-500">
+                      <span>{profile.kind === 'meta' ? 'Meta login' : profile.kind === 'tiktok' ? 'TikTok Business login' : 'Provider login'}</span>
+                      <span>{profile.connected_assets} of {profile.total_assets} asset{profile.total_assets === 1 ? '' : 's'} active</span>
+                      {profile.last_sync_at && <span>Authorized {new Date(profile.last_sync_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {!isDisconnected && profile.authorizations.map((authorization) => (
+                        <Link
+                          key={authorization.id}
+                          href={`/connections/select?provider=${authorization.provider}&authorization=${authorization.id}`}
+                          className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-600 hover:bg-zinc-50"
+                        >
+                          {providerLabel(authorization.provider)} assets <ExternalLink className="h-3 w-3" />
+                        </Link>
+                      ))}
+                      {isDisconnected && (
+                        <a
+                          href={`/api/integrations/oauth/${profile.kind === 'meta' ? 'facebook' : profile.kind}/start`}
+                          className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50"
+                        >
+                          <RefreshCw className="h-3 w-3" /> Reconnect login
+                        </a>
+                      )}
+                    </div>
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-zinc-500">
-                    <span>{profile.kind === 'meta' ? 'Meta login' : profile.kind === 'tiktok' ? 'TikTok Business login' : 'Provider login'}</span>
-                    <span>{profile.connected_assets} connected asset{profile.connected_assets === 1 ? '' : 's'}</span>
-                    {profile.last_sync_at && <span>Authorized {new Date(profile.last_sync_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {profile.authorizations.map((authorization) => (
-                      <Link
-                        key={authorization.id}
-                        href={`/connections/select?provider=${authorization.provider}&authorization=${authorization.id}`}
-                        className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-600 hover:bg-zinc-50"
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {!isDisconnected && (
+                      <button
+                        type="button"
+                        onClick={() => setPendingDisconnect(profile)}
+                        className="button-secondary button-sm shrink-0 text-zinc-700"
+                        title="Disconnect this profile and pause its assets"
                       >
-                        {providerLabel(authorization.provider)} assets <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    ))}
+                        <Unplug className="h-3.5 w-3.5" /> Disconnect
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setPendingDelete(profile)}
+                      className="button-secondary button-sm shrink-0 text-red-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                      title="Completely remove this account and its pages"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Remove account
+                    </button>
                   </div>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setPendingDisconnect(profile)}
-                  className="button-secondary button-sm shrink-0 text-red-600"
-                >
-                  <Unplug className="h-3.5 w-3.5" /> Disconnect profile
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -151,7 +211,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
             <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl">
               <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
                 <div className="flex gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Unplug className="h-4 w-4" /></span>
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><Unplug className="h-4 w-4" /></span>
                   <div>
                     <h2 id="disconnect-profile-title" className="text-sm font-semibold text-zinc-950">Disconnect authorized profile?</h2>
                     <p className="mt-1 text-xs leading-5 text-zinc-500">{pendingDisconnect.display_name}</p>
@@ -162,14 +222,57 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
               <div className="space-y-3 p-4">
                 <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-                  <p>This disconnects {pendingDisconnect.connected_assets} linked business asset{pendingDisconnect.connected_assets === 1 ? '' : 's'} from this workspace and removes their stored provider credentials. Existing conversations and customer history are preserved.</p>
+                  <p>This disconnects {pendingDisconnect.connected_assets} active business asset{pendingDisconnect.connected_assets === 1 ? '' : 's'} from this workspace and removes their stored provider credentials. Existing conversations and customer history are preserved.</p>
                 </div>
-                <p className="text-xs leading-5 text-zinc-500">This does not delete the Facebook, Instagram, WhatsApp or TikTok accounts themselves, and it does not affect a separate workspace authorization.</p>
+                <p className="text-xs leading-5 text-zinc-500">This does not delete the external provider accounts themselves. You can re-authorize or permanently delete this profile at any time.</p>
               </div>
               <div className="flex justify-end gap-2 border-t border-zinc-200 p-4">
                 <button type="button" onClick={() => setPendingDisconnect(null)} disabled={busy} className="button-secondary">Cancel</button>
-                <button type="button" onClick={() => void disconnectProfile()} disabled={busy} className="button-primary bg-red-600 hover:bg-red-700">
+                <button type="button" onClick={() => void disconnectProfile()} disabled={busy} className="button-primary bg-amber-600 hover:bg-amber-700">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Unplug className="h-4 w-4" />} Disconnect profile
+                </button>
+              </div>
+            </div>
+          </div>
+        </AppOverlayPortal>
+      )}
+
+      {pendingDelete && (
+        <AppOverlayPortal>
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/30 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-profile-title"
+            onClick={(event) => { if (event.target === event.currentTarget && !busy) setPendingDelete(null); }}
+          >
+            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
+                <div className="flex gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></span>
+                  <div>
+                    <h2 id="delete-profile-title" className="text-sm font-semibold text-zinc-950">Remove main account &amp; all linked pages?</h2>
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">{pendingDelete.display_name}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => !busy && setPendingDelete(null)} className="button-ghost button-sm" aria-label="Close"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="space-y-3 p-4">
+                <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-900">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">Permanently deletes this main account and all {pendingDelete.total_assets} linked page{pendingDelete.total_assets === 1 ? '' : 's'} from this CRM workspace.</p>
+                    <p className="mt-1 text-[11px] text-red-700">All stored OAuth credentials will be completely erased.</p>
+                  </div>
+                </div>
+                <p className="text-xs leading-5 text-zinc-500">
+                  Existing customer contacts, messages, and lead conversation histories remain safely stored in your CRM.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-zinc-200 p-4">
+                <button type="button" onClick={() => setPendingDelete(null)} disabled={busy} className="button-secondary">Cancel</button>
+                <button type="button" onClick={() => void deleteProfile()} disabled={busy} className="button-primary bg-red-600 hover:bg-red-700">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Remove account &amp; pages
                 </button>
               </div>
             </div>

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { uuidSchema } from '@/lib/validation';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
@@ -7,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const DisconnectSchema = z.object({
-  authorizationIds: z.array(z.string().uuid()).min(1).max(10),
+  authorizationIds: z.array(uuidSchema).min(1).max(10),
 });
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -47,10 +48,18 @@ export async function POST(request: Request) {
 
   for (const authorization of authorizations) {
     const config = asRecord(authorization.config);
-    if (config.authorization_container !== true || config.hidden_from_account_picker !== true) {
+    if (config.authorization_container !== true && config.legacy_container !== true && config.hidden_from_account_picker !== true) {
       return NextResponse.json({ error: 'One of the selected records is not an authorization profile.' }, { status: 400 });
     }
   }
+
+  const identityIds = authorizations
+    .map((auth) => {
+      const cfg = asRecord(auth.config);
+      const identity = asRecord(cfg.identity);
+      return typeof identity.id === 'string' ? identity.id.trim() : '';
+    })
+    .filter(Boolean);
 
   const { data: workspaceConnections, error: childLookupError } = await admin
     .from('integration_connections')
@@ -64,8 +73,13 @@ export async function POST(request: Request) {
 
   const childIds = (workspaceConnections || [])
     .filter((connection) => {
-      const authorizationId = asRecord(connection.config).authorization_id;
-      return typeof authorizationId === 'string' && ids.includes(authorizationId);
+      if (ids.includes(connection.id)) return false;
+      const cfg = asRecord(connection.config);
+      const authId = cfg.authorization_id || cfg.legacy_parent_id;
+      if (typeof authId === 'string' && ids.includes(authId)) return true;
+      const childIdentityId = asRecord(cfg.identity).id;
+      if (typeof childIdentityId === 'string' && identityIds.includes(childIdentityId)) return true;
+      return false;
     })
     .map((connection) => connection.id);
 

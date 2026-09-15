@@ -24,6 +24,8 @@ import {
   RefreshCw,
   Send,
   Settings2,
+  ShieldAlert,
+  Trash2,
   Unplug,
   X,
 } from 'lucide-react';
@@ -159,6 +161,7 @@ export default function ConnectionsPage() {
   const [manualProviderId, setManualProviderId] = useState<ProviderId | null>(null);
   const [manualName, setManualName] = useState('');
   const [manualExternalId, setManualExternalId] = useState('');
+  const [pendingDeleteConnection, setPendingDeleteConnection] = useState<Connection | null>(null);
   const connectedProvider = params.get('connected');
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
 
@@ -260,6 +263,28 @@ export default function ConnectionsPage() {
       await load();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to update this account.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteConnection = async () => {
+    if (!pendingDeleteConnection) return;
+    const target = pendingDeleteConnection;
+    setBusy(target.id);
+    setError(null);
+    try {
+      const response = await fetch('/api/integrations/connections', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: target.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to delete this connection.');
+      setPendingDeleteConnection(null);
+      await load();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : 'Unable to delete this connection.');
     } finally {
       setBusy(null);
     }
@@ -405,8 +430,20 @@ export default function ConnectionsPage() {
                               <button type="button" onClick={() => void updateConnection(connection, 'resume')} disabled={actionBusy} className="button-secondary button-sm">Resume</button>
                             ) : null}
                             {!linkedDevice && connection.status !== 'disconnected' && (
-                              <button type="button" onClick={() => void updateConnection(connection, 'disconnect')} disabled={actionBusy} className="button-ghost button-sm text-red-600" title="Disconnect">
+                              <button type="button" onClick={() => void updateConnection(connection, 'disconnect')} disabled={actionBusy} className="button-ghost button-sm text-zinc-500 hover:text-red-600" title="Disconnect" aria-label={`Disconnect ${connection.display_name}`}>
                                 {actionBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                            {!linkedDevice && (
+                              <button
+                                type="button"
+                                onClick={() => setPendingDeleteConnection(connection)}
+                                disabled={actionBusy}
+                                className="button-ghost button-sm text-zinc-400 hover:text-red-600 hover:bg-red-50"
+                                title="Delete connection"
+                                aria-label={`Delete ${connection.display_name}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
                               </button>
                             )}
                           </div>
@@ -461,6 +498,49 @@ export default function ConnectionsPage() {
                 <section><h3 className="text-xs font-semibold">Required server variables</h3><div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">{setupProvider.setup.required.map((key) => <div key={key} className="flex items-center justify-between gap-3 py-1"><code className="font-mono text-[10px]">{key}=</code><span className={`text-[10px] font-medium ${setupProvider.setup.missing.includes(key) ? 'text-amber-600' : 'text-emerald-600'}`}>{setupProvider.setup.missing.includes(key) ? 'Missing' : 'Ready'}</span></div>)}</div></section>
                 {setupProvider.connectMode !== 'manual' && <section><h3 className="text-xs font-semibold">Provider portal</h3><p className="mt-1 text-xs leading-5 text-zinc-500">Use the callback and webhook URLs from “Developer callbacks & webhooks” on this page, then restart the app after adding environment variables.</p></section>}
                 {setupProvider.setup.configured && setupProvider.connectMode !== 'manual' && <a href={`/api/integrations/oauth/${setupProvider.id}/start`} className="button-primary w-full"><ExternalLink className="h-4 w-4" /> Continue to {setupProvider.id === 'tiktok' ? 'TikTok' : 'Meta'}</a>}
+              </div>
+            </div>
+          </div>
+        </AppOverlayPortal>
+      )}
+
+      {pendingDeleteConnection && (
+        <AppOverlayPortal>
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center bg-zinc-950/30 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-connection-title"
+            onClick={(event) => { if (event.target === event.currentTarget && !busy) setPendingDeleteConnection(null); }}
+          >
+            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
+                <div className="flex gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></span>
+                  <div>
+                    <h2 id="delete-connection-title" className="text-sm font-semibold text-zinc-950">Remove channel connection?</h2>
+                    <p className="mt-1 text-xs leading-5 text-zinc-500">{pendingDeleteConnection.display_name}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => !busy && setPendingDeleteConnection(null)} className="button-ghost button-sm" aria-label="Close"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="space-y-3 p-4">
+                <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-5 text-red-900">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">Removes this page/channel from your active workspace connections.</p>
+                    <p className="mt-1 text-[11px] text-red-700">Any credentials tied specifically to this channel will be erased.</p>
+                  </div>
+                </div>
+                <p className="text-xs leading-5 text-zinc-500">
+                  Existing customer contacts, messages, and lead conversation history remain safely stored in your CRM.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-zinc-200 p-4">
+                <button type="button" onClick={() => setPendingDeleteConnection(null)} disabled={Boolean(busy)} className="button-secondary">Cancel</button>
+                <button type="button" onClick={() => void deleteConnection()} disabled={Boolean(busy)} className="button-primary bg-red-600 hover:bg-red-700">
+                  {busy === pendingDeleteConnection.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Remove connection
+                </button>
               </div>
             </div>
           </div>

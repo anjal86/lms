@@ -63,13 +63,21 @@ export async function GET(request: Request) {
   const rows = (data || []) as ConnectionRow[];
   const authorizationRows = rows.filter((row) => {
     const config = asRecord(row.config);
-    return config.authorization_container === true && config.hidden_from_account_picker === true;
+    return (
+      config.authorization_container === true ||
+      config.legacy_container === true ||
+      (config.hidden_from_account_picker === true &&
+        (Boolean(config.identity) || Boolean(config.pages) || Boolean(config.whatsapp_business_accounts) || Boolean(config.advertisers)))
+    );
   });
+
+  const authIdSet = new Set(authorizationRows.map((a) => a.id));
 
   const groups = new Map<string, {
     key: string;
     kind: 'meta' | 'tiktok' | 'provider';
     display_name: string;
+    status: 'connected' | 'paused' | 'disconnected';
     authorization_ids: string[];
     authorizations: Array<{ id: string; provider: string; status: string }>;
     connected_assets: number;
@@ -84,6 +92,7 @@ export async function GET(request: Request) {
       key,
       kind,
       display_name: profileName(authorization),
+      status: 'disconnected' as const,
       authorization_ids: [],
       authorizations: [],
       connected_assets: 0,
@@ -99,19 +108,41 @@ export async function GET(request: Request) {
   }
 
   for (const row of rows) {
+    if (authIdSet.has(row.id)) continue;
     const config = asRecord(row.config);
-    const authorizationId = typeof config.authorization_id === 'string' ? config.authorization_id : '';
-    if (!authorizationId) continue;
+    const authorizationId = typeof config.authorization_id === 'string'
+      ? config.authorization_id
+      : typeof config.legacy_parent_id === 'string'
+        ? config.legacy_parent_id
+        : '';
+    const identity = asRecord(config.identity);
+    const identityId = typeof identity.id === 'string' ? identity.id.trim() : '';
+
     for (const group of groups.values()) {
-      if (!group.authorization_ids.includes(authorizationId)) continue;
+      const matchAuth = authorizationId && group.authorization_ids.includes(authorizationId);
+      const matchIdentity = identityId && group.key === `meta:${identityId}`;
+      if (!matchAuth && !matchIdentity) continue;
+
       group.total_assets += 1;
-      if (row.status === 'connected' || row.status === 'paused') group.connected_assets += 1;
+      if (row.status === 'connected' || row.status === 'paused') {
+        group.connected_assets += 1;
+      }
       break;
     }
   }
 
+  // Calculate composite status
+  for (const group of groups.values()) {
+    if (group.authorizations.some((item) => item.status === 'connected')) {
+      group.status = 'connected';
+    } else if (group.authorizations.some((item) => item.status === 'paused')) {
+      group.status = 'paused';
+    } else {
+      group.status = 'disconnected';
+    }
+  }
+
   const profiles = Array.from(groups.values())
-    .filter((group) => group.authorizations.some((item) => item.status !== 'disconnected'))
     .sort((a, b) => a.display_name.localeCompare(b.display_name));
 
   return NextResponse.json({ profiles }, { headers: { 'Cache-Control': 'private, no-store' } });

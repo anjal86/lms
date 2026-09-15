@@ -152,3 +152,58 @@ export async function PATCH(request: Request) {
 
   return NextResponse.json({ connection: data });
 }
+
+const DeleteConnectionSchema = z.object({
+  id: uuidSchema,
+});
+
+export async function DELETE(request: Request) {
+  const actor = await getApiActor(request);
+  if ('error' in actor) return actor.error;
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
+  }
+
+  const url = new URL(request.url);
+  const idFromQuery = url.searchParams.get('id');
+  const body = await request.json().catch(() => ({}));
+  const idToParse = body.id || idFromQuery;
+
+  const parsed = DeleteConnectionSchema.safeParse({ id: idToParse });
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'A valid connection ID is required.' }, { status: 400 });
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: target } = await admin
+    .from('integration_connections')
+    .select('id,workspace_id,provider,display_name')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', parsed.data.id)
+    .maybeSingle();
+
+  if (!target) {
+    return NextResponse.json({ error: 'Connection not found in this workspace.' }, { status: 404 });
+  }
+
+  // 1. Remove secret if present
+  await admin.from('integration_secrets').delete().eq('connection_id', target.id);
+
+  // 2. Delete the connection record
+  const { error: deleteError } = await admin
+    .from('integration_connections')
+    .delete()
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('id', target.id);
+
+  if (deleteError) {
+    console.error('Failed to delete integration connection:', deleteError.message);
+    return NextResponse.json({ error: 'Unable to delete connection.' }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    deletedId: target.id,
+    display_name: target.display_name,
+  });
+}

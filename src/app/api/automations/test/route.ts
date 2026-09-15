@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { uuidSchema } from '@/lib/validation';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { actorHasPermission } from '@/lib/auth/permissions';
 
@@ -12,8 +13,8 @@ const DefinitionSchema = z.object({
   actions: z.array(z.record(z.string(), z.unknown())).min(1).max(25),
 });
 const TestSchema = z.object({
-  conversation_id: z.string().uuid(),
-  workflow_id: z.string().uuid().optional(),
+  conversation_id: uuidSchema,
+  workflow_id: uuidSchema.optional(),
   definition: DefinitionSchema.optional(),
 }).refine((value) => Boolean(value.workflow_id || value.definition), { message: 'workflow_id or definition is required' });
 

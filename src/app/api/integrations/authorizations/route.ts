@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { uuidSchema } from '@/lib/validation';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider, type IntegrationProvider } from '@/lib/integrations/catalog';
@@ -8,7 +9,7 @@ import { decryptIntegrationSecret, decryptSecretPayload, encryptIntegrationSecre
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const uuid = z.string().uuid();
+const uuid = uuidSchema;
 const SelectionSchema = z.object({
   authorizationId: uuid,
   accountIds: z.array(z.string().trim().min(1).max(240)).min(1).max(50),
@@ -46,7 +47,7 @@ async function authorizationForWorkspace(authorizationId: string, workspaceId: s
   if (error) throw error;
   if (!data) return null;
   const config = asRecord(data.config);
-  if (config.authorization_container !== true || config.hidden_from_account_picker !== true) return null;
+  if (config.authorization_container !== true && config.legacy_container !== true && config.hidden_from_account_picker !== true) return null;
   return { ...data, config };
 }
 
@@ -338,4 +339,97 @@ export async function POST(request: Request) {
     console.error('Provider account selection failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to connect selected accounts.' }, { status: 500 });
   }
+}
+
+const DeleteAuthorizationsSchema = z.object({
+  authorizationIds: z.array(uuidSchema).min(1).max(20),
+});
+
+export async function DELETE(request: Request) {
+  const actor = await getApiActor(request);
+  if ('error' in actor) return actor.error;
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
+  }
+
+  const parsed = DeleteAuthorizationsSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'A valid list of authorization IDs is required.' }, { status: 400 });
+  }
+
+  const admin = createSupabaseAdminClient();
+  const ids = Array.from(new Set(parsed.data.authorizationIds));
+
+  // 1. Fetch the authorization records
+  const { data: authorizations, error: authorizationError } = await admin
+    .from('integration_connections')
+    .select('id,workspace_id,provider,config')
+    .eq('workspace_id', actor.profile.workspace_id)
+    .in('id', ids);
+
+  if (authorizationError) {
+    console.error('Authorization deletion lookup failed:', authorizationError.message);
+    return NextResponse.json({ error: 'Unable to find authorizations to delete.' }, { status: 500 });
+  }
+
+  if (!authorizations || authorizations.length === 0) {
+    return NextResponse.json({ error: 'Authorization profiles not found in this workspace.' }, { status: 404 });
+  }
+
+  // Collect identity IDs if present (e.g. Meta user ID)
+  const identityIds = authorizations
+    .map((auth) => {
+      const cfg = asRecord(auth.config);
+      const identity = asRecord(cfg.identity);
+      return typeof identity.id === 'string' ? identity.id.trim() : '';
+    })
+    .filter(Boolean);
+
+  // 2. Find all child connections belonging to these authorizations
+  const { data: workspaceConnections, error: childLookupError } = await admin
+    .from('integration_connections')
+    .select('id,config')
+    .eq('workspace_id', actor.profile.workspace_id);
+
+  if (childLookupError) {
+    console.error('Authorization child lookup failed:', childLookupError.message);
+    return NextResponse.json({ error: 'Unable to lookup linked channel accounts.' }, { status: 500 });
+  }
+
+  const childIds = (workspaceConnections || [])
+    .filter((connection) => {
+      if (ids.includes(connection.id)) return false;
+      const cfg = asRecord(connection.config);
+      const authId = cfg.authorization_id || cfg.legacy_parent_id;
+      if (typeof authId === 'string' && ids.includes(authId)) return true;
+      const childIdentityId = asRecord(cfg.identity).id;
+      if (typeof childIdentityId === 'string' && identityIds.includes(childIdentityId)) return true;
+      return false;
+    })
+    .map((connection) => connection.id);
+
+  const allIdsToDelete = Array.from(new Set([...ids, ...childIds]));
+
+  // 3. Remove secrets
+  if (allIdsToDelete.length > 0) {
+    await admin.from('integration_secrets').delete().in('connection_id', allIdsToDelete);
+  }
+
+  // 4. Delete the connections
+  const { error: deleteError } = await admin
+    .from('integration_connections')
+    .delete()
+    .eq('workspace_id', actor.profile.workspace_id)
+    .in('id', allIdsToDelete);
+
+  if (deleteError) {
+    console.error('Authorization deletion failed:', deleteError.message);
+    return NextResponse.json({ error: 'Unable to delete authorization and linked accounts.' }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    deletedAuthorizations: ids.length,
+    deletedAccounts: childIds.length,
+  });
 }

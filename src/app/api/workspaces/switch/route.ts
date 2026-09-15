@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { uuidSchema } from '@/lib/validation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const SwitchSchema = z.object({
-  workspaceId: z.string().uuid(),
+  workspaceId: uuidSchema,
 });
 
 export async function POST(request: Request) {
