@@ -10,6 +10,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const uuid = uuidSchema;
+const META_PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp']);
 const SelectionSchema = z.object({
   authorizationId: uuid,
   accountIds: z.array(z.string().trim().min(1).max(240)).min(1).max(50),
@@ -24,6 +25,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 function asAccounts(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map(asRecord).filter((item) => typeof item.id === 'string' && item.id);
+}
+
+function isAuthorizationContainer(config: Record<string, unknown>) {
+  if (config.authorization_container === true || config.legacy_container === true) return true;
+  if (config.hidden_from_account_picker !== true) return false;
+  return Array.isArray(config.discovered_accounts)
+    || Array.isArray(config.pages)
+    || Array.isArray(config.whatsapp_business_accounts)
+    || Array.isArray(config.advertisers);
 }
 
 async function fetchJson(url: string | URL, init?: RequestInit) {
@@ -47,7 +57,7 @@ async function authorizationForWorkspace(authorizationId: string, workspaceId: s
   if (error) throw error;
   if (!data) return null;
   const config = asRecord(data.config);
-  if (config.authorization_container !== true && config.legacy_container !== true && config.hidden_from_account_picker !== true) return null;
+  if (!isAuthorizationContainer(config)) return null;
   return { ...data, config };
 }
 
@@ -169,11 +179,11 @@ export async function GET(request: Request) {
     const accounts = asAccounts(authorization.config.discovered_accounts);
     const accountIds = accounts.map((account) => String(account.id));
     const admin = createSupabaseAdminClient();
-    let ownershipRows: Array<{ id: string; external_account_id: string | null; workspace_id: string; display_name: string }> = [];
+    let ownershipRows: Array<{ id: string; external_account_id: string | null; workspace_id: string; display_name: string; status: string }> = [];
     if (accountIds.length > 0) {
       const { data, error } = await admin
         .from('integration_connections')
-        .select('id,external_account_id,workspace_id,display_name')
+        .select('id,external_account_id,workspace_id,display_name,status')
         .eq('provider', provider)
         .in('external_account_id', accountIds);
       if (error) throw error;
@@ -182,13 +192,17 @@ export async function GET(request: Request) {
 
     const normalized = accounts.map((account) => {
       const accountId = String(account.id);
-      const owner = ownershipRows.find((row) => row.external_account_id === accountId);
+      const matches = ownershipRows.filter((row) => row.external_account_id === accountId);
+      const owner = matches.find((row) => row.status !== 'disconnected')
+        || matches.find((row) => row.workspace_id === actor.profile.workspace_id);
       return {
         ...account,
         id: accountId,
-        connected: Boolean(owner && owner.workspace_id === actor.profile.workspace_id),
-        unavailable: Boolean(owner && owner.workspace_id !== actor.profile.workspace_id),
-        connectedWorkspace: owner?.workspace_id === actor.profile.workspace_id ? actor.profile.workspace_id : null,
+        connected: Boolean(owner && owner.workspace_id === actor.profile.workspace_id && owner.status !== 'disconnected'),
+        unavailable: Boolean(owner && owner.workspace_id !== actor.profile.workspace_id && owner.status !== 'disconnected'),
+        connectedWorkspace: owner?.workspace_id === actor.profile.workspace_id && owner.status !== 'disconnected'
+          ? actor.profile.workspace_id
+          : null,
       };
     });
 
@@ -244,15 +258,18 @@ export async function POST(request: Request) {
     const created = [];
     for (const account of selected) {
       const accountId = String(account.id);
-      const { data: existing, error: existingError } = await admin
+      const { data: matchingConnections, error: existingError } = await admin
         .from('integration_connections')
-        .select('id,workspace_id,display_name')
+        .select('id,workspace_id,display_name,status')
         .eq('provider', provider)
-        .eq('external_account_id', accountId)
-        .maybeSingle();
+        .eq('external_account_id', accountId);
       if (existingError) throw existingError;
 
-      if (existing?.workspace_id && existing.workspace_id !== actor.profile.workspace_id) {
+      const matches = matchingConnections || [];
+      const liveOwner = matches.find((row) => row.status !== 'disconnected');
+      const existing = matches.find((row) => row.workspace_id === actor.profile.workspace_id);
+
+      if (liveOwner?.workspace_id && liveOwner.workspace_id !== actor.profile.workspace_id) {
         return NextResponse.json({
           error: `${accountDisplayName(provider, account)} is already connected to another workspace. Disconnect or move it there first.`,
           code: 'account_owned_by_another_workspace',
@@ -289,7 +306,12 @@ export async function POST(request: Request) {
           .eq('workspace_id', actor.profile.workspace_id)
           .select('id')
           .single();
-        if (error) throw error;
+        if (error) {
+          if (error.code === '23505') {
+            return NextResponse.json({ error: `${connectionPayload.display_name} became connected to another workspace. Refresh and try again.` }, { status: 409 });
+          }
+          throw error;
+        }
         connectionId = data.id;
       } else {
         const { data, error } = await admin
@@ -297,7 +319,12 @@ export async function POST(request: Request) {
           .insert(connectionPayload)
           .select('id')
           .single();
-        if (error) throw error;
+        if (error) {
+          if (error.code === '23505') {
+            return NextResponse.json({ error: `${connectionPayload.display_name} became connected to another workspace. Refresh and try again.` }, { status: 409 });
+          }
+          throw error;
+        }
         connectionId = data.id;
       }
 
@@ -360,7 +387,6 @@ export async function DELETE(request: Request) {
   const admin = createSupabaseAdminClient();
   const ids = Array.from(new Set(parsed.data.authorizationIds));
 
-  // 1. Fetch the authorization records
   const { data: authorizations, error: authorizationError } = await admin
     .from('integration_connections')
     .select('id,workspace_id,provider,config')
@@ -368,27 +394,31 @@ export async function DELETE(request: Request) {
     .in('id', ids);
 
   if (authorizationError) {
-    console.error('Authorization deletion lookup failed:', authorizationError.message);
-    return NextResponse.json({ error: 'Unable to find authorizations to delete.' }, { status: 500 });
+    console.error('Authorization removal lookup failed:', authorizationError.message);
+    return NextResponse.json({ error: 'Unable to find authorizations to remove.' }, { status: 500 });
   }
 
-  if (!authorizations || authorizations.length === 0) {
+  if (!authorizations || authorizations.length !== ids.length) {
     return NextResponse.json({ error: 'Authorization profiles not found in this workspace.' }, { status: 404 });
   }
 
-  // Collect identity IDs if present (e.g. Meta user ID)
-  const identityIds = authorizations
-    .map((auth) => {
-      const cfg = asRecord(auth.config);
-      const identity = asRecord(cfg.identity);
+  for (const authorization of authorizations) {
+    if (!isAuthorizationContainer(asRecord(authorization.config))) {
+      return NextResponse.json({ error: 'One of the selected records is not an authorization profile.' }, { status: 400 });
+    }
+  }
+
+  const metaIdentityIds = authorizations
+    .filter((authorization) => META_PROVIDERS.has(authorization.provider))
+    .map((authorization) => {
+      const identity = asRecord(asRecord(authorization.config).identity);
       return typeof identity.id === 'string' ? identity.id.trim() : '';
     })
     .filter(Boolean);
 
-  // 2. Find all child connections belonging to these authorizations
   const { data: workspaceConnections, error: childLookupError } = await admin
     .from('integration_connections')
-    .select('id,config')
+    .select('id,provider,config')
     .eq('workspace_id', actor.profile.workspace_id);
 
   if (childLookupError) {
@@ -396,40 +426,81 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Unable to lookup linked channel accounts.' }, { status: 500 });
   }
 
-  const childIds = (workspaceConnections || [])
-    .filter((connection) => {
-      if (ids.includes(connection.id)) return false;
-      const cfg = asRecord(connection.config);
-      const authId = cfg.authorization_id || cfg.legacy_parent_id;
-      if (typeof authId === 'string' && ids.includes(authId)) return true;
-      const childIdentityId = asRecord(cfg.identity).id;
-      if (typeof childIdentityId === 'string' && identityIds.includes(childIdentityId)) return true;
-      return false;
-    })
-    .map((connection) => connection.id);
+  const childRows = (workspaceConnections || []).filter((connection) => {
+    if (ids.includes(connection.id)) return false;
+    const config = asRecord(connection.config);
+    const authId = config.authorization_id || config.legacy_parent_id;
+    if (typeof authId === 'string' && ids.includes(authId)) return true;
+    if (!META_PROVIDERS.has(connection.provider)) return false;
+    const childIdentityId = asRecord(config.identity).id;
+    return typeof childIdentityId === 'string' && metaIdentityIds.includes(childIdentityId);
+  });
 
-  const allIdsToDelete = Array.from(new Set([...ids, ...childIds]));
+  const now = new Date().toISOString();
 
-  // 3. Remove secrets
-  if (allIdsToDelete.length > 0) {
-    await admin.from('integration_secrets').delete().in('connection_id', allIdsToDelete);
+  for (const child of childRows) {
+    const config = asRecord(child.config);
+    const { error } = await admin
+      .from('integration_connections')
+      .update({
+        status: 'disconnected',
+        last_error: null,
+        config: {
+          ...config,
+          removed_from_connections_ui: true,
+          removed_at: now,
+          removed_by: actor.user.id,
+        },
+        updated_at: now,
+      })
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', child.id);
+    if (error) {
+      console.error('Linked account removal failed:', error.message);
+      return NextResponse.json({ error: 'Unable to remove linked channel accounts.' }, { status: 500 });
+    }
   }
 
-  // 4. Delete the connections
-  const { error: deleteError } = await admin
-    .from('integration_connections')
-    .delete()
-    .eq('workspace_id', actor.profile.workspace_id)
-    .in('id', allIdsToDelete);
+  for (const authorization of authorizations) {
+    const config = asRecord(authorization.config);
+    const { error } = await admin
+      .from('integration_connections')
+      .update({
+        status: 'disconnected',
+        last_error: null,
+        last_sync_at: now,
+        config: {
+          ...config,
+          selected_account_ids: [],
+          removed_from_connections_ui: true,
+          removed_authorization_profile: true,
+          removed_at: now,
+          removed_by: actor.user.id,
+        },
+        updated_at: now,
+      })
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', authorization.id);
+    if (error) {
+      console.error('Authorization profile removal failed:', error.message);
+      return NextResponse.json({ error: 'Unable to remove the authorization profile.' }, { status: 500 });
+    }
+  }
 
-  if (deleteError) {
-    console.error('Authorization deletion failed:', deleteError.message);
-    return NextResponse.json({ error: 'Unable to delete authorization and linked accounts.' }, { status: 500 });
+  const credentialIds = Array.from(new Set([...ids, ...childRows.map((row) => row.id)]));
+  const { error: secretError } = await admin
+    .from('integration_secrets')
+    .delete()
+    .in('connection_id', credentialIds);
+  if (secretError) {
+    console.error('Authorization credential cleanup failed:', secretError.message);
+    return NextResponse.json({ error: 'Accounts were removed from use, but credential cleanup failed.' }, { status: 500 });
   }
 
   return NextResponse.json({
     success: true,
-    deletedAuthorizations: ids.length,
-    deletedAccounts: childIds.length,
+    removedAuthorizations: ids.length,
+    removedAccounts: childRows.length,
+    historyPreserved: true,
   });
 }
