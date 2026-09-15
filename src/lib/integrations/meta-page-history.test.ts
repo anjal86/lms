@@ -24,7 +24,7 @@ type QueryOp = {
   filters: Array<[string, unknown]>;
 };
 
-function createMockAdmin() {
+function createMockAdmin(connectionConfig?: Record<string, unknown>) {
   const insertedMessages: Array<Record<string, unknown>> = [];
   const insertedConversations: Array<Record<string, unknown>> = [];
   const updatedConnections: Array<Record<string, unknown>> = [];
@@ -36,7 +36,7 @@ function createMockAdmin() {
     display_name: 'Travel Page',
     workspace_id: 'workspace-new',
     status: 'connected',
-    config: {
+    config: connectionConfig || {
       pages: [{ id: 'page-1', name: 'Travel Page' }],
     },
   };
@@ -166,5 +166,32 @@ describe('discoverSelectedMetaPageHistory', () => {
       && message.connection_id === 'connection-new'
       && message.conversation_id === 'conversation-new'
     ))).toBe(true);
+  });
+
+  it('restarts discovery completed by an older repair generation', async () => {
+    const mock = createMockAdmin({
+      pages: [{ id: 'page-1', name: 'Travel Page' }],
+      inbox_history_discovery: {
+        'facebook:page-1': {
+          version: 2,
+          complete: true,
+          after_cursor: 'stale-cursor',
+        },
+      },
+    });
+    mocks.createSupabaseAdminClient.mockReturnValue(mock.admin);
+
+    const result = await discoverSelectedMetaPageHistory({
+      provider: 'facebook',
+      accountId: 'page-1',
+      connectionId: 'connection-new',
+      pageId: 'page-1',
+      maxPages: 1,
+    });
+
+    expect(mocks.metaFetchJson).toHaveBeenCalledTimes(1);
+    expect(String(mocks.metaFetchJson.mock.calls[0][0])).not.toContain('after=stale-cursor');
+    expect(result.conversationsScanned).toBe(1);
+    expect(result.previewMessagesInserted).toBe(3);
   });
 });

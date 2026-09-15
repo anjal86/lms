@@ -95,7 +95,7 @@ const migrations = [
   },
   {
     file: '202609150053_whatsapp_single_owner_assignment.sql',
-    applied: () => exists("select position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
+    applied: () => exists("select (position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 or position('v_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0) and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
   },
   {
     file: '202609150054_omnichannel_workspace_account_integrity.sql',
@@ -128,6 +128,14 @@ const migrations = [
   {
     file: '202609150061_channel_history_workspace_integrity.sql',
     applied: () => exists("select to_regprocedure('public.enforce_conversation_connection_workspace()') is not null and to_regprocedure('public.enforce_message_conversation_workspace()') is not null and exists(select 1 from pg_trigger where tgname='trg_conversation_connection_workspace' and not tgisinternal) and exists(select 1 from pg_trigger where tgname='trg_message_conversation_workspace' and not tgisinternal)"),
+  },
+  {
+    file: '202609150062_message_reply_state_integrity.sql',
+    applied: () => exists("select position('v_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('needs_reply = true' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and exists(select 1 from pg_trigger where tgname='trg_track_message_operations' and not tgisinternal and (tgtype & 16) = 16)"),
+  },
+  {
+    file: '202609150063_meta_history_completion.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='meta_history_complete') and exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='meta_history_error') and exists(select 1 from pg_indexes where schemaname='public' and indexname='lead_conversations_meta_history_pending_idx') and to_regclass('public.idx_lead_messages_provider_ext_msg_full') is null and to_regclass('public.idx_lead_conversations_provider_thread_full') is null"),
   },
 ];
 

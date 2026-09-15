@@ -8,7 +8,7 @@ import { persistConnectionScopedMetaMessages } from '@/lib/integrations/meta-mes
 type Provider = 'facebook' | 'instagram';
 type MetaRecord = Record<string, unknown>;
 
-const DISCOVERY_VERSION = 2;
+const DISCOVERY_VERSION = 3;
 const DISCOVERY_MESSAGE_SEED_LIMIT = 25;
 
 type PageDiscoveryState = {
@@ -215,9 +215,8 @@ export async function discoverSelectedMetaPageHistory(input: {
     ? discoveryState.after_cursor
     : null;
 
-  // Version 2 repairs the old global-dedupe/25-row discovery behavior. Any cursor
-  // written by an older version is intentionally restarted once so already-discovered
-  // blank threads get their current connection metadata and preview message repaired.
+  // Version 3 repairs stale message rows left behind when a Page connection moved
+  // workspaces. Older cursors restart once so blank threads are revisited and healed.
   if (discoveryStateIsCurrent && discoveryState.complete === true) {
     return {
       conversationsDiscovered: 0,
@@ -412,16 +411,19 @@ export async function discoverSelectedMetaPageHistory(input: {
     }
   }
 
-  // Advance the Page conversation cursor only after this chunk has been handled.
-  // Subsequent sync cycles start from this cursor instead of re-reading page 1.
+  // Advance only after every conversation in the chunk was handled. Retrying a
+  // partially failed chunk is safe because message persistence is idempotent.
+  const chunkSucceeded = errors.length === 0;
+  const nextCursor = chunkSucceeded ? graphResult.nextCursor : savedCursor;
+  const historyComplete = chunkSucceeded && graphResult.complete;
   try {
     await saveDiscoveryState({
       connectionId: input.connectionId,
       workspaceId: connection.workspace_id,
       config: connectionConfig,
       key: stateKey,
-      nextCursor: graphResult.nextCursor,
-      complete: graphResult.complete,
+      nextCursor,
+      complete: historyComplete,
     });
   } catch (stateError) {
     errors.push(`Unable to save Page history cursor: ${stateError instanceof Error ? stateError.message : String(stateError)}`);
@@ -431,8 +433,8 @@ export async function discoverSelectedMetaPageHistory(input: {
     conversationsDiscovered,
     conversationsScanned: graphResult.items.length,
     previewMessagesInserted,
-    historyComplete: graphResult.complete,
-    nextCursor: graphResult.nextCursor,
+    historyComplete,
+    nextCursor,
     errors: errors.slice(0, 50),
   };
 }

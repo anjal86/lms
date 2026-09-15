@@ -3,7 +3,11 @@ import { NextResponse } from 'next/server';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { syncMetaConversations, type MetaSyncResult } from '@/lib/integrations/meta-sync';
-import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
+import {
+  backfillMetaConversationHistoryBatch,
+  discoverMetaConversationHistory,
+  type MetaHistoryBatchResult,
+} from '@/lib/integrations/meta-history';
 import { discoverSelectedMetaPageHistory, type SelectedPageHistoryResult } from '@/lib/integrations/meta-page-history';
 import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
 
@@ -199,6 +203,16 @@ function noConversationDiscovery(): SelectedPageHistoryResult {
   };
 }
 
+function noMessageBackfill(): MetaHistoryBatchResult {
+  return {
+    conversationsScanned: 0,
+    conversationsCompleted: 0,
+    messagesInserted: 0,
+    remaining: 0,
+    errors: [],
+  };
+}
+
 async function discoverSelectedPageChunk(scope: ProviderScope | null, maxPages: number) {
   if (!scope) return noConversationDiscovery();
   return discoverSelectedMetaPageHistory({
@@ -218,11 +232,13 @@ export async function POST(request: Request) {
     process.env.INTEGRATION_SYNC_SECRET?.trim()
   );
   let canRunHistoryMaintenance = internalSync;
+  let workspaceId: string | undefined;
 
   if (!internalSync) {
     const actor = await getApiActor(request);
     if ('error' in actor) return actor.error;
     canRunHistoryMaintenance = isManagement(actor.profile);
+    workspaceId = actor.profile.workspace_id;
     if (!liveMode && !canRunHistoryMaintenance) {
       return NextResponse.json({ error: 'Only managers can run provider history sync.' }, { status: 403 });
     }
@@ -251,9 +267,16 @@ export async function POST(request: Request) {
       // Historical customer-chat discovery and phone extraction are distinct jobs.
       // The former advances the Page's Meta conversation cursor; the latter scans
       // message history for phones. Run small bounded chunks so the request stays responsive.
-      const [conversationDiscovery, phoneScan] = canRunHistoryMaintenance
+      const [conversationDiscovery, messageBackfill, phoneScan] = canRunHistoryMaintenance
         ? await Promise.all([
             discoverSelectedPageChunk(requestedScope.scope, 1),
+            backfillMetaConversationHistoryBatch({
+              workspaceId,
+              connectionIds: requestedScope.scope ? [requestedScope.scope.connectionId] : undefined,
+              batchSize: 12,
+              concurrency: 4,
+              maxPages: 30,
+            }),
             scanPhoneLeadHistoryBatch({
               scope: phoneScanScope(requestedScope.scope),
               batchSize: 1,
@@ -264,16 +287,18 @@ export async function POST(request: Request) {
           ])
         : [
             noConversationDiscovery(),
+            noMessageBackfill(),
             { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] },
           ];
 
       return NextResponse.json({
         ...result,
         conversationsCount: result.conversationsCount + conversationDiscovery.conversationsDiscovered,
-        messagesCount: result.messagesCount + conversationDiscovery.previewMessagesInserted,
+        messagesCount: result.messagesCount + conversationDiscovery.previewMessagesInserted + messageBackfill.messagesInserted,
         conversationDiscovery,
+        messageBackfill,
         phoneScan,
-        maintenanceContinues: !conversationDiscovery.historyComplete || phoneScan.remaining > 0,
+        maintenanceContinues: !conversationDiscovery.historyComplete || messageBackfill.remaining > 0 || phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,
@@ -304,6 +329,14 @@ export async function POST(request: Request) {
         }
       : await discoverMetaConversationHistory({ maxPages: 2 });
 
+    const messageBackfill = await backfillMetaConversationHistoryBatch({
+      workspaceId,
+      connectionIds: requestedScope.scope ? [requestedScope.scope.connectionId] : undefined,
+      batchSize: 24,
+      concurrency: 6,
+      maxPages: 30,
+    });
+
     const phoneScan = await scanPhoneLeadHistoryBatch({
       scope: phoneScanScope(requestedScope.scope),
       batchSize: 2,
@@ -318,14 +351,15 @@ export async function POST(request: Request) {
       {
         ...result,
         conversationsCount: result.conversationsCount + history.conversationsDiscovered,
-        messagesCount: result.messagesCount + history.messagesInserted,
+        messagesCount: result.messagesCount + history.messagesInserted + messageBackfill.messagesInserted,
         olderConversationsDiscovered: history.conversationsDiscovered,
         historyPreviewMessagesInserted: history.messagesInserted,
         historyConversationsScanned: conversationDiscovery.conversationsScanned,
         historyErrors: history.errors,
         conversationDiscovery,
+        messageBackfill,
         phoneScan,
-        maintenanceContinues: !conversationDiscovery.historyComplete || phoneScan.remaining > 0,
+        maintenanceContinues: !conversationDiscovery.historyComplete || messageBackfill.remaining > 0 || phoneScan.remaining > 0,
         scope: requestedScope.scope
           ? { provider: requestedScope.scope.provider, accountId: requestedScope.scope.accountId }
           : null,

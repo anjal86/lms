@@ -31,6 +31,14 @@ export type MetaHistoryResult = {
   errors: string[];
 };
 
+export type MetaHistoryBatchResult = {
+  conversationsScanned: number;
+  conversationsCompleted: number;
+  messagesInserted: number;
+  remaining: number;
+  errors: string[];
+};
+
 function record(value: unknown): MetaRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as MetaRecord : {};
 }
@@ -39,6 +47,17 @@ function rows(value: unknown): MetaRecord[] {
   return Array.isArray(value)
     ? value.filter((item): item is MetaRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
     : [];
+}
+
+function describeError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  const payload = record(error);
+  if (typeof payload.message === 'string') {
+    return typeof payload.details === 'string' && payload.details
+      ? `${payload.message}: ${payload.details}`
+      : payload.message;
+  }
+  return String(error);
 }
 
 function errorMessage(payload: MetaRecord, status: number) {
@@ -65,7 +84,7 @@ async function pagedGraph(url: URL, maxPages: number) {
     const paging = record(data.paging);
     next = typeof paging.next === 'string' ? paging.next : null;
   }
-  return result;
+  return { items: result, complete: next === null };
 }
 
 function pageTokenForAccount(state: ConnectionState, accountId: string) {
@@ -288,7 +307,7 @@ async function discoverConnectionHistory(state: ConnectionState, maxPages: numbe
         maxPages
       );
 
-      for (const metaConversation of conversations) {
+      for (const metaConversation of conversations.items) {
         const customer = customerFromParticipants(metaConversation.participants, descriptor.accountId);
         const customerId = String(customer?.id || '');
         if (!customerId || customerId === descriptor.accountId) continue;
@@ -380,7 +399,7 @@ async function discoverConnectionHistory(state: ConnectionState, maxPages: numbe
         }
       }
     } catch (pageError) {
-      errors.push(`${state.provider}:${descriptor.accountId}: ${pageError instanceof Error ? pageError.message : String(pageError)}`);
+      errors.push(`${state.provider}:${descriptor.accountId}: ${describeError(pageError)}`);
     }
   }
 
@@ -455,7 +474,7 @@ export async function backfillMetaConversationMessages(conversationId: string, o
     let metaConversationId = typeof metadata.meta_conversation_id === 'string' ? metadata.meta_conversation_id : '';
     if (!metaConversationId) {
       const list = await pagedGraph(conversationListUrl(state.provider, accountId, token, version, false), 20);
-      const matched = list.find((item) => {
+      const matched = list.items.find((item) => {
         const customer = customerFromParticipants(item.participants, accountId);
         return String(customer?.id || '') === String(conversation.external_contact_id || '');
       });
@@ -474,12 +493,109 @@ export async function backfillMetaConversationMessages(conversationId: string, o
       connectionId: state.id,
       provider: state.provider,
       accountId,
-      messages: history,
+      messages: history.items,
     });
+
+    const { error: completionError } = await admin
+      .from('lead_conversations')
+      .update({
+        meta_history_complete: history.complete,
+        meta_history_synced_at: new Date().toISOString(),
+        meta_history_error: null,
+      })
+      .eq('workspace_id', conversation.workspace_id)
+      .eq('connection_id', conversation.connection_id)
+      .eq('id', conversation.id);
+    if (completionError) throw completionError;
 
     return { conversationsDiscovered: 0, messagesInserted: inserted, errors };
   } catch (historyError) {
-    errors.push(historyError instanceof Error ? historyError.message : String(historyError));
+    errors.push(describeError(historyError));
     return { conversationsDiscovered: 0, messagesInserted: 0, errors };
   }
+}
+
+export async function backfillMetaConversationHistoryBatch(options?: {
+  workspaceId?: string;
+  connectionIds?: string[];
+  batchSize?: number;
+  concurrency?: number;
+  maxPages?: number;
+}): Promise<MetaHistoryBatchResult> {
+  const admin = createSupabaseAdminClient();
+  const batchSize = Math.max(1, Math.min(options?.batchSize || 12, 1000));
+  const concurrency = Math.max(1, Math.min(options?.concurrency || 4, 12));
+  const maxPages = Math.max(1, Math.min(options?.maxPages || 30, 30));
+
+  let query = admin
+    .from('lead_conversations')
+    .select('id')
+    .in('provider', ['facebook', 'instagram'])
+    .not('connection_id', 'is', null)
+    .eq('meta_history_complete', false)
+    .order('meta_history_synced_at', { ascending: true, nullsFirst: true })
+    .order('last_message_at', { ascending: false, nullsFirst: false })
+    .limit(batchSize);
+  if (options?.workspaceId) query = query.eq('workspace_id', options.workspaceId);
+  if (options?.connectionIds?.length) query = query.in('connection_id', options.connectionIds);
+
+  const { data: conversations, error } = await query;
+  if (error) throw error;
+
+  let cursor = 0;
+  let conversationsCompleted = 0;
+  let messagesInserted = 0;
+  const errors: string[] = [];
+  const rowsToProcess = conversations || [];
+
+  async function worker() {
+    while (cursor < rowsToProcess.length) {
+      const index = cursor;
+      cursor += 1;
+      const conversation = rowsToProcess[index];
+      const result = await backfillMetaConversationMessages(conversation.id, { maxPages });
+      messagesInserted += result.messagesInserted;
+      if (result.errors.length) {
+        errors.push(`${conversation.id}: ${result.errors[0]}`);
+        await admin
+          .from('lead_conversations')
+          .update({
+            meta_history_synced_at: new Date().toISOString(),
+            meta_history_error: result.errors[0],
+          })
+          .eq('id', conversation.id)
+          .eq('meta_history_complete', false);
+      } else {
+        const { data: refreshed } = await admin
+          .from('lead_conversations')
+          .select('meta_history_complete')
+          .eq('id', conversation.id)
+          .maybeSingle();
+        if (refreshed?.meta_history_complete) conversationsCompleted += 1;
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, rowsToProcess.length) }, () => worker())
+  );
+
+  let remainingQuery = admin
+    .from('lead_conversations')
+    .select('id', { count: 'exact', head: true })
+    .in('provider', ['facebook', 'instagram'])
+    .not('connection_id', 'is', null)
+    .eq('meta_history_complete', false);
+  if (options?.workspaceId) remainingQuery = remainingQuery.eq('workspace_id', options.workspaceId);
+  if (options?.connectionIds?.length) remainingQuery = remainingQuery.in('connection_id', options.connectionIds);
+  const { count: remaining, error: remainingError } = await remainingQuery;
+  if (remainingError) throw remainingError;
+
+  return {
+    conversationsScanned: rowsToProcess.length,
+    conversationsCompleted,
+    messagesInserted,
+    remaining: remaining || 0,
+    errors: errors.slice(0, 50),
+  };
 }
