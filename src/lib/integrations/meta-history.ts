@@ -3,9 +3,11 @@ import 'server-only';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { persistConnectionScopedMetaMessages } from '@/lib/integrations/meta-message-persistence';
 
 type MetaRecord = Record<string, unknown>;
 type Provider = 'facebook' | 'instagram';
+const DISCOVERY_MESSAGE_SEED_LIMIT = 25;
 
 type ConnectionState = {
   id: string;
@@ -207,7 +209,7 @@ function conversationListUrl(provider: Provider, accountId: string, token: strin
   const baseFields = provider === 'facebook'
     ? 'id,updated_time,snippet,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key'
     : 'id,updated_time,participants';
-  url.searchParams.set('fields', includePreviewMessage ? `${baseFields},messages.limit(1){${messageFields}}` : baseFields);
+  url.searchParams.set('fields', includePreviewMessage ? `${baseFields},messages.limit(${DISCOVERY_MESSAGE_SEED_LIMIT}){${messageFields}}` : baseFields);
   url.searchParams.set('limit', '50');
   url.searchParams.set('access_token', token);
   return url;
@@ -255,26 +257,14 @@ async function insertMessages(input: {
       };
     });
 
-  let inserted = 0;
-  for (let start = 0; start < mapped.length; start += 100) {
-    const chunk = mapped.slice(start, start + 100);
-    if (!chunk.length) continue;
-    const ids = chunk.map((row) => row.external_message_id);
-    const { data: existing } = await admin
-      .from('lead_messages')
-      .select('external_message_id')
-      .eq('workspace_id', input.workspaceId)
-      .eq('connection_id', input.connectionId)
-      .eq('provider', input.provider)
-      .in('external_message_id', ids);
-    const existingIds = new Set((existing || []).map((row) => row.external_message_id));
-    const fresh = chunk.filter((row) => !existingIds.has(row.external_message_id));
-    if (!fresh.length) continue;
-    const { error } = await admin.from('lead_messages').insert(fresh);
-    if (error) throw error;
-    inserted += fresh.length;
-  }
-  return inserted;
+  return persistConnectionScopedMetaMessages({
+    workspaceId: input.workspaceId,
+    conversationId: input.conversationId,
+    leadId: input.leadId,
+    connectionId: input.connectionId,
+    provider: input.provider,
+    messages: mapped,
+  }, admin);
 }
 
 async function discoverConnectionHistory(state: ConnectionState, maxPages: number): Promise<MetaHistoryResult> {
@@ -328,7 +318,8 @@ async function discoverConnectionHistory(state: ConnectionState, maxPages: numbe
                 meta_page_name: descriptor.accountName,
                 meta_conversation_id: String(metaConversation.id || ''),
                 scoped_thread_key: metaConversation.scoped_thread_key || metaConversation.id,
-                message_count: metaConversation.message_count || null,
+                message_count: null,
+                provider_message_count_hint: metaConversation.message_count || null,
                 history_discovered_at: new Date().toISOString(),
               }
             : {
@@ -376,7 +367,7 @@ async function discoverConnectionHistory(state: ConnectionState, maxPages: numbe
           }
         }
 
-        if (localConversation && preview) {
+        if (localConversation && previewMessages.length) {
           messagesInserted += await insertMessages({
             workspaceId: state.workspaceId,
             conversationId: localConversation.id,
@@ -384,7 +375,7 @@ async function discoverConnectionHistory(state: ConnectionState, maxPages: numbe
             connectionId: state.id,
             provider: state.provider,
             accountId: descriptor.accountId,
-            messages: [preview],
+            messages: previewMessages,
           });
         }
       }

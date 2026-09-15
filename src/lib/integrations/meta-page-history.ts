@@ -3,11 +3,13 @@ import 'server-only';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { persistConnectionScopedMetaMessages } from '@/lib/integrations/meta-message-persistence';
 
 type Provider = 'facebook' | 'instagram';
 type MetaRecord = Record<string, unknown>;
 
 const DISCOVERY_VERSION = 2;
+const DISCOVERY_MESSAGE_SEED_LIMIT = 25;
 
 type PageDiscoveryState = {
   version?: number;
@@ -81,7 +83,7 @@ function conversationUrl(
   const baseFields = provider === 'facebook'
     ? 'id,updated_time,snippet,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key'
     : 'id,updated_time,participants';
-  url.searchParams.set('fields', `${baseFields},messages.limit(1){${messageFields}}`);
+  url.searchParams.set('fields', `${baseFields},messages.limit(${DISCOVERY_MESSAGE_SEED_LIMIT}){${messageFields}}`);
   // Meta accepts larger conversation pages than the old 25-row discovery window.
   // A 100-row page lets automatic Inbox maintenance catch up without requiring the
   // user to click Refresh repeatedly while the saved cursor still keeps requests bounded.
@@ -268,7 +270,8 @@ export async function discoverSelectedMetaPageHistory(input: {
       if (!customerId || customerId === input.accountId) continue;
 
       const externalThreadId = `${input.accountId}:${customerId}`;
-      const preview = rows(record(metaConversation.messages).data)[0] || null;
+      const seedMessages = rows(record(metaConversation.messages).data);
+      const preview = seedMessages[0] || null;
       const body = previewBody(preview);
       const updatedAt = typeof metaConversation.updated_time === 'string'
         ? new Date(metaConversation.updated_time).toISOString()
@@ -367,43 +370,42 @@ export async function discoverSelectedMetaPageHistory(input: {
         if (updateError) throw updateError;
       }
 
-      // Page-wide discovery stores the newest preview so a newly discovered thread is
-      // never rendered as an empty chat. Full history is fetched when that thread opens.
-      if (conversationId && preview?.id) {
-        const externalMessageId = String(preview.id);
-        const { data: duplicate } = await admin
-          .from('lead_messages')
-          .select('id')
-          .eq('workspace_id', connection.workspace_id)
-          .eq('connection_id', input.connectionId)
-          .eq('provider', input.provider)
-          .eq('external_message_id', externalMessageId)
-          .maybeSingle();
-
-        if (!duplicate) {
-          const senderId = String(record(preview.from).id || '');
-          const { error: insertError } = await admin.from('lead_messages').insert({
+      // Page-wide discovery stores the recent provider-supplied message window so a
+      // newly discovered thread is immediately usable. Opening the thread still runs
+      // the authoritative messages-edge backfill for deeper history.
+      if (conversationId && seedMessages.length) {
+        const mappedMessages = seedMessages
+          .filter((seedMessage) => seedMessage.id)
+          .map((seedMessage) => {
+            const senderId = String(record(seedMessage.from).id || '');
+            return {
             workspace_id: connection.workspace_id,
             conversation_id: conversationId,
             lead_id: leadId,
             connection_id: input.connectionId,
             provider: input.provider,
-            external_message_id: externalMessageId,
+              external_message_id: String(seedMessage.id),
             direction: senderId === input.accountId ? 'outbound' : 'inbound',
-            message_type: previewMessageType(preview),
-            body,
+            message_type: previewMessageType(seedMessage),
+            body: previewBody(seedMessage),
             metadata: {
-              from: preview.from,
-              to: preview.to,
-              attachments: preview.attachments,
-              history_preview: true,
+              from: seedMessage.from,
+              to: seedMessage.to,
+              attachments: seedMessage.attachments,
+              history_seed: true,
             },
             delivery_status: 'sent',
-            sent_at: typeof preview.created_time === 'string' ? new Date(preview.created_time).toISOString() : updatedAt,
+            sent_at: typeof seedMessage.created_time === 'string' ? new Date(seedMessage.created_time).toISOString() : updatedAt,
+            };
           });
-          if (insertError) throw insertError;
-          previewMessagesInserted += 1;
-        }
+        previewMessagesInserted += await persistConnectionScopedMetaMessages({
+          workspaceId: connection.workspace_id,
+          conversationId,
+          leadId,
+          connectionId: input.connectionId,
+          provider: input.provider,
+          messages: mappedMessages,
+        }, admin);
       }
     } catch (conversationError) {
       errors.push(conversationError instanceof Error ? conversationError.message : String(conversationError));
