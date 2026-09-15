@@ -97,6 +97,22 @@ const migrations = [
     file: '202609150053_whatsapp_single_owner_assignment.sql',
     applied: () => exists("select position('v_whatsapp_historical' in pg_get_functiondef(to_regprocedure('public.track_message_operations()'))) > 0 and position('p_automation_run_id is not null' in pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)'))) > 0"),
   },
+  {
+    file: '202609150054_omnichannel_workspace_account_integrity.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='contact_identities' and column_name='connection_id') and exists(select 1 from pg_indexes where schemaname='public' and indexname='inbound_channel_events_connection_event_uidx') and position('workspace_id = v_workspace_id' in pg_get_functiondef(to_regprocedure('public.claim_inbound_channel_event(uuid,text,text,text,jsonb)'))) > 0"),
+  },
+  {
+    file: '202609150055_omnichannel_concrete_account_backfill.sql',
+    applied: () => exists("select exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_routable_external_uidx') and exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_workspace_owned_external_uidx')"),
+  },
+  {
+    file: '202609150056_connection_scoped_delivery_receipts.sql',
+    applied: () => exists("select to_regprocedure('public.update_message_delivery_scoped(uuid,text,text,text,timestamptz,text,text)') is not null"),
+  },
+  {
+    file: '202609150057_omnichannel_reply_capabilities.sql',
+    applied: () => exists("select to_regprocedure('public.provider_supports_outbound_reply(text)') is not null"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
