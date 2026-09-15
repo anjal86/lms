@@ -113,6 +113,10 @@ const migrations = [
     file: '202609150057_omnichannel_reply_capabilities.sql',
     applied: () => exists("select to_regprocedure('public.provider_supports_outbound_reply(text)') is not null"),
   },
+  {
+    file: '202609150058_multi_company_workspace_membership.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='workspace_members' and column_name='role') and to_regclass('public.workspace_invitations') is not null and to_regprocedure('public.current_workspace_role()') is not null and to_regprocedure('public.switch_workspace(uuid)') is not null and to_regprocedure('public.create_workspace_for_current_user(text,text)') is not null"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
