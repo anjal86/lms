@@ -8,7 +8,6 @@ export default function AppOverlayPortal({ children }: { children: ReactNode }) 
 
   useEffect(() => {
     setMounted(true);
-    return () => setMounted(false);
   }, []);
 
   if (!mounted) return null;
