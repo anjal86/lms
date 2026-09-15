@@ -1,6 +1,6 @@
 -- 202609150053_whatsapp_single_owner_assignment.sql
 -- Prevent WhatsApp history/backfill from behaving like live inbound traffic and
--- keep strategy-based automation assignment sticky once a conversation has an owner.
+-- guarantee single-owner semantics for WhatsApp automatic assignment.
 
 begin;
 
@@ -89,10 +89,10 @@ begin
 end;
 $$;
 
--- Strategy-based automation routing is intended to claim unowned work. Once a
--- conversation has an owner, future inbound messages/history must not round-robin
--- it to somebody else. Explicit manual assignment and explicit automation user_id
--- assignment remain supported.
+-- Once a WhatsApp thread has an owner, automation cannot move it to another staff
+-- member. Managers can still reassign manually. Also close the race where two agents
+-- claim the same unassigned thread at nearly the same time by re-checking ownership
+-- after the row lock is acquired.
 create or replace function public.assign_conversation(
   p_conversation_id uuid,
   p_assignee_id uuid default null,
@@ -129,13 +129,29 @@ begin
     return v_conversation.assigned_to;
   end if;
 
-  -- Automation strategy assignment is sticky. A workflow may explicitly provide
-  -- user_id to intentionally reassign, but strategy-only routing cannot bounce an
-  -- already-owned conversation between agents on every message event.
+  -- WhatsApp automation assignment is sticky regardless of strategy/user target.
+  -- This guarantees one active owner until a human manager deliberately reassigns it.
+  if p_automation_run_id is not null
+     and v_conversation.provider = 'whatsapp'
+     and v_conversation.assigned_to is not null then
+    return v_conversation.assigned_to;
+  end if;
+
+  -- For all channels, strategy-only automation should claim unowned work, not churn
+  -- an existing owner on every repeated event.
   if p_automation_run_id is not null
      and p_assignee_id is null
      and v_conversation.assigned_to is not null then
     return v_conversation.assigned_to;
+  end if;
+
+  -- Re-check ownership after the FOR UPDATE lock. This prevents two simultaneous
+  -- agent Claim clicks from overwriting each other.
+  if not public.is_management()
+     and p_automation_run_id is null
+     and v_conversation.assigned_to is not null
+     and v_conversation.assigned_to is distinct from auth.uid() then
+    raise exception 'Conversation is already assigned to another agent' using errcode='42501';
   end if;
 
   if p_assignee_id is not null then
