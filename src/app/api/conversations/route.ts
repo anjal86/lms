@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getApiActor } from '@/lib/auth/api-actor';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,8 +32,8 @@ function readCookie(request: Request, name: string) {
 function selectedAccountScope(request: Request, url: URL) {
   const explicitAccountId = sanitizeAccountId(url.searchParams.get('accountId'));
   const explicitProvider = url.searchParams.get('accountProvider');
-  if (explicitAccountId && (explicitProvider === 'facebook' || explicitProvider === 'instagram')) {
-    return { accountId: explicitAccountId, accountProvider: explicitProvider } as const;
+  if (explicitAccountId && ['facebook', 'instagram', 'whatsapp'].includes(explicitProvider || '')) {
+    return { accountId: explicitAccountId, accountProvider: explicitProvider as 'facebook' | 'instagram' | 'whatsapp' } as const;
   }
 
   const cookieValue = readCookie(request, 'inbox_page_filter');
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
   const { accountId, accountProvider } = selectedAccountScope(request, url);
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 500));
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+  const management = isManagement(actor.profile);
 
   await actor.supabase.rpc('wake_due_conversations', { p_workspace_id: actor.profile.workspace_id });
 
@@ -70,6 +72,42 @@ export async function GET(request: Request) {
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('user_id', actor.user.id);
   const collaboratorIds = (collaboratorRows || []).map((row) => row.conversation_id);
+
+  let whatsappAccessExpression: string | null = null;
+  let accessibleWhatsappConnectionIds: string[] = [];
+  if (!management || provider === 'whatsapp' || accountProvider === 'whatsapp') {
+    const admin = createSupabaseAdminClient();
+    const { data: connectionRows, error: connectionError } = await admin
+      .from('integration_connections')
+      .select('id,connected_by,visibility_scope,config')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('provider', 'whatsapp');
+
+    if (connectionError) {
+      console.error('WhatsApp inbox scope lookup failed:', connectionError.message);
+      return NextResponse.json({ error: 'Unable to resolve WhatsApp inbox access.' }, { status: 500 });
+    }
+
+    accessibleWhatsappConnectionIds = (connectionRows || [])
+      .filter((row) => {
+        const config = row.config && typeof row.config === 'object' && !Array.isArray(row.config)
+          ? row.config as Record<string, unknown>
+          : {};
+        const baileys = config.transport === 'baileys';
+        return baileys && (management || row.visibility_scope === 'workspace' || row.connected_by === actor.user.id);
+      })
+      .map((row) => row.id);
+
+    if (!management) {
+      whatsappAccessExpression = accessibleWhatsappConnectionIds.length
+        ? `provider.neq.whatsapp,connection_id.in.(${accessibleWhatsappConnectionIds.join(',')})`
+        : 'provider.neq.whatsapp';
+    }
+  }
+
+  if (accountProvider === 'whatsapp' && accountId && !accessibleWhatsappConnectionIds.includes(accountId)) {
+    return NextResponse.json({ error: 'You do not have access to that WhatsApp account.' }, { status: 403 });
+  }
 
   let query = actor.supabase
     .from('lead_conversations')
@@ -108,11 +146,14 @@ export async function GET(request: Request) {
       updated_at,
       converted_at,
       metadata,
+      connection:integration_connections(id, display_name, external_account_id, visibility_scope, connected_by),
       contact:contacts(id, display_name, primary_phone, primary_email, lifecycle_key, owner_id, tags, custom_data, last_seen_at),
       lead:leads(id, lead_code, customer_name, customer_city, customer_country, destination, stage, priority, assigned_to, created_at),
       assigned_profile:profiles!lead_conversations_assigned_to_fkey(id, full_name, email, role, status)
     `, { count: 'exact' })
     .eq('workspace_id', actor.profile.workspace_id);
+
+  if (whatsappAccessExpression) query = query.or(whatsappAccessExpression);
 
   if (filter === 'unconverted') query = query.is('lead_id', null);
   else if (filter === 'converted') query = query.not('lead_id', 'is', null);
@@ -133,7 +174,7 @@ export async function GET(request: Request) {
   if (provider !== 'all') query = query.eq('provider', provider);
   if (shouldFilterAccount && accountProvider === 'facebook') query = query.eq('metadata->>meta_page_id', accountId);
   else if (shouldFilterAccount && accountProvider === 'instagram') query = query.eq('metadata->>instagram_business_account_id', accountId);
-
+  else if (shouldFilterAccount && accountProvider === 'whatsapp') query = query.eq('connection_id', accountId);
 
   if (search) {
     const pattern = `%${search}%`;
@@ -167,6 +208,19 @@ export async function GET(request: Request) {
   let needsReplyQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('needs_reply', true).neq('workflow_state', 'closed');
   let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString());
   let highPriorityQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).in('priority', ['high', 'urgent']).neq('workflow_state', 'closed');
+
+  if (whatsappAccessExpression) {
+    unconvertedCountQuery = unconvertedCountQuery.or(whatsappAccessExpression);
+    allOpenQuery = allOpenQuery.or(whatsappAccessExpression);
+    hasPhoneQuery = hasPhoneQuery.or(whatsappAccessExpression);
+    unassignedQuery = unassignedQuery.or(whatsappAccessExpression);
+    waitingQuery = waitingQuery.or(whatsappAccessExpression);
+    snoozedQuery = snoozedQuery.or(whatsappAccessExpression);
+    unreadQuery = unreadQuery.or(whatsappAccessExpression);
+    needsReplyQuery = needsReplyQuery.or(whatsappAccessExpression);
+    overdueQuery = overdueQuery.or(whatsappAccessExpression);
+    highPriorityQuery = highPriorityQuery.or(whatsappAccessExpression);
+  }
 
   if (provider !== 'all') {
     unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
@@ -203,6 +257,17 @@ export async function GET(request: Request) {
     needsReplyQuery = needsReplyQuery.eq('metadata->>instagram_business_account_id', accountId);
     overdueQuery = overdueQuery.eq('metadata->>instagram_business_account_id', accountId);
     highPriorityQuery = highPriorityQuery.eq('metadata->>instagram_business_account_id', accountId);
+  } else if (shouldFilterAccount && accountProvider === 'whatsapp') {
+    unconvertedCountQuery = unconvertedCountQuery.eq('connection_id', accountId);
+    allOpenQuery = allOpenQuery.eq('connection_id', accountId);
+    hasPhoneQuery = hasPhoneQuery.eq('connection_id', accountId);
+    unassignedQuery = unassignedQuery.eq('connection_id', accountId);
+    waitingQuery = waitingQuery.eq('connection_id', accountId);
+    snoozedQuery = snoozedQuery.eq('connection_id', accountId);
+    unreadQuery = unreadQuery.eq('connection_id', accountId);
+    needsReplyQuery = needsReplyQuery.eq('connection_id', accountId);
+    overdueQuery = overdueQuery.eq('connection_id', accountId);
+    highPriorityQuery = highPriorityQuery.eq('connection_id', accountId);
   }
 
   const [unconvertedCountRes, allOpenRes, hasPhoneRes, unassignedRes, waitingRes, snoozedRes, unreadRes, needsReplyRes, overdueRes, highPriorityRes] = await Promise.all([
@@ -226,9 +291,11 @@ export async function GET(request: Request) {
       .eq('workspace_id', actor.profile.workspace_id)
       .in('id', collaboratorIds)
       .neq('workflow_state', 'closed');
+    if (whatsappAccessExpression) collaborationCountQuery = collaborationCountQuery.or(whatsappAccessExpression);
     if (provider !== 'all') collaborationCountQuery = collaborationCountQuery.eq('provider', provider);
     if (accountId && accountProvider === 'facebook') collaborationCountQuery = collaborationCountQuery.eq('metadata->>meta_page_id', accountId);
     else if (accountId && accountProvider === 'instagram') collaborationCountQuery = collaborationCountQuery.eq('metadata->>instagram_business_account_id', accountId);
+    else if (accountId && accountProvider === 'whatsapp') collaborationCountQuery = collaborationCountQuery.eq('connection_id', accountId);
     const collaborationRes = await collaborationCountQuery;
     collaborations = collaborationRes.count || 0;
   }
