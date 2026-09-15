@@ -58,7 +58,7 @@ export async function GET(request: Request) {
 
   const connections = (data || []).filter((connection) => {
     const config = asRecord(connection.config);
-    return config.hidden_from_account_picker !== true;
+    return config.hidden_from_account_picker !== true && config.removed_from_connections_ui !== true;
   });
 
   return NextResponse.json({ connections, catalog, setup, migrationRequired: false });
@@ -175,35 +175,57 @@ export async function DELETE(request: Request) {
   }
 
   const admin = createSupabaseAdminClient();
-  const { data: target } = await admin
+  const { data: target, error: targetError } = await admin
     .from('integration_connections')
-    .select('id,workspace_id,provider,display_name')
+    .select('id,workspace_id,provider,display_name,config')
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', parsed.data.id)
     .maybeSingle();
 
+  if (targetError) {
+    console.error('Connection removal lookup failed:', targetError.message);
+    return NextResponse.json({ error: 'Unable to load this connection.' }, { status: 500 });
+  }
   if (!target) {
     return NextResponse.json({ error: 'Connection not found in this workspace.' }, { status: 404 });
   }
 
-  // 1. Remove secret if present
-  await admin.from('integration_secrets').delete().eq('connection_id', target.id);
+  const now = new Date().toISOString();
+  const config = asRecord(target.config);
 
-  // 2. Delete the connection record
-  const { error: deleteError } = await admin
+  // Erase credentials, but keep the connection row as a tombstone. Conversations,
+  // messages and audit history retain their exact source-account foreign key.
+  const { error: secretError } = await admin.from('integration_secrets').delete().eq('connection_id', target.id);
+  if (secretError) {
+    console.error('Connection credential removal failed:', secretError.message);
+    return NextResponse.json({ error: 'Unable to remove stored connection credentials.' }, { status: 500 });
+  }
+
+  const { error: updateError } = await admin
     .from('integration_connections')
-    .delete()
+    .update({
+      status: 'disconnected',
+      last_error: null,
+      config: {
+        ...config,
+        removed_from_connections_ui: true,
+        removed_at: now,
+        removed_by: actor.user.id,
+      },
+      updated_at: now,
+    })
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', target.id);
 
-  if (deleteError) {
-    console.error('Failed to delete integration connection:', deleteError.message);
-    return NextResponse.json({ error: 'Unable to delete connection.' }, { status: 500 });
+  if (updateError) {
+    console.error('Failed to remove integration connection:', updateError.message);
+    return NextResponse.json({ error: 'Unable to remove connection.' }, { status: 500 });
   }
 
   return NextResponse.json({
     success: true,
-    deletedId: target.id,
+    removedId: target.id,
     display_name: target.display_name,
+    historyPreserved: true,
   });
 }
