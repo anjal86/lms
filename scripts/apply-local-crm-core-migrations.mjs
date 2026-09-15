@@ -121,6 +121,10 @@ const migrations = [
     file: '202609150059_workspace_scoped_staff_routing.sql',
     applied: () => exists("select position('from public.workspace_members wm' in lower(pg_get_functiondef(to_regprocedure('public.route_lead_atomic(uuid,text,uuid,boolean)')))) > 0 and position('wm.role=''agent''' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation_worker(uuid,text)')))) > 0 and position('wm.workspace_id=v_conversation.workspace_id' in lower(pg_get_functiondef(to_regprocedure('public.assign_conversation(uuid,uuid,text,uuid)')))) > 0"),
   },
+  {
+    file: '202609150060_routable_account_release_integrity.sql',
+    applied: () => exists("select exists(select 1 from pg_indexes where schemaname='public' and indexname='integration_connections_routable_external_uidx' and position('status' in indexdef) > 0 and position('disconnected' in indexdef) > 0)"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');
