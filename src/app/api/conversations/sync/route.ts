@@ -7,6 +7,7 @@ import {
   backfillMetaConversationHistoryBatch,
   discoverMetaConversationHistory,
   type MetaHistoryBatchResult,
+  type MetaHistoryResult,
 } from '@/lib/integrations/meta-history';
 import { discoverSelectedMetaPageHistory, type SelectedPageHistoryResult } from '@/lib/integrations/meta-page-history';
 import { scanPhoneLeadHistoryBatch } from '@/lib/integrations/phone-lead-sync';
@@ -84,13 +85,31 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function rows(value: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    : [];
+function isAuthorizationContainer(config: unknown) {
+  const value = record(config);
+  return value.authorization_container === true
+    || value.legacy_container === true
+    || value.hidden_from_account_picker === true;
 }
 
-async function resolveRequestedScope(request: Request): Promise<{ requested: boolean; scope: ProviderScope | null }> {
+async function workspaceMetaConnectionIds(workspaceId: string) {
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from('integration_connections')
+    .select('id,config')
+    .eq('workspace_id', workspaceId)
+    .in('status', ['connected', 'token_expiring'])
+    .in('provider', ['facebook', 'instagram']);
+  if (error) throw error;
+  return (data || [])
+    .filter((connection) => !isAuthorizationContainer(connection.config))
+    .map((connection) => connection.id);
+}
+
+async function resolveRequestedScope(
+  request: Request,
+  workspaceId: string
+): Promise<{ requested: boolean; scope: ProviderScope | null }> {
   const ref = referrerScope(request);
   const admin = createSupabaseAdminClient();
 
@@ -98,24 +117,34 @@ async function resolveRequestedScope(request: Request): Promise<{ requested: boo
     const { data: connection } = await admin
       .from('integration_connections')
       .select('id,provider,config,external_account_id')
+      .eq('workspace_id', workspaceId)
       .eq('id', ref.accountId)
       .in('status', ['connected', 'token_expiring'])
       .maybeSingle();
 
-    console.log('resolveRequestedScope ref:', ref, 'connection:', connection?.id);
-
     if (connection && (connection.provider === 'facebook' || connection.provider === 'instagram')) {
+      if (ref.accountProvider && ref.accountProvider !== 'all' && ref.accountProvider !== connection.provider) {
+        return { requested: true, scope: null };
+      }
       const provider = connection.provider;
       const accountId = connection.external_account_id;
       const pageId = String(record(connection.config).page_id || '');
       if (accountId && pageId) {
-        return { requested: true, scope: { provider: provider as 'facebook' | 'instagram', accountId, connectionId: connection.id, pageId } };
+        return {
+          requested: true,
+          scope: {
+            provider: provider as 'facebook' | 'instagram',
+            accountId,
+            connectionId: connection.id,
+            pageId,
+          },
+        };
       }
     }
     return { requested: true, scope: null };
   }
 
-  // Legacy cookie fallback
+  // Legacy cookie fallback. It is still tenant-scoped before resolving the concrete row.
   const cookieValue = readCookie(request, 'inbox_page_filter');
   if (!cookieValue || cookieValue === 'all') return { requested: false, scope: null };
 
@@ -130,17 +159,24 @@ async function resolveRequestedScope(request: Request): Promise<{ requested: boo
   const { data: connections, error } = await admin
     .from('integration_connections')
     .select('id,provider,config,external_account_id')
+    .eq('workspace_id', workspaceId)
     .eq('provider', provider)
     .eq('external_account_id', accountId)
     .in('status', ['connected', 'token_expiring']);
   if (error) throw error;
 
   for (const connection of connections || []) {
+    if (isAuthorizationContainer(connection.config)) continue;
     const pageId = String(record(connection.config).page_id || '');
     if (connection.external_account_id && pageId) {
       return {
         requested: true,
-        scope: { provider: provider as 'facebook' | 'instagram', accountId: connection.external_account_id, connectionId: connection.id, pageId },
+        scope: {
+          provider: provider as 'facebook' | 'instagram',
+          accountId: connection.external_account_id,
+          connectionId: connection.id,
+          pageId,
+        },
       };
     }
   }
@@ -148,8 +184,53 @@ async function resolveRequestedScope(request: Request): Promise<{ requested: boo
   return { requested: true, scope: null };
 }
 
-async function runLiveSync(scope: ProviderScope | null) {
-  const key = scope ? `${scope.provider}:${scope.connectionId}:${scope.pageId}` : 'all';
+function mergeSyncResults(results: MetaSyncResult[]): MetaSyncResult {
+  return {
+    success: results.every((result) => result.success),
+    pagesCount: results.reduce((sum, result) => sum + result.pagesCount, 0),
+    conversationsCount: results.reduce((sum, result) => sum + result.conversationsCount, 0),
+    messagesCount: results.reduce((sum, result) => sum + result.messagesCount, 0),
+    errors: results.flatMap((result) => result.errors).slice(0, 50),
+  };
+}
+
+async function runScopedMetaSync(input: {
+  scope: ProviderScope | null;
+  workspaceId?: string;
+  workspaceConnectionIds?: string[];
+}) {
+  if (input.scope) {
+    return syncMetaConversations({
+      liveMode: true,
+      connectionId: input.scope.connectionId,
+      pageId: input.scope.pageId,
+    });
+  }
+
+  if (input.workspaceId) {
+    const ids = input.workspaceConnectionIds || [];
+    if (!ids.length) {
+      return { success: true, pagesCount: 0, conversationsCount: 0, messagesCount: 0, errors: [] } satisfies MetaSyncResult;
+    }
+    const results = await Promise.all(ids.map((connectionId) => syncMetaConversations({
+      liveMode: true,
+      connectionId,
+    })));
+    return mergeSyncResults(results);
+  }
+
+  // Internal maintenance is the only path allowed to operate across all workspaces.
+  return syncMetaConversations({ liveMode: true });
+}
+
+async function runLiveSync(input: {
+  scope: ProviderScope | null;
+  workspaceId?: string;
+  workspaceConnectionIds?: string[];
+}) {
+  const key = input.scope
+    ? `${input.workspaceId || 'internal'}:${input.scope.provider}:${input.scope.connectionId}:${input.scope.pageId}`
+    : `${input.workspaceId || 'internal'}:all`;
   const now = Date.now();
   const existing = liveSyncPromises.get(key);
   const lastCompleted = lastLiveSyncCompletedAt.get(key) || 0;
@@ -167,11 +248,7 @@ async function runLiveSync(scope: ProviderScope | null) {
 
   let promise = existing;
   if (!promise) {
-    promise = syncMetaConversations({
-      liveMode: true,
-      connectionId: scope?.connectionId,
-      pageId: scope?.pageId,
-    }).finally(() => {
+    promise = runScopedMetaSync(input).finally(() => {
       lastLiveSyncCompletedAt.set(key, Date.now());
       liveSyncPromises.delete(key);
     });
@@ -203,6 +280,10 @@ function noConversationDiscovery(): SelectedPageHistoryResult {
   };
 }
 
+function noHistoryDiscovery(): MetaHistoryResult {
+  return { conversationsDiscovered: 0, messagesInserted: 0, errors: [] };
+}
+
 function noMessageBackfill(): MetaHistoryBatchResult {
   return {
     conversationsScanned: 0,
@@ -212,6 +293,8 @@ function noMessageBackfill(): MetaHistoryBatchResult {
     errors: [],
   };
 }
+
+const NO_PHONE_SCAN = { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] };
 
 async function discoverSelectedPageChunk(scope: ProviderScope | null, maxPages: number) {
   if (!scope) return noConversationDiscovery();
@@ -245,9 +328,10 @@ export async function POST(request: Request) {
   }
 
   try {
+    const workspaceConnectionIds = workspaceId ? await workspaceMetaConnectionIds(workspaceId) : undefined;
     const requestedScope = internalSync
       ? { requested: false, scope: null }
-      : await resolveRequestedScope(request);
+      : await resolveRequestedScope(request, workspaceId!);
 
     if (requestedScope.requested && !requestedScope.scope) {
       return NextResponse.json({
@@ -257,16 +341,17 @@ export async function POST(request: Request) {
         messagesCount: 0,
         errors: [],
         skipped: true,
-        reason: 'Selected Page inbox is no longer connected.',
+        reason: 'Selected Page inbox is no longer connected to this workspace.',
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
 
     if (liveMode) {
-      const result = await runLiveSync(requestedScope.scope);
+      const result = await runLiveSync({
+        scope: requestedScope.scope,
+        workspaceId,
+        workspaceConnectionIds,
+      });
 
-      // Historical customer-chat discovery and phone extraction are distinct jobs.
-      // The former advances the Page's Meta conversation cursor; the latter scans
-      // message history for phones. Run small bounded chunks so the request stays responsive.
       const [conversationDiscovery, messageBackfill, phoneScan] = canRunHistoryMaintenance
         ? await Promise.all([
             discoverSelectedPageChunk(requestedScope.scope, 1),
@@ -277,18 +362,20 @@ export async function POST(request: Request) {
               concurrency: 4,
               maxPages: 30,
             }),
-            scanPhoneLeadHistoryBatch({
-              scope: phoneScanScope(requestedScope.scope),
-              batchSize: 1,
-              maxHistoryPages: 1,
-              timeBudgetMs: 3_000,
-              requestTimeoutMs: 2_500,
-            }),
+            requestedScope.scope || internalSync
+              ? scanPhoneLeadHistoryBatch({
+                  scope: phoneScanScope(requestedScope.scope),
+                  batchSize: 1,
+                  maxHistoryPages: 1,
+                  timeBudgetMs: 3_000,
+                  requestTimeoutMs: 2_500,
+                })
+              : Promise.resolve(NO_PHONE_SCAN),
           ])
         : [
             noConversationDiscovery(),
             noMessageBackfill(),
-            { scanned: 0, phoneLeadsFound: 0, remaining: 0, errors: [] as string[] },
+            NO_PHONE_SCAN,
           ];
 
       return NextResponse.json({
@@ -308,13 +395,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // Foreground Sync refreshes recent activity, then advances the selected Page's
-    // historical conversation cursor by a small bounded chunk. Repeated live cycles
-    // continue automatically from the saved cursor until all Page chats are discovered.
-    const result = await syncMetaConversations({
-      liveMode: true,
-      connectionId: requestedScope.scope?.connectionId,
-      pageId: requestedScope.scope?.pageId,
+    const result = await runScopedMetaSync({
+      scope: requestedScope.scope,
+      workspaceId,
+      workspaceConnectionIds,
     });
 
     const selectedHistory = requestedScope.scope
@@ -327,7 +411,11 @@ export async function POST(request: Request) {
           messagesInserted: selectedHistory?.previewMessagesInserted || 0,
           errors: selectedHistory?.errors || [],
         }
-      : await discoverMetaConversationHistory({ maxPages: 2 });
+      : workspaceId
+        ? workspaceConnectionIds?.length
+          ? await discoverMetaConversationHistory({ maxPages: 2, connectionIds: workspaceConnectionIds })
+          : noHistoryDiscovery()
+        : await discoverMetaConversationHistory({ maxPages: 2 });
 
     const messageBackfill = await backfillMetaConversationHistoryBatch({
       workspaceId,
@@ -337,13 +425,15 @@ export async function POST(request: Request) {
       maxPages: 30,
     });
 
-    const phoneScan = await scanPhoneLeadHistoryBatch({
-      scope: phoneScanScope(requestedScope.scope),
-      batchSize: 2,
-      maxHistoryPages: 1,
-      timeBudgetMs: 4_000,
-      requestTimeoutMs: 2_500,
-    });
+    const phoneScan = requestedScope.scope || internalSync
+      ? await scanPhoneLeadHistoryBatch({
+          scope: phoneScanScope(requestedScope.scope),
+          batchSize: 2,
+          maxHistoryPages: 1,
+          timeBudgetMs: 4_000,
+          requestTimeoutMs: 2_500,
+        })
+      : NO_PHONE_SCAN;
 
     const conversationDiscovery = selectedHistory || noConversationDiscovery();
 
