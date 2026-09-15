@@ -81,6 +81,18 @@ const migrations = [
     file: '202609120049_collaboration_notification_type.sql',
     applied: () => exists("select exists(select 1 from pg_constraint c join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace where n.nspname='public' and t.relname='notifications' and c.conname='notifications_type_check' and position('collaboration' in pg_get_constraintdef(c.oid)) > 0)"),
   },
+  {
+    file: '202609150050_whatsapp_history_multi_account.sql',
+    applied: () => exists("select exists(select 1 from information_schema.columns where table_schema='public' and table_name='integration_connections' and column_name='visibility_scope') and to_regclass('public.whatsapp_history_sync_jobs') is not null and to_regclass('public.whatsapp_identity_mappings') is not null"),
+  },
+  {
+    file: '202609150051_whatsapp_connection_scoped_outbound.sql',
+    applied: () => exists("select coalesce(position('connection_id is not distinct from v_pending.connection_id' in pg_get_functiondef(to_regprocedure('public.finalize_outbound_message(uuid,text,timestamptz)'))), 0) > 0"),
+  },
+  {
+    file: '202609150052_whatsapp_connection_access.sql',
+    applied: () => exists("select to_regprocedure('public.can_access_conversation(uuid)') is not null and coalesce(position('can_access_conversation' in pg_get_expr(polqual, polrelid)), 0) > 0 from pg_policy where polname='lead_conversations_read' limit 1"),
+  },
 ];
 
 console.log('\nChecking local CRM core migrations...\n');

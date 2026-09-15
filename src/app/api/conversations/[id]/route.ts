@@ -3,14 +3,18 @@ import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { backfillMetaConversationMessages } from '@/lib/integrations/meta-history';
+import { fetchWhatsappHistory } from '@/lib/integrations/whatsapp-baileys';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const HISTORY_BACKFILL_INTERVAL_MS = 30 * 60 * 1000;
+const WHATSAPP_REPAIR_INTERVAL_MS = 5 * 60 * 1000;
 const historyBackfillAt = new Map<string, number>();
 const historyBackfillPromises = new Map<string, Promise<void>>();
+const whatsappRepairAt = new Map<string, number>();
+const whatsappRepairPromises = new Map<string, Promise<void>>();
 
 const PatchConversationSchema = z.object({
   status: z.enum(['open', 'closed', 'archived']).optional(),
@@ -32,6 +36,76 @@ type LocationUpdateResult = {
   conversation?: Record<string, unknown>;
   lead_id?: string | null;
 };
+
+type WhatsappRepairMessage = {
+  external_message_id?: string | null;
+  direction?: string | null;
+  sent_at?: string | null;
+  message_type?: string | null;
+  body?: string | null;
+  metadata?: unknown;
+};
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function whatsappMessageNeedsRepair(message: WhatsappRepairMessage) {
+  if (typeof message.body === 'string' && /^\[WhatsApp message\]$/i.test(message.body.trim())) return true;
+  const metadata = objectValue(message.metadata);
+  const hasAttachment = Boolean(metadata.attachment_url || metadata.storage_path);
+  const mediaAvailable = metadata.media_available_on_device === true;
+  const messageType = String(message.message_type || '').toLowerCase();
+  return !hasAttachment && (mediaAvailable || ['image', 'video', 'audio', 'file'].includes(messageType));
+}
+
+async function maybeRepairWhatsappHistory(input: {
+  conversationId: string;
+  provider: string;
+  connectionId: string | null;
+  conversationMetadata: unknown;
+  messages: WhatsappRepairMessage[];
+}) {
+  if (input.provider !== 'whatsapp' || !input.connectionId || input.messages.length < 2) return false;
+  if (!input.messages.some(whatsappMessageNeedsRepair)) return false;
+
+  const lastAttempt = whatsappRepairAt.get(input.conversationId) || 0;
+  if (Date.now() - lastAttempt < WHATSAPP_REPAIR_INTERVAL_MS) return false;
+  if (whatsappRepairPromises.has(input.conversationId)) return false;
+
+  const anchor = input.messages.find((message) => Boolean(message.external_message_id && message.sent_at));
+  if (!anchor?.external_message_id || !anchor.sent_at) return false;
+
+  const conversationMetadata = objectValue(input.conversationMetadata);
+  const anchorMetadata = objectValue(anchor.metadata);
+  const remoteJid = typeof anchorMetadata.jid === 'string'
+    ? anchorMetadata.jid
+    : typeof conversationMetadata.whatsapp_jid === 'string'
+      ? conversationMetadata.whatsapp_jid
+      : null;
+  if (!remoteJid) return false;
+
+  const count = Math.min(100, Math.max(25, input.messages.length));
+  const promise = fetchWhatsappHistory(input.connectionId, {
+    count,
+    oldestMsgId: anchor.external_message_id,
+    oldestMsgRemoteJid: remoteJid,
+    oldestMsgFromMe: anchor.direction === 'outbound',
+    oldestMsgTimestamp: new Date(anchor.sent_at).getTime(),
+  })
+    .then(() => undefined)
+    .catch((error) => {
+      console.warn(`WhatsApp repair request failed for ${input.conversationId}:`, error instanceof Error ? error.message : error);
+    })
+    .finally(() => {
+      whatsappRepairAt.set(input.conversationId, Date.now());
+      whatsappRepairPromises.delete(input.conversationId);
+    });
+
+  whatsappRepairPromises.set(input.conversationId, promise);
+  void promise;
+  return true;
+}
 
 async function maybeBackfillHistory(input: {
   conversationId: string;
@@ -151,7 +225,9 @@ export async function GET(
       id,
       conversation_id,
       lead_id,
+      connection_id,
       provider,
+      external_message_id,
       direction,
       message_type,
       body,
@@ -173,6 +249,14 @@ export async function GET(
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
   }
 
+  const whatsappRepairRequested = await maybeRepairWhatsappHistory({
+    conversationId: id,
+    provider: conversation.provider,
+    connectionId: conversation.connection_id,
+    conversationMetadata: conversation.metadata,
+    messages: (messageRows || []) as WhatsappRepairMessage[],
+  });
+
   const messages = [...(messageRows || [])].reverse();
 
   return NextResponse.json({
@@ -180,6 +264,7 @@ export async function GET(
     messages,
     messageTotal: messageTotal || 0,
     hasOlderMessages: (messageTotal || 0) > messages.length,
+    whatsappRepairRequested,
   }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
