@@ -1,10 +1,28 @@
 'use client';
 
 import { Suspense, useEffect, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import StableInbox from '@/components/inbox/StableInbox';
+import InboxChannelScopeBar from '@/components/inbox/InboxChannelScopeBar';
 
 const AUTO_SYNC_INTERVAL_MS = 30_000;
 const AUTO_SYNC_MIN_GAP_MS = 15_000;
+
+function ScopedInbox() {
+  const params = useSearchParams();
+  const accountId = params.get('accountId') || 'all';
+  const accountProvider = params.get('accountProvider') || 'all';
+  const provider = params.get('provider') || 'all';
+
+  return (
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+      <InboxChannelScopeBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <StableInbox key={`${provider}:${accountProvider}:${accountId}`} />
+      </div>
+    </div>
+  );
+}
 
 export default function InboxPage() {
   const syncingRef = useRef(false);
@@ -67,7 +85,7 @@ export default function InboxPage() {
 
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center p-8 text-xs text-zinc-400">Loading inbox…</div>}>
-      <StableInbox />
+      <ScopedInbox />
     </Suspense>
   );
 }
