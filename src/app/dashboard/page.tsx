@@ -27,7 +27,7 @@ type DashboardSummary = {
   payments_due: number;
   passport_risks: number;
 };
-type PipelineSummary = { won_count: number; won_value: number; visible_count: number };
+type PipelineSummary = { won_count: number; won_value: number; visible_count: number; my_count: number };
 type ConversationExceptions = {
   needs_reply: number;
   sla_overdue: number;
@@ -51,12 +51,12 @@ function Metric({ title, value, hint, href, icon: Icon, danger = false }: { titl
 }
 
 export default function DashboardPage() {
-  const { currentUser, formatCurrency } = useApp();
+  const { currentUser } = useApp();
   const { config, term, moduleEnabled } = useWorkspace();
   const { can } = useWorkspacePermissions();
   const isAgent = currentUser.role === 'agent';
   const [summary, setSummary] = useState<DashboardSummary>(EMPTY_SUMMARY);
-  const [pipeline, setPipeline] = useState<PipelineSummary>({ won_count: 0, won_value: 0, visible_count: 0 });
+  const [pipeline, setPipeline] = useState<PipelineSummary>({ won_count: 0, won_value: 0, visible_count: 0, my_count: 0 });
   const [exceptions, setExceptions] = useState<ConversationExceptions>(EMPTY_EXCEPTIONS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +66,17 @@ export default function DashboardPage() {
   const dealPlural = term('deal_plural', 'Deals');
   const inboxEnabled = moduleEnabled('inbox', true) && can('inbox.view');
   const hasPayments = moduleEnabled('payments', false);
+  const formatWorkspaceCurrency = useCallback((amount: number) => {
+    try {
+      return new Intl.NumberFormat(config.workspace.locale || 'en-NP', {
+        style: 'currency',
+        currency: config.workspace.currency || 'NPR',
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      return `${config.workspace.currency || 'NPR'} ${amount.toLocaleString()}`;
+    }
+  }, [config.workspace.currency, config.workspace.locale]);
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -88,7 +99,12 @@ export default function DashboardPage() {
         payments_due: Number(raw.payments_due || 0),
         passport_risks: Number(raw.passport_risks || 0),
       });
-      setPipeline({ won_count: Number(rawPipeline.won_count || 0), won_value: Number(rawPipeline.won_value || 0), visible_count: Number(rawPipeline.visible_count || 0) });
+      setPipeline({
+        won_count: Number(rawPipeline.won_count || 0),
+        won_value: Number(rawPipeline.won_value || 0),
+        visible_count: Number(rawPipeline.visible_count || 0),
+        my_count: Number(rawPipeline.my_count || 0),
+      });
       setExceptions({ ...EMPTY_EXCEPTIONS, ...(exceptionPayload.exceptions || {}) });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load today’s work.');
@@ -130,10 +146,10 @@ export default function DashboardPage() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {inboxEnabled ? <Metric title="Needs reply" value={exceptions.needs_reply} hint={`${contactPlural} waiting on your team.`} href="/inbox?view=needs_reply" icon={Inbox} danger={exceptions.needs_reply > 0} /> : <Metric title="Replies needed" value={summary.sla_breaches} hint={`${contactPlural} still waiting for first contact.`} href={isAgent ? '/my-work' : '/leads'} icon={ShieldAlert} danger={summary.sla_breaches > 0} />}
         <Metric title="Due actions" value={dueActions} hint="Scheduled follow-ups and conversation actions." href={isAgent ? '/work?owner=me' : '/work'} icon={CalendarClock} danger={dueActions > 0} />
-        <Metric title={isAgent ? `My ${leadPlural}` : `Active ${leadPlural}`} value={isAgent ? currentUser.current_load : pipeline.visible_count} hint="Commercial work currently in progress." href={isAgent ? '/my-work' : '/leads'} icon={BriefcaseBusiness} />
+        <Metric title={isAgent ? `My ${leadPlural}` : `Active ${leadPlural}`} value={isAgent ? pipeline.my_count : pipeline.visible_count} hint="Commercial work currently in progress." href={isAgent ? '/my-work' : '/leads'} icon={BriefcaseBusiness} />
         {inboxEnabled
           ? <Metric title={isAgent ? 'Urgent conversations' : 'Unassigned conversations'} value={isAgent ? exceptions.urgent : exceptions.unassigned} hint={isAgent ? 'Highest-priority customer conversations.' : 'Open conversations without an owner.'} href={isAgent ? '/inbox?view=high_priority' : '/inbox?view=unassigned'} icon={isAgent ? AlertTriangle : UserRoundSearch} danger={(isAgent ? exceptions.urgent : exceptions.unassigned) > 0} />
-          : <Metric title={isAgent ? 'My active work' : 'Unassigned opportunities'} value={isAgent ? currentUser.current_load : summary.unassigned_leads} hint="Ownership that needs attention." href={isAgent ? '/my-work' : '/leads'} icon={UserRoundSearch} />}
+          : <Metric title={isAgent ? 'My active work' : 'Unassigned opportunities'} value={isAgent ? pipeline.my_count : summary.unassigned_leads} hint="Ownership that needs attention." href={isAgent ? '/my-work' : '/leads'} icon={UserRoundSearch} />}
       </div>
     </section>
 
@@ -145,7 +161,7 @@ export default function DashboardPage() {
       </div>
       <div className="grid border-t border-zinc-100 md:grid-cols-2 md:divide-x md:divide-zinc-100">
         <div className="flex items-center justify-between p-4"><div className="flex items-center gap-3"><Trophy className="h-4 w-4 text-emerald-600" /><div><div className="text-xs font-semibold text-zinc-800">Won {dealPlural.toLowerCase()}</div><div className="text-[11px] text-zinc-500">Current reporting period</div></div></div><span className="font-mono text-lg font-semibold">{pipeline.won_count}</span></div>
-        {hasPayments ? <Link href="/leads" className="flex items-center justify-between p-4 hover:bg-zinc-50"><div className="flex items-center gap-3"><CircleDollarSign className="h-4 w-4 text-emerald-600" /><div><div className="text-xs font-semibold text-zinc-800">Payments due</div><div className="text-[11px] text-zinc-500">Outstanding milestones</div></div></div><span className="font-mono text-lg font-semibold">{summary.payments_due}</span></Link> : <div className="flex items-center justify-between p-4"><div><div className="text-xs font-semibold text-zinc-800">Won value</div><div className="text-[11px] text-zinc-500">Current reporting period</div></div><span className="font-mono text-sm font-semibold">{formatCurrency(pipeline.won_value)}</span></div>}
+        {hasPayments ? <Link href="/leads" className="flex items-center justify-between p-4 hover:bg-zinc-50"><div className="flex items-center gap-3"><CircleDollarSign className="h-4 w-4 text-emerald-600" /><div><div className="text-xs font-semibold text-zinc-800">Payments due</div><div className="text-[11px] text-zinc-500">Outstanding milestones</div></div></div><span className="font-mono text-lg font-semibold">{summary.payments_due}</span></Link> : <div className="flex items-center justify-between p-4"><div><div className="text-xs font-semibold text-zinc-800">Won value</div><div className="text-[11px] text-zinc-500">Current reporting period</div></div><span className="font-mono text-sm font-semibold">{formatWorkspaceCurrency(pipeline.won_value)}</span></div>}
       </div>
     </section>}
   </div>;
