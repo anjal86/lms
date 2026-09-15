@@ -22,6 +22,7 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
+import BaileysWhatsAppConnect from '@/components/integrations/BaileysWhatsAppConnect';
 import { useApp } from '@/lib/store';
 
 type CatalogItem = {
@@ -108,6 +109,10 @@ function friendlyError(code: string | null) {
     tiktok_connection_failed: 'TikTok could not be connected. Check the app authorization and Lead Management access.',
   };
   return messages[code] || 'The channel could not be connected. Try again.';
+}
+
+function usesBaileys(connection: Connection) {
+  return connection.provider === 'whatsapp' && connection.config?.transport === 'baileys';
 }
 
 export default function ConnectionsPage() {
@@ -275,7 +280,11 @@ export default function ConnectionsPage() {
           {data.catalog.map((provider) => {
             const Icon = ICONS[provider.id];
             const connections = byProvider.get(provider.id) || [];
-            const active = connections.find((item) => item.status === 'connected') || connections[0];
+            const baileysConnection = provider.id === 'whatsapp' ? connections.find(usesBaileys) || null : null;
+            const standardConnections = provider.id === 'whatsapp' ? connections.filter((item) => !usesBaileys(item)) : connections;
+            const active = standardConnections.find((item) => item.status === 'connected') || standardConnections[0];
+            const providerConnected = active?.status === 'connected' || baileysConnection?.status === 'connected';
+            const providerPaused = !providerConnected && active?.status === 'paused';
             const isBusy = busy === provider.id || busy === active?.id;
             return (
               <article key={provider.id} className="surface-flat overflow-hidden">
@@ -289,8 +298,8 @@ export default function ConnectionsPage() {
                       </div>
                     </div>
                     <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-zinc-600">
-                      <span className={`h-1.5 w-1.5 rounded-full ${active?.status === 'connected' ? 'bg-emerald-500' : active?.status === 'paused' ? 'bg-amber-500' : 'bg-zinc-300'}`} />
-                      {active?.status === 'connected' ? 'Connected' : active?.status === 'paused' ? 'Paused' : 'Not connected'}
+                      <span className={`h-1.5 w-1.5 rounded-full ${providerConnected ? 'bg-emerald-500' : providerPaused ? 'bg-amber-500' : 'bg-zinc-300'}`} />
+                      {providerConnected ? 'Connected' : providerPaused ? 'Paused' : 'Not connected'}
                     </span>
                   </div>
 
@@ -310,6 +319,10 @@ export default function ConnectionsPage() {
                       {active.last_error && <div className="mt-2 text-[11px] text-red-600">{active.last_error}</div>}
                     </div>
                   )}
+
+                  {provider.id === 'whatsapp' && (
+                    <BaileysWhatsAppConnect connection={baileysConnection} onChanged={load} />
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 bg-zinc-50/70 px-4 py-3">
@@ -325,7 +338,7 @@ export default function ConnectionsPage() {
                         </a>
                       ) : (
                         <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-primary button-sm" disabled={data.migrationRequired}>
-                          <Settings2 className="h-3.5 w-3.5" /> Configure
+                          <Settings2 className="h-3.5 w-3.5" /> Configure official API
                         </button>
                       )
                     )
@@ -339,7 +352,7 @@ export default function ConnectionsPage() {
                   )}
                   {!provider.configured && provider.connectMode !== 'manual' && (
                     <button type="button" onClick={() => setSetupProviderId(provider.id)} className="button-ghost button-sm text-zinc-500">
-                      <Settings2 className="h-3.5 w-3.5" /> Setup required
+                      <Settings2 className="h-3.5 w-3.5" /> Official API setup
                     </button>
                   )}
                 </div>
