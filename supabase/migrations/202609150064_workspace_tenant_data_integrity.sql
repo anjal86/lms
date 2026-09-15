@@ -7,6 +7,23 @@
 
 begin;
 
+create or replace function public.lead_in_current_workspace(p_lead_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.current_user_active()
+    and public.current_workspace_id() is not null
+    and exists (
+      select 1
+      from public.leads l
+      where l.id = p_lead_id
+        and l.workspace_id = public.current_workspace_id()
+    );
+$$;
+
 create or replace function public.can_access_lead(p_lead_id uuid)
 returns boolean
 language sql
@@ -50,20 +67,21 @@ as $$
     );
 $$;
 
+revoke all on function public.lead_in_current_workspace(uuid) from public;
 revoke all on function public.can_access_lead(uuid) from public;
 revoke all on function public.can_manage_lead(uuid) from public;
+grant execute on function public.lead_in_current_workspace(uuid) to authenticated;
 grant execute on function public.can_access_lead(uuid) to authenticated;
 grant execute on function public.can_manage_lead(uuid) to authenticated;
 
 -- follow_ups does not have its own workspace_id, so the parent lead is the tenant
--- boundary. Preserve the old agent semantics while requiring that parent to be in the
--- currently selected workspace.
+-- boundary. Preserve the old follow-up ownership rules while adding that tenant check.
 drop policy if exists "followups_select_scoped" on public.follow_ups;
 create policy "followups_select_scoped" on public.follow_ups
   for select to authenticated
   using (
     public.current_user_active()
-    and public.can_access_lead(lead_id)
+    and public.lead_in_current_workspace(lead_id)
     and (public.is_management() or assigned_to = auth.uid())
   );
 
@@ -72,7 +90,7 @@ create policy "followups_insert_scoped" on public.follow_ups
   for insert to authenticated
   with check (
     public.current_user_active()
-    and public.can_manage_lead(lead_id)
+    and public.lead_in_current_workspace(lead_id)
     and (public.is_management() or assigned_to = auth.uid())
   );
 
@@ -81,12 +99,12 @@ create policy "followups_update_scoped" on public.follow_ups
   for update to authenticated
   using (
     public.current_user_active()
-    and public.can_manage_lead(lead_id)
+    and public.lead_in_current_workspace(lead_id)
     and (public.is_management() or assigned_to = auth.uid())
   )
   with check (
     public.current_user_active()
-    and public.can_manage_lead(lead_id)
+    and public.lead_in_current_workspace(lead_id)
     and (public.is_management() or assigned_to = auth.uid())
   );
 
@@ -95,7 +113,7 @@ create policy "followups_delete_scoped" on public.follow_ups
   for delete to authenticated
   using (
     public.current_user_active()
-    and public.can_manage_lead(lead_id)
+    and public.lead_in_current_workspace(lead_id)
     and (public.is_management() or assigned_to = auth.uid())
   );
 
@@ -121,7 +139,7 @@ create policy "activity_insert_scoped" on public.activity_logs
     and agent_id = auth.uid()
     and (
       lead_id is null
-      or public.can_manage_lead(lead_id)
+      or public.can_access_lead(lead_id)
     )
   );
 
@@ -132,6 +150,8 @@ create index if not exists leads_workspace_id_id_idx
 create index if not exists follow_ups_lead_status_scheduled_idx
   on public.follow_ups(lead_id, status, scheduled_at);
 
+comment on function public.lead_in_current_workspace(uuid) is
+  'Tenant boundary helper for legacy child tables that only carry lead_id.';
 comment on function public.can_access_lead(uuid) is
   'Tenant-safe lead access helper: the lead must belong to the current active workspace.';
 comment on function public.can_manage_lead(uuid) is
