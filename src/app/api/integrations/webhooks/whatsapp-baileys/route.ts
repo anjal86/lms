@@ -31,6 +31,16 @@ type ExistingMessage = {
   sent_at: string | null;
 };
 
+type ConversationIdentityRow = {
+  id: string;
+  contact_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  external_contact_id: string | null;
+  external_thread_id: string | null;
+  metadata: unknown;
+};
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -73,9 +83,32 @@ function boundedProgress(value: unknown) {
   return Math.min(100, Math.max(0, Math.round(progress)));
 }
 
+function phoneDigits(value: unknown) {
+  if (typeof value !== 'string') return '';
+  return value.split('@')[0].split(':')[0].replace(/\D/g, '');
+}
+
+function isLidJid(value: unknown) {
+  return typeof value === 'string' && (value.endsWith('@lid') || value.endsWith('@hosted.lid'));
+}
+
 function isPlaceholderBody(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) return true;
   return /^\[(?:whatsapp message|whatsapp system message|photo|video|voice message|sticker|contact|contacts|location|media attachment|file(?::[^\]]*)?)\]$/i.test(value.trim());
+}
+
+function isFallbackCustomerName(value: unknown, phone?: string) {
+  if (typeof value !== 'string' || !value.trim()) return true;
+  const normalized = value.trim();
+  if (/^WhatsApp\s+\d+$/i.test(normalized)) return true;
+  if (/^\+?\d{6,}$/.test(normalized)) return true;
+  return Boolean(phone && normalized.replace(/\D/g, '') === phone);
+}
+
+function realCustomerName(value: unknown, phone?: string) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const name = value.trim().slice(0, 180);
+  return isFallbackCustomerName(name, phone) ? null : name;
 }
 
 function timestampRange(messages: unknown[]) {
@@ -130,6 +163,135 @@ async function refreshConversationPreview(
     .from('lead_conversations')
     .update({ last_message_preview: body.slice(0, 500) })
     .eq('id', conversationId);
+}
+
+async function updateConversationName(
+  conversationId: string,
+  phone: string,
+  name: string | null,
+  admin: ReturnType<typeof createSupabaseAdminClient>
+) {
+  if (!name) return;
+  const { data: conversation } = await admin
+    .from('lead_conversations')
+    .select('id,contact_id,customer_name')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (!conversation || !isFallbackCustomerName(conversation.customer_name, phone)) return;
+
+  await admin.from('lead_conversations').update({ customer_name: name }).eq('id', conversationId);
+  if (conversation.contact_id) {
+    const { data: contact } = await admin
+      .from('contacts')
+      .select('id,display_name')
+      .eq('id', conversation.contact_id)
+      .maybeSingle();
+    if (contact && isFallbackCustomerName(contact.display_name, phone)) {
+      await admin.from('contacts').update({ display_name: name, updated_at: new Date().toISOString() }).eq('id', contact.id);
+    }
+  }
+}
+
+async function repairMappedLidConversation(
+  instanceId: string,
+  lid: string,
+  pn: string,
+  admin: ReturnType<typeof createSupabaseAdminClient>
+) {
+  const phone = phoneDigits(pn);
+  const lidDigits = phoneDigits(lid);
+  if (!phone || !lidDigits || phone === lidDigits) return;
+
+  const canonicalThread = `baileys:${instanceId}:${phone}`;
+  const { data: canonicalConversation } = await admin
+    .from('lead_conversations')
+    .select('id')
+    .eq('provider', 'whatsapp')
+    .eq('connection_id', instanceId)
+    .eq('external_thread_id', canonicalThread)
+    .maybeSingle();
+
+  const { data: candidates } = await admin
+    .from('lead_conversations')
+    .select('id,contact_id,customer_name,customer_phone,external_contact_id,external_thread_id,metadata')
+    .eq('provider', 'whatsapp')
+    .eq('connection_id', instanceId)
+    .eq('external_contact_id', lidDigits);
+
+  for (const row of (candidates || []) as ConversationIdentityRow[]) {
+    const metadata = record(row.metadata);
+    const patch: Record<string, unknown> = {
+      external_contact_id: phone,
+      customer_phone: `+${phone}`,
+      metadata: {
+        ...metadata,
+        whatsapp_raw_jid: lid,
+        whatsapp_jid: pn.includes('@') ? pn : `${phone}@s.whatsapp.net`,
+      },
+    };
+    if (!canonicalConversation || canonicalConversation.id === row.id) patch.external_thread_id = canonicalThread;
+    if (isFallbackCustomerName(row.customer_name, lidDigits)) patch.customer_name = `WhatsApp ${phone}`;
+    await admin.from('lead_conversations').update(patch).eq('id', row.id);
+
+    if (row.contact_id) {
+      const { data: contact } = await admin
+        .from('contacts')
+        .select('id,display_name,primary_phone')
+        .eq('id', row.contact_id)
+        .maybeSingle();
+      if (contact) {
+        const contactPatch: Record<string, unknown> = {};
+        if (!contact.primary_phone || phoneDigits(contact.primary_phone) === lidDigits) contactPatch.primary_phone = `+${phone}`;
+        if (isFallbackCustomerName(contact.display_name, lidDigits)) contactPatch.display_name = `WhatsApp ${phone}`;
+        if (Object.keys(contactPatch).length) {
+          contactPatch.updated_at = new Date().toISOString();
+          await admin.from('contacts').update(contactPatch).eq('id', contact.id);
+        }
+      }
+    }
+  }
+}
+
+async function applyContactIdentity(
+  instanceId: string,
+  contactValue: unknown,
+  admin: ReturnType<typeof createSupabaseAdminClient>
+) {
+  const contact = record(contactValue);
+  const phone = phoneDigits(typeof contact.phone === 'string' ? contact.phone : typeof contact.jid === 'string' ? contact.jid : '');
+  const rawJid = typeof contact.rawJid === 'string' ? contact.rawJid : null;
+  const jid = typeof contact.jid === 'string' ? contact.jid : null;
+  const name = realCustomerName(contact.name, phone);
+
+  if (rawJid && isLidJid(rawJid) && jid && !isLidJid(jid) && phone) {
+    await repairMappedLidConversation(instanceId, rawJid, jid, admin);
+  }
+  if (!phone || !name) return;
+
+  const candidates = [phone];
+  const rawDigits = phoneDigits(rawJid || '');
+  if (rawDigits && rawDigits !== phone) candidates.push(rawDigits);
+
+  const { data: conversations } = await admin
+    .from('lead_conversations')
+    .select('id')
+    .eq('provider', 'whatsapp')
+    .eq('connection_id', instanceId)
+    .in('external_contact_id', candidates);
+
+  await Promise.all((conversations || []).map((conversation) => updateConversationName(conversation.id, phone, name, admin)));
+}
+
+async function mapWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<unknown>) {
+  let index = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = items[index];
+      index += 1;
+      await worker(current);
+    }
+  });
+  await Promise.all(runners);
 }
 
 async function updateHistoryJob(
@@ -246,11 +408,18 @@ export async function POST(request: Request) {
       last_event_at: now,
       last_error: typeof data.error === 'string' ? data.error : null,
     };
-    const phone = String(data.phone || '').replace(/\D/g, '');
+    const phone = phoneDigits(String(data.phone || ''));
     if (phone) patch.external_account_id = phone;
     if (status === 'connected') patch.last_sync_at = now;
     await admin.from('integration_connections').update(patch).eq('id', instanceId);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, phone: phone || null });
+  }
+
+  if (event === 'contacts.batch') {
+    const contacts = Array.isArray(data.contacts) ? data.contacts : [];
+    await mapWithConcurrency(contacts, 8, (contact) => applyContactIdentity(instanceId, contact, admin));
+    await admin.from('integration_connections').update({ last_event_at: now }).eq('id', instanceId);
+    return NextResponse.json({ ok: true, count: contacts.length });
   }
 
   if (event === 'lid-mapping.update') {
@@ -258,7 +427,7 @@ export async function POST(request: Request) {
     const pn = String(data.pn || '');
     const workspaceId = await resolveWorkspaceId(typedConnection, admin);
     if (workspaceId && lid && pn) {
-      const phone = pn.replace(/@.*$/, '').replace(/\D/g, '');
+      const phone = phoneDigits(pn);
       await admin
         .from('whatsapp_identity_mappings')
         .upsert({
@@ -269,6 +438,7 @@ export async function POST(request: Request) {
           phone_number: phone || null,
           last_seen_at: now,
         }, { onConflict: 'connection_id,lid_jid' });
+      await repairMappedLidConversation(instanceId, lid, pn, admin);
     }
     await admin.from('integration_connections').update({ last_event_at: now }).eq('id', instanceId);
     return NextResponse.json({ ok: true });
@@ -292,11 +462,10 @@ export async function POST(request: Request) {
   if (event === 'messages.batch') {
     const rawMessages = Array.isArray(data.messages) ? data.messages : [];
     let count = 0;
-    for (const item of rawMessages) {
-      const msgData = record(item);
-      const result = await ingestSingleMessage(msgData, instanceId, admin, now, true, data.sync_type);
+    await mapWithConcurrency(rawMessages, 6, async (item) => {
+      const result = await ingestSingleMessage(record(item), instanceId, admin, now, true, data.sync_type);
       if (result) count += 1;
-    }
+    });
     await updateHistoryJob(instanceId, data, rawMessages, admin, now);
     await admin
       .from('integration_connections')
@@ -321,7 +490,7 @@ async function ingestSingleMessage(
   syncType: unknown
 ) {
   const externalMessageId = String(data.id || '');
-  const phone = String(data.phone || '').replace(/\D/g, '');
+  const phone = phoneDigits(String(data.phone || ''));
   const origin = String(data.origin || 'customer');
   const fromMe = Boolean(data.fromMe);
   if (!externalMessageId || !phone) return null;
@@ -338,12 +507,13 @@ async function ingestSingleMessage(
     : 'text';
   const body = typeof data.body === 'string' ? data.body : null;
   const jid = String(data.jid || `${phone}@s.whatsapp.net`);
-  const customerName = typeof data.pushName === 'string' && data.pushName.trim()
-    ? data.pushName.trim()
-    : `WhatsApp ${phone}`;
+  const rawJid = typeof data.rawJid === 'string' ? data.rawJid : jid;
+  const resolvedName = realCustomerName(data.pushName, phone);
+  const customerName = resolvedName || `WhatsApp ${phone}`;
   const incomingMetadata: Record<string, unknown> = {
     transport: 'baileys',
     jid,
+    raw_jid: rawJid,
     origin,
     file_name: typeof data.fileName === 'string' ? data.fileName : null,
     mime_type: typeof data.mimeType === 'string' ? data.mimeType : null,
@@ -407,7 +577,12 @@ async function ingestSingleMessage(
       p_body: body,
       p_sent_at: sentAt,
       p_message_metadata: incomingMetadata,
-      p_conversation_metadata: { transport: 'baileys', instance_id: instanceId, whatsapp_jid: jid },
+      p_conversation_metadata: {
+        transport: 'baileys',
+        instance_id: instanceId,
+        whatsapp_jid: jid,
+        whatsapp_raw_jid: rawJid,
+      },
       p_source_label: 'WhatsApp',
     });
 
@@ -419,6 +594,10 @@ async function ingestSingleMessage(
     const ingested = record(ingestResult);
     conversationId = typeof ingested.conversation_id === 'string' ? ingested.conversation_id : null;
     messageId = typeof ingested.message_id === 'string' ? ingested.message_id : null;
+  }
+
+  if (conversationId && resolvedName) {
+    await updateConversationName(conversationId, phone, resolvedName, admin);
   }
 
   const hasStoredAttachment = Boolean(messageMetadata.attachment_url || messageMetadata.storage_path);
