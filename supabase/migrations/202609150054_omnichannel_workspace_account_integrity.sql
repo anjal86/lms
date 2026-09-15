@@ -32,7 +32,13 @@ create unique index if not exists inbound_channel_events_legacy_event_uidx
 
 -- ---------------------------------------------------------------------------
 -- 3. Lead/provider IDs are only unique inside the source connection/workspace.
+-- Social-only inquiries must not invent a pseudo phone number just to satisfy the
+-- original travel-era schema.
 -- ---------------------------------------------------------------------------
+
+alter table public.leads
+  alter column customer_phone drop not null,
+  drop constraint if exists leads_source_external_id_key;
 
 drop index if exists public.idx_leads_source_channel_external_id;
 
