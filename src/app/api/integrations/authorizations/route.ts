@@ -195,14 +195,14 @@ export async function GET(request: Request) {
       const matches = ownershipRows.filter((row) => row.external_account_id === accountId);
       const owner = matches.find((row) => row.status !== 'disconnected')
         || matches.find((row) => row.workspace_id === actor.profile.workspace_id);
+      const ownedHere = Boolean(owner && owner.workspace_id === actor.profile.workspace_id && owner.status !== 'disconnected');
+      const ownedElsewhere = Boolean(owner && owner.workspace_id !== actor.profile.workspace_id && owner.status !== 'disconnected');
       return {
         ...account,
         id: accountId,
-        connected: Boolean(owner && owner.workspace_id === actor.profile.workspace_id && owner.status !== 'disconnected'),
-        unavailable: Boolean(owner && owner.workspace_id !== actor.profile.workspace_id && owner.status !== 'disconnected'),
-        connectedWorkspace: owner?.workspace_id === actor.profile.workspace_id && owner.status !== 'disconnected'
-          ? actor.profile.workspace_id
-          : null,
+        connected: ownedHere,
+        unavailable: ownedElsewhere,
+        connectedWorkspace: ownedHere ? actor.profile.workspace_id : null,
       };
     });
 
