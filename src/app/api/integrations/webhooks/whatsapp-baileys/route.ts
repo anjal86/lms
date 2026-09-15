@@ -13,6 +13,15 @@ type BridgeEnvelope = {
   data?: Record<string, unknown>;
 };
 
+type ConnectionRow = {
+  id: string;
+  provider: string;
+  display_name: string;
+  config: unknown;
+  workspace_id: string | null;
+  connected_by: string | null;
+};
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -49,6 +58,97 @@ function deliveryStatus(value: unknown) {
   return null;
 }
 
+function boundedProgress(value: unknown) {
+  const progress = Number(value);
+  if (!Number.isFinite(progress)) return null;
+  return Math.min(100, Math.max(0, Math.round(progress)));
+}
+
+function timestampRange(messages: unknown[]) {
+  const timestamps = messages
+    .map((item) => record(item).timestamp)
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+
+  if (!timestamps.length) return { oldest: null, newest: null };
+  return {
+    oldest: new Date(timestamps[0]).toISOString(),
+    newest: new Date(timestamps[timestamps.length - 1]).toISOString(),
+  };
+}
+
+async function resolveWorkspaceId(
+  connection: ConnectionRow,
+  admin: ReturnType<typeof createSupabaseAdminClient>
+) {
+  if (connection.workspace_id) return connection.workspace_id;
+  if (!connection.connected_by) return null;
+  const { data } = await admin
+    .from('profiles')
+    .select('workspace_id')
+    .eq('id', connection.connected_by)
+    .maybeSingle();
+  return data?.workspace_id || null;
+}
+
+async function updateHistoryJob(
+  instanceId: string,
+  batchData: Record<string, unknown>,
+  rawMessages: unknown[],
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  now: string
+) {
+  const { data: job } = await admin
+    .from('whatsapp_history_sync_jobs')
+    .select('*')
+    .eq('connection_id', instanceId)
+    .in('status', ['queued', 'requested', 'receiving'])
+    .order('requested_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!job) return;
+
+  const progress = boundedProgress(batchData.progress);
+  const batchIndex = Number(batchData.batch_index);
+  const batchTotal = Number(batchData.batch_total);
+  const isLatest = batchData.is_latest === true;
+  const finalChunk = isLatest && (
+    !Number.isFinite(batchTotal)
+    || batchTotal <= 1
+    || (Number.isFinite(batchIndex) && batchIndex >= batchTotal - 1)
+  );
+  const complete = finalChunk || progress === 100;
+  const range = timestampRange(rawMessages);
+
+  const oldest = [job.oldest_message_at, range.oldest]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  const newest = [job.newest_message_at, range.newest]
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+
+  await admin
+    .from('whatsapp_history_sync_jobs')
+    .update({
+      status: complete ? 'completed' : 'receiving',
+      messages_received: Number(job.messages_received || 0) + rawMessages.length,
+      sync_type: typeof batchData.sync_type === 'string' ? batchData.sync_type : job.sync_type,
+      progress: progress ?? job.progress,
+      is_latest: isLatest || Boolean(job.is_latest),
+      oldest_message_at: oldest.length ? new Date(Math.min(...oldest)).toISOString() : null,
+      newest_message_at: newest.length ? new Date(Math.max(...newest)).toISOString() : null,
+      completed_at: complete ? now : null,
+      updated_at: now,
+      error: null,
+    })
+    .eq('id', job.id);
+}
+
 export async function POST(request: Request) {
   const rawBody = await request.text();
   let verified = false;
@@ -75,7 +175,7 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: connection, error: connectionError } = await admin
     .from('integration_connections')
-    .select('id,provider,display_name,config')
+    .select('id,provider,display_name,config,workspace_id,connected_by')
     .eq('id', instanceId)
     .eq('provider', 'whatsapp')
     .maybeSingle();
@@ -87,6 +187,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ignored: true, reason: 'Unknown Baileys connection.' });
   }
 
+  const typedConnection = connection as ConnectionRow;
   const now = new Date().toISOString();
 
   if (event === 'connection.update') {
@@ -110,6 +211,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  if (event === 'lid-mapping.update') {
+    const lid = String(data.lid || '');
+    const pn = String(data.pn || '');
+    const workspaceId = await resolveWorkspaceId(typedConnection, admin);
+    if (workspaceId && lid && pn) {
+      const phone = pn.replace(/@.*$/, '').replace(/\D/g, '');
+      await admin
+        .from('whatsapp_identity_mappings')
+        .upsert({
+          workspace_id: workspaceId,
+          connection_id: instanceId,
+          lid_jid: lid,
+          pn_jid: pn.includes('@') ? pn : `${pn}@s.whatsapp.net`,
+          phone_number: phone || null,
+          last_seen_at: now,
+        }, { onConflict: 'connection_id,lid_jid' });
+    }
+    await admin.from('integration_connections').update({ last_event_at: now }).eq('id', instanceId);
+    return NextResponse.json({ ok: true });
+  }
+
   if (event === 'message.status') {
     const messageId = String(data.id || '');
     const patch = deliveryStatus(data.status);
@@ -130,16 +252,20 @@ export async function POST(request: Request) {
     let count = 0;
     for (const item of rawMessages) {
       const msgData = record(item);
-      const res = await ingestSingleMessage(msgData, instanceId, admin, now);
-      if (res) count += 1;
+      const result = await ingestSingleMessage(msgData, instanceId, admin, now, true, data.sync_type);
+      if (result) count += 1;
     }
-    await admin.from('integration_connections').update({ last_event_at: now, last_sync_at: now }).eq('id', instanceId);
+    await updateHistoryJob(instanceId, data, rawMessages, admin, now);
+    await admin
+      .from('integration_connections')
+      .update({ last_event_at: now, last_sync_at: now, last_error: null })
+      .eq('id', instanceId);
     return NextResponse.json({ ok: true, count });
   }
 
   if (event !== 'message') return NextResponse.json({ ignored: true });
 
-  const result = await ingestSingleMessage(data, instanceId, admin, now);
+  const result = await ingestSingleMessage(data, instanceId, admin, now, false, null);
   await admin.from('integration_connections').update({ last_event_at: now, last_error: null }).eq('id', instanceId);
   return NextResponse.json({ ok: true, result });
 }
@@ -148,7 +274,9 @@ async function ingestSingleMessage(
   data: Record<string, unknown>,
   instanceId: string,
   admin: ReturnType<typeof createSupabaseAdminClient>,
-  now: string
+  now: string,
+  historical: boolean,
+  syncType: unknown
 ) {
   const externalMessageId = String(data.id || '');
   const phone = String(data.phone || '').replace(/\D/g, '');
@@ -185,7 +313,8 @@ async function ingestSingleMessage(
     file_name: typeof data.fileName === 'string' ? data.fileName : null,
     mime_type: typeof data.mimeType === 'string' ? data.mimeType : null,
     media_available_on_device: data.mediaAvailableOnDevice === true,
-    synced_realtime: true,
+    synced_realtime: !historical,
+    history_sync_type: historical && typeof syncType === 'string' ? syncType : null,
   };
 
   const { data: ingestResult, error: ingestError } = await admin.rpc('ingest_channel_message', {
@@ -283,4 +412,3 @@ async function ingestSingleMessage(
 
   return ingestResult;
 }
-
