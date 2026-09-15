@@ -35,8 +35,9 @@ export default function BaileysWhatsAppConnect({ connection, onChanged }: Props)
       const response = await fetch(`/api/integrations/whatsapp/baileys?id=${encodeURIComponent(connection.id)}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to check WhatsApp linked device.');
-      setBridge(payload.bridge || null);
-      if (payload.bridge?.connected && connection.status !== 'connected') await onChanged();
+      const nextBridge = (payload.bridge || null) as BridgeStatus | null;
+      setBridge(nextBridge);
+      if (nextBridge && Boolean(nextBridge.connected) !== (connection.status === 'connected')) await onChanged();
     } catch (pollError) {
       setError(pollError instanceof Error ? pollError.message : 'Unable to check WhatsApp linked device.');
     }
@@ -90,7 +91,7 @@ export default function BaileysWhatsAppConnect({ connection, onChanged }: Props)
     }
   };
 
-  const connected = bridge?.connected || connection?.status === 'connected';
+  const connected = bridge ? bridge.connected === true : connection?.status === 'connected';
   const phone = bridge?.phone || connection?.external_account_id || null;
   const qr = bridge?.qrDataUrl || null;
 
