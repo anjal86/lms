@@ -22,6 +22,15 @@ type ConnectionRow = {
   connected_by: string | null;
 };
 
+type ExistingMessage = {
+  id: string;
+  conversation_id: string;
+  body: string | null;
+  message_type: string | null;
+  metadata: unknown;
+  sent_at: string | null;
+};
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -64,6 +73,11 @@ function boundedProgress(value: unknown) {
   return Math.min(100, Math.max(0, Math.round(progress)));
 }
 
+function isPlaceholderBody(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return true;
+  return /^\[(?:whatsapp message|whatsapp system message|photo|video|voice message|sticker|contact|contacts|location|media attachment|file(?::[^\]]*)?)\]$/i.test(value.trim());
+}
+
 function timestampRange(messages: unknown[]) {
   const timestamps = messages
     .map((item) => record(item).timestamp)
@@ -91,6 +105,31 @@ async function resolveWorkspaceId(
     .eq('id', connection.connected_by)
     .maybeSingle();
   return data?.workspace_id || null;
+}
+
+async function refreshConversationPreview(
+  conversationId: string,
+  sentAt: string,
+  body: string | null,
+  admin: ReturnType<typeof createSupabaseAdminClient>
+) {
+  if (!body || isPlaceholderBody(body)) return;
+  const { data: conversation } = await admin
+    .from('lead_conversations')
+    .select('last_message_at,last_message_preview')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (!conversation?.last_message_at) return;
+
+  const latestAt = new Date(conversation.last_message_at).getTime();
+  const candidateAt = new Date(sentAt).getTime();
+  if (!Number.isFinite(latestAt) || !Number.isFinite(candidateAt) || Math.abs(latestAt - candidateAt) > 2000) return;
+  if (!isPlaceholderBody(conversation.last_message_preview)) return;
+
+  await admin
+    .from('lead_conversations')
+    .update({ last_message_preview: body.slice(0, 500) })
+    .eq('id', conversationId);
 }
 
 async function updateHistoryJob(
@@ -291,25 +330,18 @@ async function ingestSingleMessage(
     return { echo: true };
   }
 
-  const { data: existing } = await admin
-    .from('lead_messages')
-    .select('id')
-    .eq('provider', 'whatsapp')
-    .eq('connection_id', instanceId)
-    .eq('external_message_id', externalMessageId)
-    .maybeSingle();
-  if (existing) return { duplicate: true };
-
   const sentAt = typeof data.timestamp === 'string' && !Number.isNaN(new Date(data.timestamp).getTime())
     ? new Date(data.timestamp).toISOString()
     : now;
-  const messageType = typeof data.messageType === 'string' ? data.messageType : 'text';
+  const messageType = typeof data.messageType === 'string' && data.messageType.trim()
+    ? data.messageType.trim().toLowerCase()
+    : 'text';
   const body = typeof data.body === 'string' ? data.body : null;
   const jid = String(data.jid || `${phone}@s.whatsapp.net`);
   const customerName = typeof data.pushName === 'string' && data.pushName.trim()
     ? data.pushName.trim()
     : `WhatsApp ${phone}`;
-  const metadata: Record<string, unknown> = {
+  const incomingMetadata: Record<string, unknown> = {
     transport: 'baileys',
     jid,
     origin,
@@ -320,44 +352,88 @@ async function ingestSingleMessage(
     history_sync_type: historical && typeof syncType === 'string' ? syncType : null,
   };
 
-  const { data: ingestResult, error: ingestError } = await admin.rpc('ingest_channel_message', {
-    p_lead_id: null,
-    p_connection_id: instanceId,
-    p_provider: 'whatsapp',
-    p_external_thread_id: `baileys:${instanceId}:${phone}`,
-    p_external_contact_id: phone,
-    p_customer_name: customerName,
-    p_customer_phone: `+${phone}`,
-    p_customer_email: null,
-    p_customer_avatar_url: null,
-    p_external_message_id: externalMessageId,
-    p_direction: fromMe ? 'outbound' : 'inbound',
-    p_message_type: messageType,
-    p_body: body,
-    p_sent_at: sentAt,
-    p_message_metadata: metadata,
-    p_conversation_metadata: { transport: 'baileys', instance_id: instanceId, whatsapp_jid: jid },
-    p_source_label: 'WhatsApp',
-  });
+  const { data: existingData } = await admin
+    .from('lead_messages')
+    .select('id,conversation_id,body,message_type,metadata,sent_at')
+    .eq('provider', 'whatsapp')
+    .eq('connection_id', instanceId)
+    .eq('external_message_id', externalMessageId)
+    .maybeSingle();
+  const existing = existingData as ExistingMessage | null;
 
-  if (ingestError) {
-    console.error('Baileys WhatsApp message ingest failed:', ingestError.message);
-    return null;
+  let conversationId: string | null = existing?.conversation_id || null;
+  let messageId: string | null = existing?.id || null;
+  let messageMetadata: Record<string, unknown> = incomingMetadata;
+  let repaired = false;
+
+  if (existing) {
+    const existingMetadata = record(existing.metadata);
+    messageMetadata = {
+      ...existingMetadata,
+      ...incomingMetadata,
+      storage_path: existingMetadata.storage_path ?? incomingMetadata.storage_path,
+      attachment_url: existingMetadata.attachment_url ?? incomingMetadata.attachment_url,
+      preview_url: existingMetadata.preview_url ?? incomingMetadata.preview_url,
+      file_name: existingMetadata.file_name ?? incomingMetadata.file_name,
+      mime_type: existingMetadata.mime_type ?? incomingMetadata.mime_type,
+      size: existingMetadata.size ?? incomingMetadata.size,
+    };
+
+    const patch: Record<string, unknown> = { metadata: messageMetadata };
+    if (body && !isPlaceholderBody(body) && isPlaceholderBody(existing.body)) {
+      patch.body = body;
+      repaired = true;
+    }
+    if (messageType !== 'text' && (!existing.message_type || existing.message_type === 'text' || existing.message_type === 'media')) {
+      patch.message_type = messageType;
+      repaired = true;
+    }
+    await admin.from('lead_messages').update(patch).eq('id', existing.id);
+    if (repaired) await refreshConversationPreview(existing.conversation_id, existing.sent_at || sentAt, body, admin);
+  } else {
+    const { data: ingestResult, error: ingestError } = await admin.rpc('ingest_channel_message', {
+      p_lead_id: null,
+      p_connection_id: instanceId,
+      p_provider: 'whatsapp',
+      p_external_thread_id: `baileys:${instanceId}:${phone}`,
+      p_external_contact_id: phone,
+      p_customer_name: customerName,
+      p_customer_phone: `+${phone}`,
+      p_customer_email: null,
+      p_customer_avatar_url: null,
+      p_external_message_id: externalMessageId,
+      p_direction: fromMe ? 'outbound' : 'inbound',
+      p_message_type: messageType,
+      p_body: body,
+      p_sent_at: sentAt,
+      p_message_metadata: incomingMetadata,
+      p_conversation_metadata: { transport: 'baileys', instance_id: instanceId, whatsapp_jid: jid },
+      p_source_label: 'WhatsApp',
+    });
+
+    if (ingestError) {
+      console.error('Baileys WhatsApp message ingest failed:', ingestError.message);
+      return null;
+    }
+
+    const ingested = record(ingestResult);
+    conversationId = typeof ingested.conversation_id === 'string' ? ingested.conversation_id : null;
+    messageId = typeof ingested.message_id === 'string' ? ingested.message_id : null;
   }
 
-  const ingested = record(ingestResult);
-  const conversationId = typeof ingested.conversation_id === 'string' ? ingested.conversation_id : null;
-  const messageId = typeof ingested.message_id === 'string' ? ingested.message_id : null;
+  const hasStoredAttachment = Boolean(messageMetadata.attachment_url || messageMetadata.storage_path);
+  const hasInlineMedia = typeof data.mediaBase64 === 'string' && data.mediaBase64.length > 0;
+  const shouldRetrieveMedia = data.mediaAvailableOnDevice === true || hasInlineMedia;
 
-  if (conversationId && messageId && messageType !== 'text') {
+  if (conversationId && messageId && shouldRetrieveMedia && !hasStoredAttachment) {
     let mediaBuffer: Buffer | null = null;
     let resolvedMimeType = typeof data.mimeType === 'string' ? data.mimeType : 'application/octet-stream';
 
-    if (typeof data.mediaBase64 === 'string' && data.mediaBase64.length > 0) {
+    if (hasInlineMedia) {
       try {
-        mediaBuffer = Buffer.from(data.mediaBase64, 'base64');
+        mediaBuffer = Buffer.from(String(data.mediaBase64), 'base64');
       } catch {
-        // Fallback to fetch from bridge
+        // Fallback to fetch from bridge.
       }
     }
 
@@ -392,20 +468,22 @@ async function ingestSingleMessage(
 
         if (!uploadError) {
           const attachmentUrl = `/api/conversations/${conversationId}/attachments?path=${encodeURIComponent(storagePath)}`;
+          messageMetadata = {
+            ...messageMetadata,
+            storage_path: storagePath,
+            attachment_url: attachmentUrl,
+            preview_url: resolvedMimeType.startsWith('image/') ? attachmentUrl : null,
+            file_name: cleanName,
+            mime_type: resolvedMimeType,
+            size: mediaBuffer.length,
+            media_retrieved_at: now,
+          };
           await admin
             .from('lead_messages')
-            .update({
-              metadata: {
-                ...metadata,
-                storage_path: storagePath,
-                attachment_url: attachmentUrl,
-                preview_url: messageType === 'image' ? attachmentUrl : null,
-                file_name: cleanName,
-                mime_type: resolvedMimeType,
-                size: mediaBuffer.length,
-              },
-            })
+            .update({ metadata: messageMetadata })
             .eq('id', messageId);
+        } else {
+          console.warn('WhatsApp media storage upload failed:', uploadError.message);
         }
       } catch (storageErr) {
         console.warn('Error handling inbound WhatsApp media upload:', storageErr);
@@ -413,5 +491,7 @@ async function ingestSingleMessage(
     }
   }
 
-  return ingestResult;
+  return existing
+    ? { duplicate: true, repaired, conversation_id: conversationId, message_id: messageId }
+    : { conversation_id: conversationId, message_id: messageId };
 }
