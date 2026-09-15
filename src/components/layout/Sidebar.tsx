@@ -20,6 +20,7 @@ import {
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 
 type Tone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet' | 'rose';
 type NavItem = { label: string; href: string; icon: typeof LayoutDashboard; tone: Tone };
@@ -58,7 +59,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, logout } = useApp();
-  const { config, term, moduleEnabled } = useWorkspace();
+  const { term, moduleEnabled } = useWorkspace();
   const { can } = useWorkspacePermissions();
   const [collapsed, setCollapsed] = useState(true);
 
@@ -83,8 +84,6 @@ export default function Sidebar() {
   const tasksEnabled = moduleEnabled('tasks', true);
   const leadPlural = term('lead_plural', 'Opportunities');
   const contactPlural = term('contact_plural', 'Contacts');
-  const workspaceName = config.workspace.name || 'Workspace';
-  const initial = workspaceName.trim().charAt(0).toUpperCase() || 'W';
   const isAgent = currentUser.role === 'agent';
 
   const work: NavItem[] = [
@@ -108,7 +107,16 @@ export default function Sidebar() {
   const signOut = async () => { await logout(); router.push('/login'); };
 
   return <aside className={`hidden shrink-0 flex-col border-r border-slate-800/80 bg-[radial-gradient(circle_at_15%_5%,rgba(37,99,235,0.14),transparent_18rem),radial-gradient(circle_at_90%_45%,rgba(124,58,237,0.12),transparent_20rem),linear-gradient(180deg,#071329_0%,#0b1730_48%,#12172e_100%)] text-slate-300 transition-[width] duration-200 md:flex ${collapsed ? 'w-16' : 'w-60'}`}>
-    <div className={`flex h-16 items-center border-b border-white/[0.07] ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}><Link href="/dashboard" className="flex min-w-0 items-center gap-3" title={collapsed ? workspaceName : undefined}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-violet-500 to-cyan-400 text-xs font-bold text-white shadow-[0_8px_24px_rgba(79,70,229,0.28)] ring-1 ring-white/25">{initial}</span>{!collapsed && <span className="min-w-0"><span className="block truncate text-sm font-bold text-white">{workspaceName}</span><span className="block truncate bg-gradient-to-r from-blue-300 via-violet-300 to-cyan-300 bg-clip-text text-[10px] font-semibold uppercase tracking-[0.14em] text-transparent">Business workspace</span></span>}</Link>{!collapsed && <button type="button" onClick={toggle} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Collapse sidebar"><ChevronLeft className="h-4 w-4" /></button>}</div>
+    <div className={`flex min-h-16 items-center border-b border-white/[0.07] ${collapsed ? 'justify-center px-2' : 'gap-2 px-2.5 py-2'}`}>
+      {collapsed ? (
+        <WorkspaceSwitcher compact />
+      ) : (
+        <>
+          <div className="min-w-0 flex-1"><WorkspaceSwitcher /></div>
+          <button type="button" onClick={toggle} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Collapse sidebar"><ChevronLeft className="h-4 w-4" /></button>
+        </>
+      )}
+    </div>
     {collapsed && <div className="flex justify-center pb-0.5 pt-2"><button type="button" onClick={toggle} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Expand sidebar" title="Expand sidebar"><ChevronRight className="h-4 w-4" /></button></div>}
     <nav className={`flex-1 overflow-y-auto py-2 ${collapsed ? 'px-2' : 'px-2.5'}`}><Group label="Work" items={work} pathname={pathname} collapsed={collapsed} /><Group label="Manage" items={manage} pathname={pathname} collapsed={collapsed} /><Group label="Workspace" items={admin} pathname={pathname} collapsed={collapsed} /></nav>
     <div className={`border-t border-white/[0.07] ${collapsed ? 'p-2' : 'p-3'}`}><Link href="/profile" title={collapsed ? `${currentUser.full_name} · ${currentUser.role}` : undefined} className={`block rounded-xl bg-white/[0.04] hover:bg-white/[0.08] ${collapsed ? 'p-1' : 'p-3'}`}><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 via-blue-500 to-violet-500 text-[10px] font-bold text-white ring-1 ring-white/15">{currentUser.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('')}</span>{!collapsed && <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-semibold text-slate-100">{currentUser.full_name}</div><div className="text-[10px] uppercase tracking-wide text-slate-500">{currentUser.role}</div></div>}</div></Link><button type="button" onClick={() => void signOut()} title={collapsed ? 'Sign out' : undefined} className={`mt-2 flex items-center rounded-xl text-slate-400 hover:bg-rose-500/10 hover:text-rose-300 ${collapsed ? 'h-10 w-10 justify-center' : 'w-full gap-2 px-3 py-2 text-xs font-semibold'}`}><LogOut className="h-4 w-4" />{!collapsed && 'Sign out'}</button></div>
