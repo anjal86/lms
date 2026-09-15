@@ -60,6 +60,8 @@ jobs:
       SLA_CRON_SECRET: ci-placeholder-sla-secret-at-least-32-characters-long
       INTEGRATION_TOKEN_ENCRYPTION_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       NEXT_PUBLIC_APP_URL: http://localhost:3000
+      WHATSAPP_BRIDGE_API_KEY: ci-whatsapp-bridge-api-key-placeholder
+      WHATSAPP_BRIDGE_WEBHOOK_SECRET: ci-whatsapp-bridge-webhook-secret-placeholder
     steps:
       - uses: actions/checkout@v5
       - name: Validate Docker Compose
