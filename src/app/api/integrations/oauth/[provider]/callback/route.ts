@@ -7,7 +7,12 @@ import { encryptIntegrationSecret, encryptSecretPayload } from '@/lib/integratio
 
 export const runtime = 'nodejs';
 
-type OAuthCookie = { state: string; provider: string; userId: string };
+type OAuthCookie = {
+  state: string;
+  provider: string;
+  userId: string;
+  workspaceId: string;
+};
 
 type MetaPage = {
   id: string;
@@ -24,15 +29,16 @@ type WhatsAppPhone = {
   code_verification_status?: string;
 };
 
-type WorkspaceProfile = {
-  role: string;
-  is_active: boolean;
-  workspace_id: string | null;
-};
-
 function redirectWith(appUrl: string, key: 'connected' | 'error', value: string) {
   const target = new URL('/connections', appUrl);
   target.searchParams.set(key, value);
+  return NextResponse.redirect(target);
+}
+
+function selectionRedirect(appUrl: string, provider: string, authorizationId: string) {
+  const target = new URL('/connections/select', appUrl);
+  target.searchParams.set('provider', provider);
+  target.searchParams.set('authorization', authorizationId);
   return NextResponse.redirect(target);
 }
 
@@ -40,7 +46,7 @@ function parseCookie(value: string | undefined): OAuthCookie | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as Partial<OAuthCookie>;
-    if (!parsed.state || !parsed.provider || !parsed.userId) return null;
+    if (!parsed.state || !parsed.provider || !parsed.userId || !parsed.workspaceId) return null;
     return parsed as OAuthCookie;
   } catch {
     return null;
@@ -63,57 +69,59 @@ async function fetchJson(url: string | URL, init?: RequestInit) {
   return payload;
 }
 
-async function saveConnection(input: {
+async function saveAuthorization(input: {
   provider: IntegrationProvider;
   workspaceId: string;
-  displayName: string;
-  externalAccountId: string;
-  capabilities: string[];
-  config: Record<string, unknown>;
   userId: string;
+  externalAuthorizationId: string;
+  displayName: string;
+  config: Record<string, unknown>;
   accessToken: string;
   refreshToken?: string | null;
   expiresAt?: string | null;
   secretPayload?: Record<string, unknown>;
 }) {
   const admin = createSupabaseAdminClient();
-  const { data: existing, error: existingError } = await admin
-    .from('integration_connections')
-    .select('id,workspace_id')
-    .eq('provider', input.provider)
-    .eq('external_account_id', input.externalAccountId)
-    .maybeSingle();
-  if (existingError) throw existingError;
-
-  if (existing?.workspace_id && existing.workspace_id !== input.workspaceId) {
-    throw new Error(`${input.provider} account ${input.externalAccountId} is already connected to another workspace.`);
-  }
-
+  const externalAccountId = `oauth:${input.workspaceId}:${input.externalAuthorizationId}`;
   const connectionPatch = {
     workspace_id: input.workspaceId,
     provider: input.provider,
     display_name: input.displayName,
-    external_account_id: input.externalAccountId,
+    external_account_id: externalAccountId,
     status: 'connected',
-    capabilities: input.capabilities,
-    config: input.config,
+    capabilities: [],
+    config: {
+      ...input.config,
+      authorization_container: true,
+      hidden_from_account_picker: true,
+      connected_at: new Date().toISOString(),
+    },
     connected_by: input.userId,
     visibility_scope: 'workspace',
     last_sync_at: new Date().toISOString(),
     last_error: null,
   };
 
-  let connectionId: string;
+  const { data: existing, error: existingError } = await admin
+    .from('integration_connections')
+    .select('id')
+    .eq('workspace_id', input.workspaceId)
+    .eq('provider', input.provider)
+    .eq('external_account_id', externalAccountId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  let authorizationId: string;
   if (existing?.id) {
     const { data, error } = await admin
       .from('integration_connections')
       .update(connectionPatch)
-      .eq('workspace_id', input.workspaceId)
       .eq('id', existing.id)
+      .eq('workspace_id', input.workspaceId)
       .select('id')
       .single();
     if (error) throw error;
-    connectionId = data.id;
+    authorizationId = data.id;
   } else {
     const { data, error } = await admin
       .from('integration_connections')
@@ -121,11 +129,11 @@ async function saveConnection(input: {
       .select('id')
       .single();
     if (error) throw error;
-    connectionId = data.id;
+    authorizationId = data.id;
   }
 
   const { error: secretError } = await admin.from('integration_secrets').upsert({
-    connection_id: connectionId,
+    connection_id: authorizationId,
     access_token: encryptIntegrationSecret(input.accessToken),
     refresh_token: encryptIntegrationSecret(input.refreshToken),
     token_expires_at: input.expiresAt || null,
@@ -133,18 +141,17 @@ async function saveConnection(input: {
     updated_at: new Date().toISOString(),
   });
   if (secretError) throw secretError;
-  return connectionId;
+
+  return authorizationId;
 }
 
-async function completeMeta(
+async function authorizeMeta(
   provider: IntegrationProvider,
   code: string,
   callbackUrl: string,
   userId: string,
   workspaceId: string
 ) {
-  const definition = getProvider(provider);
-  if (!definition) throw new Error('Unsupported Meta product.');
   const appId = process.env.META_APP_ID?.trim();
   const appSecret = process.env.META_APP_SECRET?.trim();
   if (!appId || !appSecret) throw new Error('Meta app credentials are not configured.');
@@ -171,72 +178,57 @@ async function completeMeta(
     pagesUrl.searchParams.set('access_token', token.access_token);
     const pagePayload = await fetchJson(pagesUrl) as { data?: MetaPage[] };
     const pages = pagePayload.data || [];
-    let saved = 0;
 
-    for (const page of pages) {
-      if (!page.access_token) continue;
-      const instagram = page.instagram_business_account;
-      if (provider === 'instagram' && !instagram?.id) continue;
-
-      const fields = provider === 'facebook'
-        ? 'leadgen,messages,messaging_postbacks'
-        : 'messages,messaging_postbacks';
-      let subscribed = false;
-      try {
-        const subscribeUrl = new URL(`https://graph.facebook.com/${version}/${page.id}/subscribed_apps`);
-        subscribeUrl.searchParams.set('subscribed_fields', fields);
-        subscribeUrl.searchParams.set('access_token', page.access_token);
-        await fetchJson(subscribeUrl, { method: 'POST' });
-        subscribed = true;
-      } catch (error) {
-        console.warn(`${provider} subscription failed for page ${page.id}:`, error);
-      }
-
-      const publicPage: MetaPage = {
-        id: page.id,
-        name: page.name,
-        ...(instagram ? { instagram_business_account: instagram } : {}),
-      };
-      const externalAccountId = provider === 'facebook' ? page.id : instagram!.id;
-      const displayName = provider === 'facebook'
-        ? `Facebook — ${page.name || page.id}`
-        : `Instagram — ${instagram?.username ? `@${instagram.username}` : instagram?.name || instagram?.id}`;
-
-      await saveConnection({
-        provider,
-        workspaceId,
-        displayName,
-        externalAccountId,
-        capabilities: definition.capabilities,
-        config: {
-          transport: 'meta',
-          graph_version: version,
-          identity: { id: identity.id, name: identity.name || null },
+    const discoveredAccounts = pages.flatMap((page) => {
+      if (provider === 'facebook') {
+        return [{
+          id: page.id,
+          kind: 'facebook_page',
+          name: page.name || page.id,
           page_id: page.id,
           page_name: page.name || null,
-          instagram_business_account_id: instagram?.id || null,
-          instagram_username: instagram?.username || null,
-          pages: [publicPage],
-          subscriptions: [{ id: page.id, ok: subscribed, fields }],
-          connected_at: new Date().toISOString(),
-        },
-        userId,
-        accessToken: page.access_token,
-        expiresAt,
-        secretPayload: {
-          page_access_tokens: [{ id: page.id, access_token: page.access_token }],
-          oauth_user_id: identity.id,
-        },
-      });
-      saved += 1;
+        }];
+      }
+      const instagram = page.instagram_business_account;
+      if (!instagram?.id) return [];
+      return [{
+        id: instagram.id,
+        kind: 'instagram_business',
+        name: instagram.username ? `@${instagram.username}` : instagram.name || instagram.id,
+        username: instagram.username || null,
+        page_id: page.id,
+        page_name: page.name || null,
+        instagram_business_account_id: instagram.id,
+      }];
+    });
+
+    if (discoveredAccounts.length === 0) {
+      throw new Error(provider === 'facebook'
+        ? 'No Facebook Pages were found for this account.'
+        : 'No Instagram Business accounts were found for this account.');
     }
 
-    if (saved === 0) {
-      throw new Error(provider === 'facebook'
-        ? 'No Facebook Page with the required access was found.'
-        : 'No Instagram Business account with the required access was found.');
-    }
-    return saved;
+    return saveAuthorization({
+      provider,
+      workspaceId,
+      userId,
+      externalAuthorizationId: identity.id,
+      displayName: `${provider === 'facebook' ? 'Meta' : 'Instagram'} authorization — ${identity.name || identity.id}`,
+      config: {
+        transport: 'meta',
+        graph_version: version,
+        identity: { id: identity.id, name: identity.name || null },
+        discovered_accounts: discoveredAccounts,
+      },
+      accessToken: token.access_token,
+      expiresAt,
+      secretPayload: {
+        oauth_user_id: identity.id,
+        page_access_tokens: pages
+          .filter((page) => page.access_token)
+          .map((page) => ({ id: page.id, access_token: page.access_token })),
+      },
+    });
   }
 
   if (provider === 'whatsapp') {
@@ -246,7 +238,7 @@ async function completeMeta(
     businessUrl.searchParams.set('access_token', token.access_token);
     const businessPayload = await fetchJson(businessUrl) as { data?: Array<{ id: string; name?: string }> };
     const businesses = businessPayload.data || [];
-    let saved = 0;
+    const discoveredAccounts: Array<Record<string, unknown>> = [];
 
     for (const business of businesses.slice(0, 20)) {
       const wabaUrl = new URL(`https://graph.facebook.com/${version}/${business.id}/owned_whatsapp_business_accounts`);
@@ -262,36 +254,16 @@ async function completeMeta(
       }
 
       for (const waba of wabas) {
-        try {
-          const subscribeUrl = new URL(`https://graph.facebook.com/${version}/${waba.id}/subscribed_apps`);
-          subscribeUrl.searchParams.set('access_token', token.access_token);
-          await fetchJson(subscribeUrl, { method: 'POST' });
-        } catch (error) {
-          console.warn(`WhatsApp subscription failed for WABA ${waba.id}:`, error);
-        }
-
         const phoneUrl = new URL(`https://graph.facebook.com/${version}/${waba.id}/phone_numbers`);
         phoneUrl.searchParams.set('fields', 'id,display_phone_number,verified_name,quality_rating,code_verification_status');
         phoneUrl.searchParams.set('access_token', token.access_token);
-        let phoneNumbers: WhatsAppPhone[] = [];
         try {
           const phonePayload = await fetchJson(phoneUrl) as { data?: WhatsAppPhone[] };
-          phoneNumbers = phonePayload.data || [];
-        } catch (error) {
-          console.warn(`WhatsApp phone discovery failed for WABA ${waba.id}:`, error);
-        }
-
-        for (const phone of phoneNumbers) {
-          await saveConnection({
-            provider: 'whatsapp',
-            workspaceId,
-            displayName: `WhatsApp — ${phone.verified_name || phone.display_phone_number || phone.id}`,
-            externalAccountId: phone.id,
-            capabilities: definition.capabilities,
-            config: {
-              transport: 'cloud',
-              graph_version: version,
-              identity: { id: identity.id, name: identity.name || null },
+          for (const phone of phonePayload.data || []) {
+            discoveredAccounts.push({
+              id: phone.id,
+              kind: 'whatsapp_phone',
+              name: phone.verified_name || phone.display_phone_number || phone.id,
               business_id: business.id,
               business_name: business.name || null,
               waba_id: waba.id,
@@ -299,34 +271,40 @@ async function completeMeta(
               phone_number_id: phone.id,
               display_phone_number: phone.display_phone_number || null,
               verified_name: phone.verified_name || null,
-              whatsapp_business_accounts: [{
-                id: waba.id,
-                name: waba.name || null,
-                business_id: business.id,
-                phone_numbers: [phone],
-              }],
-              connected_at: new Date().toISOString(),
-            },
-            userId,
-            accessToken: token.access_token,
-            expiresAt,
-            secretPayload: { oauth_user_id: identity.id },
-          });
-          saved += 1;
+              quality_rating: phone.quality_rating || null,
+              code_verification_status: phone.code_verification_status || null,
+            });
+          }
+        } catch (error) {
+          console.warn(`WhatsApp phone discovery failed for WABA ${waba.id}:`, error);
         }
       }
     }
 
-    if (saved === 0) throw new Error('No WhatsApp Business phone number was found for this Meta account.');
-    return saved;
+    if (discoveredAccounts.length === 0) throw new Error('No WhatsApp Business phone number was found for this Meta account.');
+
+    return saveAuthorization({
+      provider: 'whatsapp',
+      workspaceId,
+      userId,
+      externalAuthorizationId: identity.id,
+      displayName: `WhatsApp authorization — ${identity.name || identity.id}`,
+      config: {
+        transport: 'cloud',
+        graph_version: version,
+        identity: { id: identity.id, name: identity.name || null },
+        discovered_accounts: discoveredAccounts,
+      },
+      accessToken: token.access_token,
+      expiresAt,
+      secretPayload: { oauth_user_id: identity.id },
+    });
   }
 
   throw new Error('Unsupported Meta product.');
 }
 
-async function completeTikTok(code: string, userId: string, workspaceId: string) {
-  const definition = getProvider('tiktok');
-  if (!definition) throw new Error('TikTok provider is unavailable.');
+async function authorizeTikTok(code: string, userId: string, workspaceId: string) {
   const appId = process.env.TIKTOK_APP_ID?.trim();
   const secret = process.env.TIKTOK_APP_SECRET?.trim();
   if (!appId || !secret) throw new Error('TikTok app credentials are not configured.');
@@ -358,39 +336,37 @@ async function completeTikTok(code: string, userId: string, workspaceId: string)
     console.warn('TikTok advertiser discovery was unavailable:', error);
   }
 
-  const expiresAt = token.expires_in ? new Date(Date.now() + token.expires_in * 1000).toISOString() : null;
-  for (const advertiserId of advertiserIds) {
-    const advertiser = advertisers.map(record).find((item) =>
-      String(item.advertiser_id || item.id || '') === advertiserId
-    );
+  const discoveredAccounts = advertiserIds.map((advertiserId) => {
+    const advertiser = advertisers.map(record).find((item) => String(item.advertiser_id || item.id || '') === advertiserId);
     const advertiserName = typeof advertiser?.advertiser_name === 'string'
       ? advertiser.advertiser_name
       : typeof advertiser?.name === 'string'
         ? advertiser.name
         : advertiserId;
+    return {
+      id: advertiserId,
+      kind: 'tiktok_advertiser',
+      name: advertiserName,
+      advertiser_id: advertiserId,
+    };
+  });
 
-    await saveConnection({
-      provider: 'tiktok',
-      workspaceId,
-      displayName: `TikTok Ads — ${advertiserName}`,
-      externalAccountId: advertiserId,
-      capabilities: definition.capabilities,
-      config: {
-        transport: 'tiktok_business',
-        advertiser_id: advertiserId,
-        advertiser_ids: [advertiserId],
-        advertisers: advertiser ? [advertiser] : [],
-        scope: token.scope || null,
-        connected_at: new Date().toISOString(),
-      },
-      userId,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token || null,
-      expiresAt,
-    });
-  }
-
-  return advertiserIds.length;
+  const expiresAt = token.expires_in ? new Date(Date.now() + token.expires_in * 1000).toISOString() : null;
+  return saveAuthorization({
+    provider: 'tiktok',
+    workspaceId,
+    userId,
+    externalAuthorizationId: userId,
+    displayName: 'TikTok Business authorization',
+    config: {
+      transport: 'tiktok_business',
+      scope: token.scope || null,
+      discovered_accounts: discoveredAccounts,
+    },
+    accessToken: token.access_token,
+    refreshToken: token.refresh_token || null,
+    expiresAt,
+  });
 }
 
 export async function GET(request: Request, context: { params: Promise<{ provider: string }> }) {
@@ -422,27 +398,36 @@ export async function GET(request: Request, context: { params: Promise<{ provide
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user || user.id !== oauthCookie.userId) return redirectWith(appUrl, 'error', 'session_expired');
-  const { data: profile } = await supabase
+
+  const admin = createSupabaseAdminClient();
+  const { data: profile } = await admin
     .from('profiles')
-    .select('role,is_active,workspace_id')
+    .select('is_active')
     .eq('id', user.id)
-    .maybeSingle() as { data: WorkspaceProfile | null };
-  if (!profile?.is_active || !['admin', 'manager'].includes(profile.role)) return redirectWith(appUrl, 'error', 'forbidden');
-  if (!profile.workspace_id) return redirectWith(appUrl, 'error', 'workspace_missing');
+    .maybeSingle();
+  const { data: membership } = await admin
+    .from('workspace_members')
+    .select('role,is_active')
+    .eq('workspace_id', oauthCookie.workspaceId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!profile?.is_active || !membership?.is_active || !['owner', 'admin', 'manager'].includes(membership.role)) {
+    return redirectWith(appUrl, 'error', 'forbidden');
+  }
 
   const callbackUrl = `${appUrl}/api/integrations/oauth/${provider}/callback`;
   try {
-    if (definition.connectMode === 'meta_oauth') {
-      await completeMeta(provider, code, callbackUrl, user.id, profile.workspace_id);
-    } else {
-      await completeTikTok(code, user.id, profile.workspace_id);
-    }
-    const response = redirectWith(appUrl, 'connected', provider);
+    const authorizationId = definition.connectMode === 'meta_oauth'
+      ? await authorizeMeta(provider, code, callbackUrl, user.id, oauthCookie.workspaceId)
+      : await authorizeTikTok(code, user.id, oauthCookie.workspaceId);
+
+    const response = selectionRedirect(appUrl, provider, authorizationId);
     response.cookies.delete('wanderlust_integration_oauth');
     return response;
   } catch (error) {
-    console.error(`${provider} OAuth callback failed:`, error);
-    const response = redirectWith(appUrl, 'error', `${provider}_connection_failed`);
+    console.error(`${provider} OAuth authorization failed:`, error);
+    const response = redirectWith(appUrl, 'error', `${provider}_authorization_failed`);
     response.cookies.delete('wanderlust_integration_oauth');
     return response;
   }
