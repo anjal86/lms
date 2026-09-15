@@ -76,11 +76,17 @@ export type WhatsappHistoryRequest = {
 };
 
 export function fetchWhatsappHistory(instanceId: string, input: WhatsappHistoryRequest) {
-  return whatsappBridgeRequest<{ ok: boolean; request_id?: string | null }>(
-    `/instances/${encodeURIComponent(instanceId)}/fetch-history`,
+  const chatJid = encodeURIComponent(input.oldestMsgRemoteJid);
+  return whatsappBridgeRequest<{ ok: boolean; result?: string | null; request_id?: string | null }>(
+    `/instances/${encodeURIComponent(instanceId)}/chats/${chatJid}/fetch-history`,
     {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        count: input.count,
+        oldestMsgId: input.oldestMsgId,
+        oldestMsgFromMe: input.oldestMsgFromMe,
+        oldestMsgTimestamp: input.oldestMsgTimestamp,
+      }),
     }
   );
 }
