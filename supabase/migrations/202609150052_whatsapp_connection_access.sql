@@ -71,19 +71,19 @@ create policy lead_conversations_write on public.lead_conversations
   using (public.can_access_conversation(id))
   with check (
     public.current_user_active()
-    and workspace_id = public.current_workspace_id()
+    and lead_conversations.workspace_id = public.current_workspace_id()
     and (
       public.is_management()
-      or assigned_to = auth.uid()
-      or assigned_to is null
+      or lead_conversations.assigned_to = auth.uid()
+      or lead_conversations.assigned_to is null
     )
     and (
-      provider <> 'whatsapp'
+      lead_conversations.provider <> 'whatsapp'
       or exists (
         select 1
         from public.integration_connections ic
-        where ic.id = connection_id
-          and ic.workspace_id = workspace_id
+        where ic.id = lead_conversations.connection_id
+          and ic.workspace_id = lead_conversations.workspace_id
           and (ic.visibility_scope = 'workspace' or ic.connected_by = auth.uid())
       )
     )
