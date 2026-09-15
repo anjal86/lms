@@ -150,6 +150,7 @@ export default function ConnectionsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(friendlyError(params.get('error')));
+  const [notice, setNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [whatsappDrawerOpen, setWhatsappDrawerOpen] = useState(false);
   const [setupProviderId, setSetupProviderId] = useState<ProviderId | null>(() => {
@@ -223,6 +224,7 @@ export default function ConnectionsPage() {
     if (!manualProvider || !manualName.trim()) return;
     setBusy(`manual:${manualProvider.id}`);
     setError(null);
+    setNotice(null);
     try {
       const response = await fetch('/api/integrations/connections', {
         method: 'POST',
@@ -249,9 +251,10 @@ export default function ConnectionsPage() {
     }
   };
 
-  const updateConnection = async (connection: Connection, action: 'pause' | 'resume' | 'disconnect') => {
+  const updateConnection = async (connection: Connection, action: 'pause' | 'resume' | 'disconnect' | 'sync') => {
     setBusy(connection.id);
     setError(null);
+    setNotice(null);
     try {
       const response = await fetch('/api/integrations/connections', {
         method: 'PATCH',
@@ -260,6 +263,17 @@ export default function ConnectionsPage() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to update this account.');
+      if (action === 'sync') {
+        const history = payload.historySync || {};
+        const conversations = Number(history.conversationsDiscovered || 0);
+        const messages = Number(history.messagesInserted || 0);
+        const warningCount = Array.isArray(history.errors) ? history.errors.length : 0;
+        setNotice(
+          warningCount
+            ? `History sync completed with ${warningCount} warning${warningCount === 1 ? '' : 's'}. ${conversations} conversations and ${messages} message previews added.`
+            : `History sync complete. ${conversations} conversations and ${messages} message previews added.`
+        );
+      }
       await load();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to update this account.');
@@ -273,6 +287,7 @@ export default function ConnectionsPage() {
     const target = pendingDeleteConnection;
     setBusy(target.id);
     setError(null);
+    setNotice(null);
     try {
       const response = await fetch('/api/integrations/connections', {
         method: 'DELETE',
@@ -366,6 +381,12 @@ export default function ConnectionsPage() {
         </div>
       )}
 
+      {notice && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-medium text-emerald-800">
+          <CheckCircle2 className="h-4 w-4 shrink-0" /> {notice}
+        </div>
+      )}
+
       {(error || data.migrationRequired) && (
         <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3.5">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertCircle className="h-4 w-4" /> Setup needs attention</div>
@@ -405,6 +426,9 @@ export default function ConnectionsPage() {
                     {accounts.map((connection) => {
                       const linkedDevice = usesBaileys(connection);
                       const actionBusy = busy === connection.id;
+                      const canSyncMetaHistory = !linkedDevice
+                        && ['facebook', 'instagram'].includes(connection.provider)
+                        && ['connected', 'paused', 'token_expiring'].includes(connection.status);
                       return (
                         <div key={connection.id} className="flex items-center gap-3 px-4 py-3">
                           <span className={`h-2 w-2 shrink-0 rounded-full ${statusDot(connection.status)}`} />
@@ -416,12 +440,25 @@ export default function ConnectionsPage() {
                             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-zinc-500">
                               <span>{statusLabel(connection.status)}</span>
                               {connection.external_account_id && <span className="max-w-52 truncate font-mono">{connection.external_account_id}</span>}
+                              {connection.last_sync_at && <span>Last sync {new Date(connection.last_sync_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
                               {connection.last_event_at && <span>Last event {new Date(connection.last_event_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
                             </div>
                             {connection.last_error && <div className="mt-1 truncate text-[10px] text-red-600">{connection.last_error}</div>}
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
                             <Link href={`/inbox?provider=${provider.id}&accountProvider=${provider.id}&accountId=${connection.id}`} className="button-ghost button-sm" title="Open this account in Inbox"><Inbox className="h-3.5 w-3.5" /></Link>
+                            {canSyncMetaHistory && (
+                              <button
+                                type="button"
+                                onClick={() => void updateConnection(connection, 'sync')}
+                                disabled={actionBusy}
+                                className="button-ghost button-sm"
+                                title="Sync conversation history now"
+                                aria-label={`Sync ${connection.display_name} history`}
+                              >
+                                {actionBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
                             {linkedDevice ? (
                               <button type="button" onClick={() => setWhatsappDrawerOpen(true)} className="button-secondary button-sm">Manage</button>
                             ) : connection.status === 'connected' ? (
