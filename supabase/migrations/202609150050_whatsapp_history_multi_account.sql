@@ -4,16 +4,22 @@
 
 begin;
 
--- Existing WhatsApp connections behaved as workspace/shared accounts. Preserve that
--- behavior for current rows, while new accounts default to personal ownership.
+-- Make integration ownership explicit. Legacy connections are backfilled through
+-- the profile that originally connected them; rows without an owner remain nullable
+-- so this migration does not invalidate unrelated historical integrations.
 alter table public.integration_connections
+  add column if not exists workspace_id uuid references public.workspaces(id) on delete cascade,
   add column if not exists visibility_scope text;
 
-update public.integration_connections
-set visibility_scope = 'workspace'
-where provider = 'whatsapp'
-  and visibility_scope is null;
+update public.integration_connections connection
+set workspace_id = profile.workspace_id
+from public.profiles profile
+where connection.workspace_id is null
+  and connection.connected_by = profile.id
+  and profile.workspace_id is not null;
 
+-- Existing integrations behaved as workspace/shared accounts. Preserve that
+-- behavior for current rows, while new accounts default to personal ownership.
 update public.integration_connections
 set visibility_scope = 'workspace'
 where visibility_scope is null;
@@ -45,6 +51,8 @@ create index if not exists integration_connections_workspace_visibility_idx
 -- to collapse into one CRM thread.
 drop index if exists public.idx_lead_messages_provider_ext_msg_full;
 drop index if exists public.idx_lead_conversations_provider_thread_full;
+drop index if exists public.lead_messages_provider_external_uidx;
+drop index if exists public.lead_conversations_thread_uidx;
 
 create unique index if not exists lead_messages_connection_external_uidx
   on public.lead_messages(provider, connection_id, external_message_id)
