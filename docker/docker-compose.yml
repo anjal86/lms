@@ -196,6 +196,27 @@ services:
       - supabase-meta
       - supabase-kong
 
+  whatsapp-bridge:
+    build:
+      context: ../services/whatsapp-bridge
+      dockerfile: Dockerfile
+    container_name: travel-lms-whatsapp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WHATSAPP_BRIDGE_PORT:-3101}:3100"
+    environment:
+      PORT: 3100
+      AUTH_ROOT: /data/auth
+      WHATSAPP_BRIDGE_API_KEY: ${WHATSAPP_BRIDGE_API_KEY:?WHATSAPP_BRIDGE_API_KEY is required}
+      WHATSAPP_BRIDGE_WEBHOOK_SECRET: ${WHATSAPP_BRIDGE_WEBHOOK_SECRET:?WHATSAPP_BRIDGE_WEBHOOK_SECRET is required}
+      CRM_WEBHOOK_URL: ${WHATSAPP_BRIDGE_CRM_WEBHOOK_URL:-http://app:3000/api/integrations/webhooks/whatsapp-baileys}
+      LOG_LEVEL: ${WHATSAPP_BRIDGE_LOG_LEVEL:-info}
+      BAILEYS_LOG_LEVEL: ${BAILEYS_LOG_LEVEL:-warn}
+    volumes:
+      - whatsapp-bridge-data:/data/auth
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   app:
     build:
       context: ..
@@ -215,6 +236,9 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       LEADS_WEBHOOK_SECRET: ${LEADS_WEBHOOK_SECRET:?LEADS_WEBHOOK_SECRET is required}
       SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
+      WHATSAPP_BRIDGE_URL: http://whatsapp-bridge:3100
+      WHATSAPP_BRIDGE_API_KEY: ${WHATSAPP_BRIDGE_API_KEY:?WHATSAPP_BRIDGE_API_KEY is required}
+      WHATSAPP_BRIDGE_WEBHOOK_SECRET: ${WHATSAPP_BRIDGE_WEBHOOK_SECRET:?WHATSAPP_BRIDGE_WEBHOOK_SECRET is required}
       NODE_ENV: production
     depends_on:
       supabase-kong:
@@ -223,6 +247,8 @@ services:
         condition: service_healthy
       supabase-storage:
         condition: service_healthy
+      whatsapp-bridge:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
       interval: 15s
@@ -252,3 +278,4 @@ services:
 volumes:
   db-data:
   storage-data:
+  whatsapp-bridge-data:
