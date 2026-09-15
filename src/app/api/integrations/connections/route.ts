@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider } from '@/lib/integrations/catalog';
 import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
@@ -27,24 +27,8 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function getActor() {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { error: NextResponse.json({ error: 'Unauthorized.' }, { status: 401 }) } as const;
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id,role,is_active,workspace_id')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_active) return { error: NextResponse.json({ error: 'Account disabled.' }, { status: 403 }) } as const;
-  if (!profile.workspace_id) return { error: NextResponse.json({ error: 'Workspace is not configured.' }, { status: 409 }) } as const;
-  return { supabase, user, profile } as const;
-}
-
 export async function GET(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
   const { data, error } = await actor.supabase
@@ -81,20 +65,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!['admin', 'manager'].includes(actor.profile.role)) {
-    return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
   }
 
-  let raw: unknown;
-  try {
-    raw = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-  }
-
-  const parsed = ManualConnectionSchema.safeParse(raw);
+  const parsed = ManualConnectionSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Validation failed.', fields: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
@@ -137,19 +114,13 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const actor = await getActor();
+  const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!['admin', 'manager'].includes(actor.profile.role)) {
-    return NextResponse.json({ error: 'Manager access is required.' }, { status: 403 });
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required.' }, { status: 403 });
   }
 
-  let raw: unknown;
-  try {
-    raw = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
-  }
-  const parsed = PatchSchema.safeParse(raw);
+  const parsed = PatchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid connection action.' }, { status: 400 });
 
   const admin = createSupabaseAdminClient();
