@@ -265,6 +265,7 @@ export async function POST(
             url: providerAttachmentUrl,
             fileName: parsed.data.attachment.fileName,
             mimeType: parsed.data.attachment.mimeType,
+            storagePath: parsed.data.attachment.storagePath,
           },
         })
       : await sendChannelText({

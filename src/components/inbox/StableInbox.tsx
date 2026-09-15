@@ -709,7 +709,12 @@ export default function StableInbox() {
   }, [events, messages]);
 
   const metadata = asRecord(selected?.metadata);
-  const canReply = metadata.can_reply !== false;
+  const isMetaWindowExpired = Boolean(
+    (selected?.provider === 'facebook' || selected?.provider === 'instagram') &&
+    selected?.last_inbound_at &&
+    Date.now() - new Date(selected.last_inbound_at).getTime() > 24 * 60 * 60 * 1000
+  );
+  const canReply = metadata.can_reply !== false && !isMetaWindowExpired;
   const canManageCollaborators = can('inbox.assign');
   const availableCollaborators = allProfiles.filter((profile) =>
     profile.is_active

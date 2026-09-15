@@ -395,7 +395,12 @@ export default function UnifiedInbox() {
 
   const availableCollaborators = allProfiles.filter((profile) => profile.is_active && !collaborators.some((row) => row.user_id === profile.id));
   const metadata = asRecord(selected?.metadata);
-  const canReply = metadata.can_reply !== false;
+  const isMetaWindowExpired = Boolean(
+    (selected?.provider === 'facebook' || selected?.provider === 'instagram') &&
+    selected?.last_inbound_at &&
+    Date.now() - new Date(selected.last_inbound_at).getTime() > 24 * 60 * 60 * 1000
+  );
+  const canReply = metadata.can_reply !== false && !isMetaWindowExpired;
 
   const context = selected ? <div className="flex h-full min-h-0 flex-col bg-white">
     <div className="grid grid-cols-4 border-b border-zinc-200 bg-zinc-50 p-1.5">{(['details','history','assist','crm'] as ContextTab[]).map((tab) => <button key={tab} type="button" onClick={() => setContextTab(tab)} className={`rounded-md px-1 py-2 text-[11px] font-semibold capitalize ${contextTab === tab ? 'bg-white text-zinc-950 shadow-sm' : 'text-zinc-500 hover:text-zinc-900'}`}>{tab}</button>)}</div>

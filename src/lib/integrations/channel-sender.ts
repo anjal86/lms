@@ -34,6 +34,7 @@ type SendAttachmentInput = {
     url: string;
     fileName: string;
     mimeType: string;
+    storagePath?: string;
   };
 };
 
@@ -148,9 +149,17 @@ async function sendFacebookOrInstagram(
 
   if (!response.ok) {
     const providerError = data.error as Record<string, unknown> | undefined;
+    const code = String(providerError?.code || '');
+    const rawMessage = typeof providerError?.message === 'string' ? providerError.message : `${provider} rejected the message.`;
+    const isWindowClosed = code === '10' || rawMessage.includes('outside of allowed window');
+    const channelName = provider === 'facebook' ? 'Facebook Messenger' : 'Instagram';
+    const message = isWindowClosed
+      ? `The 24-hour messaging window has closed on ${channelName}. Meta allows standard replies only within 24 hours of the customer's last message. The traveler must message again before a reply can be delivered.`
+      : rawMessage;
+
     throw new ChannelDeliveryError(
-      typeof providerError?.message === 'string' ? providerError.message : `${provider} rejected the message.`,
-      { status: response.status === 429 ? 429 : 502, code: String(providerError?.code || 'meta_send_failed') }
+      message,
+      { status: response.status === 429 ? 429 : 502, code: isWindowClosed ? 'meta_window_closed' : (code || 'meta_send_failed') }
     );
   }
 
@@ -187,28 +196,77 @@ async function sendFacebookOrInstagramAttachment(
     ? `https://graph.facebook.com/${version}/me/messages`
     : `https://graph.facebook.com/${version}/${accountId}/messages`;
 
-  const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      recipient: { id: input.externalContactId },
-      message: {
-        attachment: {
-          type,
-          payload: { url: input.attachment.url, is_reusable: true },
-        },
+  let fileBuffer: ArrayBuffer | null = null;
+  if (input.attachment.storagePath) {
+    try {
+      const admin = createSupabaseAdminClient();
+      const { data: blob } = await admin.storage.from('conversation-media').download(input.attachment.storagePath);
+      if (blob) fileBuffer = await blob.arrayBuffer();
+    } catch (e) {
+      console.warn('Failed to load attachment buffer from storage for Facebook:', e);
+    }
+  }
+
+  let response: Response;
+  let data: Record<string, unknown>;
+
+  if (provider === 'facebook' && fileBuffer) {
+    const formData = new FormData();
+    formData.append('recipient', JSON.stringify({ id: input.externalContactId }));
+    formData.append('message', JSON.stringify({
+      attachment: {
+        type,
+        payload: { is_reusable: true },
       },
-    }),
-  });
+    }));
+    const blob = new Blob([fileBuffer], { type: input.attachment.mimeType });
+    formData.append('filedata', blob, input.attachment.fileName);
+
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  } else {
+    const result = await metaFetchJson<Record<string, unknown>>(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        recipient: { id: input.externalContactId },
+        message: {
+          attachment: {
+            type,
+            payload: { url: input.attachment.url, is_reusable: true },
+          },
+        },
+      }),
+    });
+    response = result.response;
+    data = result.data;
+  }
 
   if (!response.ok) {
     const providerError = data.error as Record<string, unknown> | undefined;
+    const code = String(providerError?.code || '');
+    const rawMessage = typeof providerError?.message === 'string' ? providerError.message : `${provider} rejected the attachment.`;
+    const isWindowClosed = code === '10' || rawMessage.includes('outside of allowed window');
+    const isRobotsError = rawMessage.includes('robots.txt') || rawMessage.includes('does not allow downloading');
+    const channelName = provider === 'facebook' ? 'Facebook Messenger' : 'Instagram';
+    const message = isWindowClosed
+      ? `The 24-hour messaging window has closed on ${channelName}. Meta allows standard attachments only within 24 hours of the customer's last message. The traveler must message again before an attachment can be delivered.`
+      : isRobotsError
+        ? `Meta crawler could not fetch the attachment URL. Ensure the media file is accessible or uploaded directly.`
+        : rawMessage;
+
     throw new ChannelDeliveryError(
-      typeof providerError?.message === 'string' ? providerError.message : `${provider} rejected the attachment.`,
-      { status: response.status === 429 ? 429 : 502, code: String(providerError?.code || 'meta_attachment_send_failed') }
+      message,
+      { status: response.status === 429 ? 429 : 502, code: isWindowClosed ? 'meta_window_closed' : (code || 'meta_attachment_send_failed') }
     );
   }
 
@@ -302,9 +360,38 @@ async function sendWhatsAppAttachment(input: SendAttachmentInput, material: Awai
       : input.attachment.mimeType.startsWith('audio/')
         ? 'audio'
         : 'document';
-  const media = type === 'document'
-    ? { link: input.attachment.url, filename: input.attachment.fileName }
-    : { link: input.attachment.url };
+  let uploadedMediaId: string | null = null;
+  if (input.attachment.storagePath) {
+    try {
+      const admin = createSupabaseAdminClient();
+      const { data: blob } = await admin.storage.from('conversation-media').download(input.attachment.storagePath);
+      if (blob) {
+        const fileBuffer = await blob.arrayBuffer();
+        const formData = new FormData();
+        formData.append('messaging_product', 'whatsapp');
+        formData.append('file', new Blob([fileBuffer], { type: input.attachment.mimeType }), input.attachment.fileName);
+        formData.append('type', input.attachment.mimeType);
+
+        const uploadRes = await fetch(`https://graph.facebook.com/${version}/${phoneNumberId}/media`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${material.accessToken}` },
+          body: formData,
+        });
+        const uploadData = (await uploadRes.json().catch(() => ({}))) as Record<string, unknown>;
+        if (uploadRes.ok && uploadData.id) {
+          uploadedMediaId = String(uploadData.id);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to upload media directly to WhatsApp Media API:', e);
+    }
+  }
+
+  const media = uploadedMediaId
+    ? { id: uploadedMediaId, ...(type === 'document' ? { filename: input.attachment.fileName } : {}) }
+    : type === 'document'
+      ? { link: input.attachment.url, filename: input.attachment.fileName }
+      : { link: input.attachment.url };
 
   const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
     method: 'POST',

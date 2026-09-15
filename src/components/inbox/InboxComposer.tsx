@@ -149,7 +149,7 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
       onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }}
       rows={3}
       disabled={disabled}
-      placeholder={mode === 'internal' ? 'Leave context for your team…' : 'Write a reply…'}
+      placeholder={mode === 'internal' ? 'Leave context for your team…' : !canReply ? 'The 24h reply window has closed. Switch to Internal Note or wait for traveler reply.' : 'Write a reply…'}
       className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none disabled:bg-zinc-50"
     />
 

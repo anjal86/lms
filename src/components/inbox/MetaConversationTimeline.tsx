@@ -144,20 +144,72 @@ export default function MetaConversationTimeline({ timeline, customerName, custo
           ? `${joinedAbove ? 'rounded-tl-md' : 'rounded-tl-[18px]'} ${joinedBelow ? 'rounded-bl-md' : 'rounded-bl-[18px]'} rounded-r-[18px]`
           : `${joinedAbove ? 'rounded-tr-md' : 'rounded-tr-[18px]'} ${joinedBelow ? 'rounded-br-md' : 'rounded-br-[18px]'} rounded-l-[18px]`;
         const mediaIndex = mediaIndexById.get(message.id);
+        const actions = (
+          <div className="mb-1 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+            {onQuote && (
+              <button
+                type="button"
+                aria-label="Quote in reply"
+                title="Quote in reply"
+                onClick={() => onQuote(message)}
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+              >
+                <Reply className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Copy message"
+              title="Copy message"
+              onClick={() => void navigator.clipboard?.writeText(message.body || '')}
+              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+            </button>
+            {onAddNote && (
+              <button
+                type="button"
+                aria-label="Add internal note"
+                title="Add internal note"
+                onClick={() => onAddNote(message)}
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+              >
+                <StickyNote className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {onCreateTask && (
+              <button
+                type="button"
+                aria-label="Create task"
+                title="Create task"
+                onClick={() => onCreateTask(message)}
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+              >
+                <ListTodo className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {message.delivery_status === 'failed' && onRetry && (
+              <button
+                type="button"
+                aria-label="Retry failed message"
+                title="Retry failed message"
+                onClick={() => onRetry(message)}
+                className="rounded-md p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        );
 
         return <Fragment key={`message-${message.id}`}>
           {showDate && <div className="my-5 text-center text-[11px] font-medium text-zinc-500">{dateLabel(item.at)}</div>}
-          <div className={`group relative flex items-end gap-2 ${inbound ? 'justify-start' : 'justify-end'} ${joinedAbove ? 'mt-0.5' : 'mt-2.5'}`}>
+          <div className={`group relative flex items-end gap-1.5 ${inbound ? 'justify-start' : 'justify-end'} ${joinedAbove ? 'mt-0.5' : 'mt-2.5'}`}>
             {inbound && <div className="w-7 shrink-0 self-end">{!joinedBelow && (customerAvatarUrl ? <img src={customerAvatarUrl} alt="" className="h-7 w-7 rounded-full object-cover ring-1 ring-zinc-200" /> : <div className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-bold text-zinc-700">{initials(customerName)}</div>)}</div>}
 
+            {!inbound && actions}
+
             <div className={`flex max-w-[78%] flex-col ${inbound ? 'items-start' : 'items-end'}`}>
-              <div className={`mb-1 hidden items-center gap-0.5 rounded-lg border border-zinc-200 bg-white p-0.5 shadow-sm group-hover:flex ${inbound ? 'self-start' : 'self-end'}`}>
-                <button type="button" aria-label="Copy message" onClick={() => void navigator.clipboard?.writeText(message.body || '')} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><Clipboard className="h-3.5 w-3.5" /></button>
-                {onQuote && <button type="button" aria-label="Quote in reply" onClick={() => onQuote(message)} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><Reply className="h-3.5 w-3.5" /></button>}
-                {onAddNote && <button type="button" aria-label="Add internal note from message" onClick={() => onAddNote(message)} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><StickyNote className="h-3.5 w-3.5" /></button>}
-                {onCreateTask && <button type="button" aria-label="Create task from message" onClick={() => onCreateTask(message)} className="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"><ListTodo className="h-3.5 w-3.5" /></button>}
-                {message.delivery_status === 'failed' && onRetry && <button type="button" aria-label="Retry failed message" onClick={() => onRetry(message)} className="rounded p-1.5 text-rose-600 hover:bg-rose-50"><RotateCcw className="h-3.5 w-3.5" /></button>}
-              </div>
               <div className={`${radius} ${mediaOnly ? 'p-1' : 'px-3.5 py-2.5'} max-w-full overflow-hidden text-[14px] leading-[1.45] ${inbound ? 'bg-zinc-100 text-zinc-950' : 'bg-[#0866ff] text-white'}`}>
                 <InboxMessageContent message={message} onOpenMedia={mediaIndex === undefined ? undefined : () => setLightboxIndex(mediaIndex)} />
               </div>
@@ -168,6 +220,9 @@ export default function MetaConversationTimeline({ timeline, customerName, custo
                 {message.delivery_status === 'failed' && onRetry && <button type="button" onClick={() => onRetry(message)} className="font-sans font-semibold text-rose-600 hover:underline">Retry</button>}
               </div>}
             </div>
+
+            {inbound && actions}
+
             {!inbound && <div className="w-1 shrink-0" />}
           </div>
         </Fragment>;
