@@ -51,6 +51,10 @@ const migrations = [
     file: '202609150069_multi_phone_chat_detection.sql',
     marker: "select to_regprocedure('public.extract_chat_phones(text)') is not null and to_regprocedure('public.apply_detected_chat_phones(uuid,text[],text,timestamptz)') is not null and position('extract_chat_phones' in pg_get_functiondef(to_regprocedure('public.detect_chat_phone_from_message()'))) > 0",
   },
+  {
+    file: '202609150070_chat_contact_detail_detection.sql',
+    marker: "select to_regprocedure('public.extract_chat_emails(text)') is not null and to_regprocedure('public.detect_chat_location(text)') is not null and to_regprocedure('public.apply_detected_chat_contact_details(uuid,text[],jsonb,text[],text,timestamptz)') is not null and exists(select 1 from pg_trigger where tgname='trg_detect_chat_contact_details' and not tgisinternal)",
+  },
 ];
 
 for (const migration of migrations) {
