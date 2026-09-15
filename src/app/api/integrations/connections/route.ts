@@ -4,6 +4,7 @@ import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider } from '@/lib/integrations/catalog';
 import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
+import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -18,7 +19,7 @@ const ManualConnectionSchema = z.object({
 
 const PatchSchema = z.object({
   id: uuidSchema,
-  action: z.enum(['pause', 'resume', 'disconnect']),
+  action: z.enum(['pause', 'resume', 'disconnect', 'sync']),
 });
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -126,11 +127,47 @@ export async function PATCH(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: target } = await admin
     .from('integration_connections')
-    .select('id,workspace_id')
+    .select('id,workspace_id,provider,status')
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('id', parsed.data.id)
     .maybeSingle();
   if (!target) return NextResponse.json({ error: 'Connection not found.' }, { status: 404 });
+
+  if (parsed.data.action === 'sync') {
+    if (!['facebook', 'instagram'].includes(target.provider)) {
+      return NextResponse.json({ error: 'Manual history sync is currently available for Facebook and Instagram.' }, { status: 400 });
+    }
+    if (!['connected', 'token_expiring', 'paused'].includes(target.status)) {
+      return NextResponse.json({ error: 'Reconnect this account before syncing its history.' }, { status: 409 });
+    }
+
+    try {
+      const historySync = await discoverMetaConversationHistory({
+        connectionIds: [target.id],
+        maxPages: 8,
+      });
+      const now = new Date().toISOString();
+      const firstError = historySync.errors[0] || null;
+      await admin
+        .from('integration_connections')
+        .update({ last_sync_at: now, last_error: firstError })
+        .eq('workspace_id', actor.profile.workspace_id)
+        .eq('id', target.id);
+      return NextResponse.json({
+        success: historySync.errors.length === 0,
+        historySync,
+      });
+    } catch (syncError) {
+      const message = syncError instanceof Error ? syncError.message : 'Unable to sync channel history.';
+      await admin
+        .from('integration_connections')
+        .update({ last_error: message })
+        .eq('workspace_id', actor.profile.workspace_id)
+        .eq('id', target.id);
+      console.error('Meta history sync failed:', syncError);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
 
   const status = parsed.data.action === 'pause' ? 'paused' : parsed.data.action === 'resume' ? 'connected' : 'disconnected';
   const { data, error } = await admin
