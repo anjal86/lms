@@ -19,7 +19,7 @@ export type WorkspacePermission =
   | 'service_levels.edit';
 
 export async function actorHasPermission(actor: ApiActor, permission: WorkspacePermission) {
-  if (actor.profile.role === 'admin') return true;
+  if (actor.profile.workspace_role === 'owner' || actor.profile.workspace_role === 'admin') return true;
   const { data, error } = await actor.supabase.rpc('has_workspace_permission', { p_key: permission });
   if (error) {
     console.error(`Permission check failed for ${permission}:`, error.message);
