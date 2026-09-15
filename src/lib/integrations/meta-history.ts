@@ -9,11 +9,18 @@ type Provider = 'facebook' | 'instagram';
 
 type ConnectionState = {
   id: string;
+  workspaceId: string;
+  externalAccountId: string | null;
   provider: Provider;
   displayName: string;
   config: Record<string, unknown>;
   pageTokens: Array<Record<string, unknown>>;
   fallbackToken: string | null;
+};
+
+type AccountDescriptor = {
+  accountId: string;
+  accountName: string;
 };
 
 export type MetaHistoryResult = {
@@ -37,6 +44,15 @@ function errorMessage(payload: MetaRecord, status: number) {
   return typeof error.message === 'string' ? error.message : `Meta request failed (${status}).`;
 }
 
+function isAuthorizationContainer(config: Record<string, unknown>) {
+  if (config.authorization_container === true || config.legacy_container === true) return true;
+  if (config.hidden_from_account_picker !== true) return false;
+  return Array.isArray(config.discovered_accounts)
+    || Array.isArray(config.pages)
+    || Array.isArray(config.whatsapp_business_accounts)
+    || Array.isArray(config.advertisers);
+}
+
 async function pagedGraph(url: URL, maxPages: number) {
   const result: MetaRecord[] = [];
   let next: string | null = url.toString();
@@ -57,7 +73,8 @@ function pageTokenForAccount(state: ConnectionState, accountId: string) {
     const instagram = record(page.instagram_business_account);
     return String(instagram.id || '') === accountId;
   });
-  const pageId = String(owningPage?.id || accountId);
+  const configuredPageId = typeof state.config.page_id === 'string' ? state.config.page_id : '';
+  const pageId = String(owningPage?.id || configuredPageId || accountId);
   const tokenRow = state.pageTokens.find((row) => String(row.id || '') === pageId);
   return typeof tokenRow?.access_token === 'string' ? tokenRow.access_token : state.fallbackToken;
 }
@@ -67,7 +84,7 @@ async function loadConnectionState(connectionId: string): Promise<ConnectionStat
   const [{ data: connection }, { data: secret }] = await Promise.all([
     admin
       .from('integration_connections')
-      .select('id,provider,display_name,config,status')
+      .select('id,workspace_id,provider,display_name,external_account_id,config,status')
       .eq('id', connectionId)
       .maybeSingle(),
     admin
@@ -77,10 +94,19 @@ async function loadConnectionState(connectionId: string): Promise<ConnectionStat
       .maybeSingle(),
   ]);
 
-  if (!connection || !secret || !['facebook', 'instagram'].includes(connection.provider)) return null;
+  if (
+    !connection
+    || !connection.workspace_id
+    || !secret
+    || !['facebook', 'instagram'].includes(connection.provider)
+    || !['connected', 'token_expiring', 'paused'].includes(connection.status)
+  ) return null;
+
   const payload = decryptSecretPayload(secret.secret_payload || {}) as Record<string, unknown>;
   return {
     id: connection.id,
+    workspaceId: connection.workspace_id,
+    externalAccountId: connection.external_account_id || null,
     provider: connection.provider as Provider,
     displayName: connection.display_name || connection.provider,
     config: (connection.config || {}) as Record<string, unknown>,
@@ -132,7 +158,7 @@ function messageDetails(message: MetaRecord) {
   };
 }
 
-function accountDescriptor(state: ConnectionState, page: MetaRecord) {
+function legacyAccountDescriptor(state: ConnectionState, page: MetaRecord): AccountDescriptor | null {
   if (state.provider === 'instagram') {
     const instagram = record(page.instagram_business_account);
     const accountId = String(instagram.id || '');
@@ -146,6 +172,30 @@ function accountDescriptor(state: ConnectionState, page: MetaRecord) {
     accountId,
     accountName: String(page.name || state.displayName || 'Facebook Page'),
   } : null;
+}
+
+function accountDescriptors(state: ConnectionState): AccountDescriptor[] {
+  if (state.provider === 'facebook') {
+    const accountId = String(state.config.page_id || state.externalAccountId || '');
+    if (accountId) {
+      return [{
+        accountId,
+        accountName: String(state.config.page_name || state.displayName || 'Facebook Page'),
+      }];
+    }
+  } else {
+    const accountId = String(state.config.instagram_business_account_id || state.externalAccountId || '');
+    if (accountId) {
+      return [{
+        accountId,
+        accountName: String(state.config.instagram_username || state.config.account_name || state.displayName || 'Instagram'),
+      }];
+    }
+  }
+
+  return rows(state.config.pages)
+    .map((page) => legacyAccountDescriptor(state, page))
+    .filter((descriptor): descriptor is AccountDescriptor => Boolean(descriptor));
 }
 
 function conversationListUrl(provider: Provider, accountId: string, token: string, version: string, includePreviewMessage: boolean) {
@@ -213,6 +263,8 @@ async function insertMessages(input: {
     const { data: existing } = await admin
       .from('lead_messages')
       .select('external_message_id')
+      .eq('workspace_id', input.workspaceId)
+      .eq('connection_id', input.connectionId)
       .eq('provider', input.provider)
       .in('external_message_id', ids);
     const existingIds = new Set((existing || []).map((row) => row.external_message_id));
@@ -225,127 +277,152 @@ async function insertMessages(input: {
   return inserted;
 }
 
-export async function discoverMetaConversationHistory(options?: { maxPages?: number }): Promise<MetaHistoryResult> {
+async function discoverConnectionHistory(state: ConnectionState, maxPages: number): Promise<MetaHistoryResult> {
   const admin = createSupabaseAdminClient();
   const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
+  const errors: string[] = [];
+  let conversationsDiscovered = 0;
+  let messagesInserted = 0;
+
+  if (isAuthorizationContainer(state.config)) {
+    return { conversationsDiscovered, messagesInserted, errors };
+  }
+
+  for (const descriptor of accountDescriptors(state)) {
+    const token = pageTokenForAccount(state, descriptor.accountId);
+    if (!token) continue;
+
+    try {
+      const conversations = await pagedGraph(
+        conversationListUrl(state.provider, descriptor.accountId, token, version, true),
+        maxPages
+      );
+
+      for (const metaConversation of conversations) {
+        const customer = customerFromParticipants(metaConversation.participants, descriptor.accountId);
+        const customerId = String(customer?.id || '');
+        if (!customerId || customerId === descriptor.accountId) continue;
+        const externalThreadId = `${descriptor.accountId}:${customerId}`;
+
+        let { data: localConversation } = await admin
+          .from('lead_conversations')
+          .select('id,workspace_id,lead_id,last_message_at')
+          .eq('workspace_id', state.workspaceId)
+          .eq('connection_id', state.id)
+          .eq('provider', state.provider)
+          .eq('external_thread_id', externalThreadId)
+          .maybeSingle();
+
+        const previewMessages = rows(record(metaConversation.messages).data);
+        const preview = previewMessages[0];
+        const updatedAt = typeof metaConversation.updated_time === 'string'
+          ? new Date(metaConversation.updated_time).toISOString()
+          : preview && typeof preview.created_time === 'string'
+            ? new Date(preview.created_time).toISOString()
+            : new Date().toISOString();
+
+        if (!localConversation) {
+          const metadata = state.provider === 'facebook'
+            ? {
+                meta_page_id: descriptor.accountId,
+                meta_page_name: descriptor.accountName,
+                meta_conversation_id: String(metaConversation.id || ''),
+                scoped_thread_key: metaConversation.scoped_thread_key || metaConversation.id,
+                message_count: metaConversation.message_count || null,
+                history_discovered_at: new Date().toISOString(),
+              }
+            : {
+                instagram_business_account_id: descriptor.accountId,
+                account_name: descriptor.accountName,
+                meta_conversation_id: String(metaConversation.id || ''),
+                history_discovered_at: new Date().toISOString(),
+              };
+          const detail = preview ? messageDetails(preview) : { body: null, messageType: 'text' };
+          const { data: created, error: createError } = await admin
+            .from('lead_conversations')
+            .insert({
+              workspace_id: state.workspaceId,
+              connection_id: state.id,
+              provider: state.provider,
+              external_thread_id: externalThreadId,
+              external_contact_id: customerId,
+              customer_name: String(customer?.name || customer?.username || (state.provider === 'facebook' ? 'Messenger Customer' : 'Instagram Customer')),
+              customer_phone: null,
+              last_message_preview: detail.body,
+              last_message_at: updatedAt,
+              status: 'open',
+              unread_count: 0,
+              metadata,
+            })
+            .select('id,workspace_id,lead_id,last_message_at')
+            .single();
+          if (createError || !created) {
+            if (createError?.code === '23505') {
+              const retry = await admin
+                .from('lead_conversations')
+                .select('id,workspace_id,lead_id,last_message_at')
+                .eq('workspace_id', state.workspaceId)
+                .eq('connection_id', state.id)
+                .eq('provider', state.provider)
+                .eq('external_thread_id', externalThreadId)
+                .maybeSingle();
+              localConversation = retry.data;
+            } else {
+              throw createError || new Error('Unable to create historical conversation.');
+            }
+          } else {
+            localConversation = created;
+            conversationsDiscovered += 1;
+          }
+        }
+
+        if (localConversation && preview) {
+          messagesInserted += await insertMessages({
+            workspaceId: state.workspaceId,
+            conversationId: localConversation.id,
+            leadId: localConversation.lead_id,
+            connectionId: state.id,
+            provider: state.provider,
+            accountId: descriptor.accountId,
+            messages: [preview],
+          });
+        }
+      }
+    } catch (pageError) {
+      errors.push(`${state.provider}:${descriptor.accountId}: ${pageError instanceof Error ? pageError.message : String(pageError)}`);
+    }
+  }
+
+  return { conversationsDiscovered, messagesInserted, errors: errors.slice(0, 50) };
+}
+
+export async function discoverMetaConversationHistory(options?: { maxPages?: number; connectionIds?: string[] }): Promise<MetaHistoryResult> {
+  const admin = createSupabaseAdminClient();
   const maxPages = Math.max(1, Math.min(options?.maxPages || 12, 20));
   const errors: string[] = [];
   let conversationsDiscovered = 0;
   let messagesInserted = 0;
 
-  const { data: connections, error } = await admin
+  let connectionQuery = admin
     .from('integration_connections')
     .select('id')
     .in('status', ['connected', 'token_expiring'])
     .in('provider', ['facebook', 'instagram']);
+
+  if (options?.connectionIds?.length) {
+    connectionQuery = connectionQuery.in('id', options.connectionIds);
+  }
+
+  const { data: connections, error } = await connectionQuery;
   if (error) throw error;
 
   for (const connectionRow of connections || []) {
     const state = await loadConnectionState(connectionRow.id);
     if (!state) continue;
-    const pages = rows(state.config.pages);
-
-    for (const page of pages) {
-      const descriptor = accountDescriptor(state, page);
-      if (!descriptor) continue;
-      const token = pageTokenForAccount(state, descriptor.accountId);
-      if (!token) continue;
-
-      try {
-        const conversations = await pagedGraph(
-          conversationListUrl(state.provider, descriptor.accountId, token, version, true),
-          maxPages
-        );
-
-        for (const metaConversation of conversations) {
-          const customer = customerFromParticipants(metaConversation.participants, descriptor.accountId);
-          const customerId = String(customer?.id || '');
-          if (!customerId || customerId === descriptor.accountId) continue;
-          const externalThreadId = `${descriptor.accountId}:${customerId}`;
-
-          let { data: localConversation } = await admin
-            .from('lead_conversations')
-            .select('id,workspace_id,lead_id,last_message_at')
-            .eq('provider', state.provider)
-            .eq('external_thread_id', externalThreadId)
-            .maybeSingle();
-
-          const previewMessages = rows(record(metaConversation.messages).data);
-          const preview = previewMessages[0];
-          const updatedAt = typeof metaConversation.updated_time === 'string'
-            ? new Date(metaConversation.updated_time).toISOString()
-            : preview && typeof preview.created_time === 'string'
-              ? new Date(preview.created_time).toISOString()
-              : new Date().toISOString();
-
-          if (!localConversation) {
-            const metadata = state.provider === 'facebook'
-              ? {
-                  meta_page_id: descriptor.accountId,
-                  meta_page_name: descriptor.accountName,
-                  meta_conversation_id: String(metaConversation.id || ''),
-                  scoped_thread_key: metaConversation.scoped_thread_key || metaConversation.id,
-                  message_count: metaConversation.message_count || null,
-                  history_discovered_at: new Date().toISOString(),
-                }
-              : {
-                  instagram_business_account_id: descriptor.accountId,
-                  account_name: descriptor.accountName,
-                  meta_conversation_id: String(metaConversation.id || ''),
-                  history_discovered_at: new Date().toISOString(),
-                };
-            const detail = preview ? messageDetails(preview) : { body: null, messageType: 'text' };
-            const { data: created, error: createError } = await admin
-              .from('lead_conversations')
-              .insert({
-                connection_id: state.id,
-                provider: state.provider,
-                external_thread_id: externalThreadId,
-                external_contact_id: customerId,
-                customer_name: String(customer?.name || customer?.username || (state.provider === 'facebook' ? 'Messenger Traveler' : 'Instagram Traveler')),
-                customer_phone: `${state.provider}:${customerId}`,
-                last_message_preview: detail.body,
-                last_message_at: updatedAt,
-                status: 'open',
-                unread_count: 0,
-                metadata,
-              })
-              .select('id,workspace_id,lead_id,last_message_at')
-              .single();
-            if (createError || !created) {
-              if (createError?.code === '23505') {
-                const retry = await admin
-                  .from('lead_conversations')
-                  .select('id,workspace_id,lead_id,last_message_at')
-                  .eq('provider', state.provider)
-                  .eq('external_thread_id', externalThreadId)
-                  .maybeSingle();
-                localConversation = retry.data;
-              } else {
-                throw createError || new Error('Unable to create historical conversation.');
-              }
-            } else {
-              localConversation = created;
-              conversationsDiscovered += 1;
-            }
-          }
-
-          if (localConversation && preview) {
-            messagesInserted += await insertMessages({
-              workspaceId: localConversation.workspace_id,
-              conversationId: localConversation.id,
-              leadId: localConversation.lead_id,
-              connectionId: state.id,
-              provider: state.provider,
-              accountId: descriptor.accountId,
-              messages: [preview],
-            });
-          }
-        }
-      } catch (pageError) {
-        errors.push(`${state.provider}:${descriptor.accountId}: ${pageError instanceof Error ? pageError.message : String(pageError)}`);
-      }
-    }
+    const result = await discoverConnectionHistory(state, maxPages);
+    conversationsDiscovered += result.conversationsDiscovered;
+    messagesInserted += result.messagesInserted;
+    errors.push(...result.errors);
   }
 
   return { conversationsDiscovered, messagesInserted, errors: errors.slice(0, 50) };
@@ -369,12 +446,15 @@ export async function backfillMetaConversationMessages(conversationId: string, o
 
   const state = await loadConnectionState(conversation.connection_id);
   if (!state) return { conversationsDiscovered: 0, messagesInserted: 0, errors: ['Connection credentials unavailable.'] };
+  if (state.workspaceId !== conversation.workspace_id) {
+    return { conversationsDiscovered: 0, messagesInserted: 0, errors: ['Conversation and channel account belong to different workspaces.'] };
+  }
 
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
   const prefix = String(conversation.external_thread_id || '').split(':')[0];
   const accountId = state.provider === 'instagram'
-    ? String(metadata.instagram_business_account_id || prefix || '')
-    : String(metadata.meta_page_id || prefix || '');
+    ? String(metadata.instagram_business_account_id || state.config.instagram_business_account_id || state.externalAccountId || prefix || '')
+    : String(metadata.meta_page_id || state.config.page_id || state.externalAccountId || prefix || '');
   if (!accountId) return { conversationsDiscovered: 0, messagesInserted: 0, errors: ['Provider account ID unavailable.'] };
 
   const token = pageTokenForAccount(state, accountId);
@@ -392,7 +472,7 @@ export async function backfillMetaConversationMessages(conversationId: string, o
       if (!metaConversationId) return { conversationsDiscovered: 0, messagesInserted: 0, errors: ['Meta conversation could not be resolved.'] };
       await admin.from('lead_conversations').update({
         metadata: { ...metadata, meta_conversation_id: metaConversationId },
-      }).eq('id', conversation.id);
+      }).eq('workspace_id', conversation.workspace_id).eq('id', conversation.id);
     }
 
     const history = await pagedGraph(messageHistoryUrl(state.provider, metaConversationId, token, version), maxPages);
