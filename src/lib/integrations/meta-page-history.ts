@@ -67,7 +67,7 @@ function conversationUrl(
     ? 'id,updated_time,snippet,participants,link,can_reply,is_subscribed,message_count,scoped_thread_key'
     : 'id,updated_time,participants';
   url.searchParams.set('fields', `${baseFields},messages.limit(1){${messageFields}}`);
-  url.searchParams.set('limit', '50');
+  url.searchParams.set('limit', '25');
   if (afterCursor) url.searchParams.set('after', afterCursor);
   url.searchParams.set('access_token', token);
   return url;
@@ -82,7 +82,7 @@ async function pagedGraph(url: URL, maxPages: number) {
   for (let page = 0; page < maxPages && next; page += 1) {
     // Conversation discovery is incremental and resumable. Keep every provider
     // call short; a later Inbox cycle resumes from the saved Meta cursor.
-    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 4_000, retries: 0 });
+    const { response, data } = await metaFetchJson<MetaRecord>(next, {}, { timeoutMs: 12_000, retries: 1 });
     if (!response.ok) {
       const providerError = record(data.error);
       throw new Error(typeof providerError.message === 'string' ? providerError.message : `Meta request failed (${response.status}).`);
@@ -168,7 +168,7 @@ export async function discoverSelectedMetaPageHistory(input: {
   const [{ data: connection, error: connectionError }, { data: secret, error: secretError }] = await Promise.all([
     admin
       .from('integration_connections')
-      .select('id,provider,display_name,config,status')
+      .select('id,provider,display_name,config,status,workspace_id')
       .eq('id', input.connectionId)
       .maybeSingle(),
     admin
@@ -256,6 +256,7 @@ export async function discoverSelectedMetaPageHistory(input: {
       const { data: existing, error: existingError } = await admin
         .from('lead_conversations')
         .select('id,lead_id,metadata')
+        .eq('workspace_id', connection.workspace_id)
         .eq('provider', input.provider)
         .eq('external_thread_id', externalThreadId)
         .maybeSingle();
@@ -284,6 +285,7 @@ export async function discoverSelectedMetaPageHistory(input: {
         const { data: created, error: createError } = await admin
           .from('lead_conversations')
           .insert({
+            workspace_id: connection.workspace_id,
             connection_id: input.connectionId,
             provider: input.provider,
             external_thread_id: externalThreadId,
@@ -303,6 +305,7 @@ export async function discoverSelectedMetaPageHistory(input: {
             const retry = await admin
               .from('lead_conversations')
               .select('id,lead_id')
+              .eq('workspace_id', connection.workspace_id)
               .eq('provider', input.provider)
               .eq('external_thread_id', externalThreadId)
               .maybeSingle();

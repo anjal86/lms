@@ -189,7 +189,13 @@ export async function GET(request: Request) {
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     scopedConnectionIds = [selectedConnection.id];
-    connectionScopeFilter = `connection_id.eq.${selectedConnection.id}`;
+    let legacyMatch = '';
+    if (['facebook', 'instagram'].includes(selectedConnection.provider) && selectedConnection.external_account_id) {
+      legacyMatch = `,and(connection_id.is.null,provider.eq.${selectedConnection.provider},external_thread_id.like.${selectedConnection.external_account_id}:*)`;
+    } else if (selectedConnection.provider === 'whatsapp') {
+      legacyMatch = `,and(connection_id.is.null,provider.eq.whatsapp)`;
+    }
+    connectionScopeFilter = `connection_id.eq.${selectedConnection.id}${legacyMatch}`;
   } else if (provider !== 'all') {
     scopedConnectionIds = (activeConnections || []).filter((connection) => connection.provider === provider).map((connection) => connection.id);
     if (scopedConnectionIds.length === 0) {

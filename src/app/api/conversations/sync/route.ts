@@ -28,6 +28,38 @@ function safeSecretMatch(actual: string | null, expected: string | undefined) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api']);
+
+function sanitizeProvider(value: string | null) {
+  const provider = (value || '').toLowerCase();
+  return PROVIDERS.has(provider) ? provider : '';
+}
+
+function sanitizeUuid(value: string | null) {
+  const trimmed = value?.trim() || '';
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
+    ? trimmed
+    : '';
+}
+
+function referrerScope(request: Request) {
+  const referrer = request.headers.get('referer');
+  if (!referrer) return { accountId: '', accountProvider: '' };
+  try {
+    const requestUrl = new URL(request.url);
+    const referrerUrl = new URL(referrer);
+    if (referrerUrl.origin !== requestUrl.origin || referrerUrl.pathname !== '/inbox') {
+      return { accountId: '', accountProvider: '' };
+    }
+    return {
+      accountId: sanitizeUuid(referrerUrl.searchParams.get('accountId')),
+      accountProvider: sanitizeProvider(referrerUrl.searchParams.get('accountProvider')),
+    };
+  } catch {
+    return { accountId: '', accountProvider: '' };
+  }
+}
+
 function readCookie(request: Request, name: string) {
   const cookieHeader = request.headers.get('cookie') || '';
   for (const pair of cookieHeader.split(';')) {
@@ -55,6 +87,31 @@ function rows(value: unknown): Array<Record<string, unknown>> {
 }
 
 async function resolveRequestedScope(request: Request): Promise<{ requested: boolean; scope: ProviderScope | null }> {
+  const ref = referrerScope(request);
+  const admin = createSupabaseAdminClient();
+
+  if (ref.accountId) {
+    const { data: connection } = await admin
+      .from('integration_connections')
+      .select('id,provider,config,external_account_id')
+      .eq('id', ref.accountId)
+      .in('status', ['connected', 'token_expiring'])
+      .maybeSingle();
+
+    console.log('resolveRequestedScope ref:', ref, 'connection:', connection?.id);
+
+    if (connection && (connection.provider === 'facebook' || connection.provider === 'instagram')) {
+      const provider = connection.provider;
+      const accountId = connection.external_account_id;
+      const pageId = String(record(connection.config).page_id || '');
+      if (accountId && pageId) {
+        return { requested: true, scope: { provider: provider as 'facebook' | 'instagram', accountId, connectionId: connection.id, pageId } };
+      }
+    }
+    return { requested: true, scope: null };
+  }
+
+  // Legacy cookie fallback
   const cookieValue = readCookie(request, 'inbox_page_filter');
   if (!cookieValue || cookieValue === 'all') return { requested: false, scope: null };
 
@@ -66,34 +123,21 @@ async function resolveRequestedScope(request: Request): Promise<{ requested: boo
     return { requested: true, scope: null };
   }
 
-  const admin = createSupabaseAdminClient();
   const { data: connections, error } = await admin
     .from('integration_connections')
-    .select('id,provider,config')
+    .select('id,provider,config,external_account_id')
     .eq('provider', provider)
+    .eq('external_account_id', accountId)
     .in('status', ['connected', 'token_expiring']);
   if (error) throw error;
 
   for (const connection of connections || []) {
-    const pages = rows(record(connection.config).pages);
-    for (const page of pages) {
-      const pageId = String(page.id || '');
-      if (!pageId) continue;
-      if (provider === 'facebook' && pageId === accountId) {
-        return {
-          requested: true,
-          scope: { provider, accountId, connectionId: connection.id, pageId },
-        };
-      }
-      if (provider === 'instagram') {
-        const instagramId = String(record(page.instagram_business_account).id || '');
-        if (instagramId === accountId) {
-          return {
-            requested: true,
-            scope: { provider, accountId, connectionId: connection.id, pageId },
-          };
-        }
-      }
+    const pageId = String(record(connection.config).page_id || '');
+    if (connection.external_account_id && pageId) {
+      return {
+        requested: true,
+        scope: { provider: provider as 'facebook' | 'instagram', accountId: connection.external_account_id, connectionId: connection.id, pageId },
+      };
     }
   }
 
