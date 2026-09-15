@@ -5,6 +5,7 @@ import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider, type IntegrationProvider } from '@/lib/integrations/catalog';
 import { decryptIntegrationSecret, decryptSecretPayload, encryptIntegrationSecret, encryptSecretPayload } from '@/lib/integrations/secrets';
+import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -255,7 +256,7 @@ export async function POST(request: Request) {
       ? secretPayload.page_access_tokens.map(asRecord)
       : [];
 
-    const created = [];
+    const created: Array<{ id: string; accountId: string; provider: IntegrationProvider; display_name: string }> = [];
     for (const account of selected) {
       const accountId = String(account.id);
       const { data: matchingConnections, error: existingError } = await admin
@@ -361,7 +362,24 @@ export async function POST(request: Request) {
       .eq('id', authorization.id)
       .eq('workspace_id', actor.profile.workspace_id);
 
-    return NextResponse.json({ connections: created }, { status: 201 });
+    let historySync: { conversationsDiscovered: number; messagesInserted: number; errors: string[] } | null = null;
+    if ((provider === 'facebook' || provider === 'instagram') && created.length > 0) {
+      try {
+        historySync = await discoverMetaConversationHistory({
+          connectionIds: created.map((connection) => connection.id),
+          maxPages: 4,
+        });
+      } catch (historyError) {
+        console.warn('Initial Meta history sync failed after connecting accounts:', historyError);
+        historySync = {
+          conversationsDiscovered: 0,
+          messagesInserted: 0,
+          errors: [historyError instanceof Error ? historyError.message : 'Initial history sync failed.'],
+        };
+      }
+    }
+
+    return NextResponse.json({ connections: created, historySync }, { status: 201 });
   } catch (error) {
     console.error('Provider account selection failed:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to connect selected accounts.' }, { status: 500 });
