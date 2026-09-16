@@ -79,11 +79,18 @@ const migrations = [
     file: '202609160076_ai_agent_management.sql',
     marker: "select to_regprocedure('public.save_workspace_ai_agent(uuid,text,text,text,text,text,text[],text,boolean,numeric,numeric,integer,integer,text,text[],boolean,uuid[])') is not null",
   },
+  {
+    file: '202609160077_ai_agent_routing_interop.sql',
+    marker: "select position('v_ai_auto' in pg_get_functiondef(to_regprocedure('public.route_live_inbound_conversation()'))) > 0 and position('v_agent.mode <> ''assist''' in pg_get_functiondef(to_regprocedure('public.queue_live_ai_agent_message()'))) > 0",
+  },
+  {
+    file: '202609160078_ai_assist_human_ownership.sql',
+    marker: "select exists(select 1 from pg_trigger where tgname='trg_normalize_ai_agent_mode_settings' and not tgisinternal)",
+  },
 ];
 
 for (const migration of migrations) {
-  const applied = psql(['-tAc', migration.marker]).trim() === 't';
-  if (applied) {
+  if (psql(['-tAc', migration.marker]).trim() === 't') {
     console.log(`  ✓ ${migration.file}`);
     continue;
   }
