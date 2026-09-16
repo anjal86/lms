@@ -68,6 +68,10 @@ const migrations = [
     file: '202609160083_conversation_ad_attribution.sql',
     marker: "select to_regclass('public.conversation_attributions') is not null and to_regclass('public.ad_knowledge') is not null and exists(select 1 from pg_trigger where tgname='trg_capture_message_ad_attribution' and not tgisinternal)",
   },
+  {
+    file: '202609160084_pending_ad_referrals.sql',
+    marker: "select to_regclass('public.pending_ad_referrals') is not null",
+  },
 ];
 
 for (const migration of migrations) {
