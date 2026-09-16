@@ -10,6 +10,8 @@ import {
   type AiProviderDecisionResult,
 } from './llm-provider';
 
+type ScheduledDecision = AiAgentDecision & { source_message_id?: string };
+
 type AiJob = {
   id: string;
   workspace_id: string;
@@ -19,7 +21,7 @@ type AiJob = {
   attempt_count: number;
   max_attempts: number;
   phase?: 'decide' | 'send';
-  scheduled_decision?: AiAgentDecision | null;
+  scheduled_decision?: ScheduledDecision | null;
   send_due_at?: string | null;
   run_id?: string | null;
 };
@@ -120,13 +122,13 @@ async function writeEvent(input: {
   });
 }
 
-async function createRun(job: AiJob, agent: AgentRow, knowledge: AiKnowledgeChunk[]) {
+async function createRun(job: AiJob, agent: AgentRow, knowledge: AiKnowledgeChunk[], sourceMessageId: string) {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin.from('ai_runs').insert({
     workspace_id: job.workspace_id,
     agent_id: agent.id,
     conversation_id: job.conversation_id,
-    source_message_id: job.source_message_id,
+    source_message_id: sourceMessageId,
     job_id: job.id,
     provider_config_id: agent.provider_config_id,
     provider: agent.provider,
@@ -210,6 +212,7 @@ async function failJob(job: AiJob, error: unknown) {
 
   await admin.from('ai_agent_jobs').update({
     status: retry ? 'queued' : 'failed',
+    phase: job.phase || 'decide',
     attempt_count: attempts,
     next_attempt_at: retry ? new Date(Date.now() + delaySeconds * 1000).toISOString() : new Date().toISOString(),
     locked_at: null,
@@ -403,25 +406,26 @@ async function retrieveKnowledge(job: AiJob, inbound: MessageRow, adAttribution:
   })).filter((row: AiKnowledgeChunk) => row.content);
 }
 
-async function scheduleReply(job: AiJob, decision: AiAgentDecision, runId: string, delaySeconds: number) {
+async function scheduleReply(job: AiJob, decision: AiAgentDecision, runId: string, delaySeconds: number, sourceMessageId: string) {
   const admin = createSupabaseAdminClient();
   const due = new Date(Date.now() + Math.max(0, Math.round(delaySeconds * 1000))).toISOString();
+  const scheduledDecision: ScheduledDecision = { ...decision, source_message_id: sourceMessageId };
   await admin.from('ai_agent_jobs').update({
     status: 'queued',
     phase: 'send',
-    scheduled_decision: decision,
+    scheduled_decision: scheduledDecision,
     send_due_at: due,
     next_attempt_at: due,
     locked_at: null,
     run_id: runId,
     last_error: null,
     updated_at: new Date().toISOString(),
-    result: { scheduled: true, send_due_at: due, decision },
+    result: { scheduled: true, send_due_at: due, decision: scheduledDecision },
   }).eq('id', job.id);
   job.phase = 'send';
-  job.scheduled_decision = decision;
+  job.scheduled_decision = scheduledDecision;
   job.send_due_at = due;
-  await updateRun(runId, { status: 'scheduled', action: 'reply', confidence: decision.confidence, intent: decision.intent, metadata: { send_due_at: due } });
+  await updateRun(runId, { status: 'scheduled', action: 'reply', confidence: decision.confidence, intent: decision.intent, metadata: { send_due_at: due, source_message_id: sourceMessageId } });
   return due;
 }
 
@@ -429,16 +433,17 @@ async function sendScheduledReply(job: AiJob, agent: AgentRow, conversation: Con
   const admin = createSupabaseAdminClient();
   const decision = job.scheduled_decision;
   if (!decision || decision.action !== 'reply' || !decision.reply) throw new Error('Scheduled AI reply payload is missing or invalid.');
-  const source = messages.find((message) => message.id === job.source_message_id) || null;
+  const evaluatedSourceMessageId = typeof decision.source_message_id === 'string' && decision.source_message_id ? decision.source_message_id : job.source_message_id;
+  const source = messages.find((message) => message.id === evaluatedSourceMessageId) || null;
   if (!source) {
-    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'source_message_missing' } });
+    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'source_message_missing', source_message_id: evaluatedSourceMessageId } });
     await completeJob(job, { skipped: true, reason: 'source_message_missing' });
     return { processed: true, skipped: true };
   }
 
   const latest = latestInbound(messages);
   if (latest && latest.id !== source.id && new Date(latest.sent_at).getTime() > new Date(source.sent_at).getTime()) {
-    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'newer_customer_message', newer_message_id: latest.id } });
+    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'newer_customer_message', source_message_id: source.id, newer_message_id: latest.id } });
     await completeJob(job, { skipped: true, reason: 'newer_customer_message' });
     return { processed: true, skipped: true };
   }
@@ -446,14 +451,14 @@ async function sendScheduledReply(job: AiJob, agent: AgentRow, conversation: Con
     await admin.from('conversation_ai_states').upsert({
       conversation_id: conversation.id, workspace_id: conversation.workspace_id, agent_id: agent.id, state: 'paused', last_human_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }, { onConflict: 'conversation_id' });
-    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'human_replied_before_ai_send' } });
+    await finishRun(job.run_id, 'cancelled', { metadata: { reason: 'human_replied_before_ai_send', source_message_id: source.id } });
     await completeJob(job, { skipped: true, reason: 'human_replied_before_ai_send' });
     return { processed: true, skipped: true };
   }
 
   const { data: stateBeforeSend } = await admin.from('conversation_ai_states').select('state').eq('conversation_id', conversation.id).maybeSingle();
   if (stateBeforeSend && ['paused','handed_off','disabled'].includes(String(stateBeforeSend.state))) {
-    await finishRun(job.run_id, 'cancelled', { metadata: { reason: `state_${stateBeforeSend.state}_before_send` } });
+    await finishRun(job.run_id, 'cancelled', { metadata: { reason: `state_${stateBeforeSend.state}_before_send`, source_message_id: source.id } });
     await completeJob(job, { skipped: true, reason: `state_${stateBeforeSend.state}_before_send` });
     return { processed: true, skipped: true };
   }
@@ -474,6 +479,13 @@ async function sendScheduledReply(job: AiJob, agent: AgentRow, conversation: Con
   }, { onConflict: 'conversation_id' });
   await writeEvent({ workspaceId: conversation.workspace_id, conversationId: conversation.id, contactId: conversation.contact_id, eventType: 'ai_replied', payload: { agent_id: agent.id, message_id: aiMessageId, confidence: decision.confidence, intent: decision.intent } });
   await finishRun(job.run_id, 'succeeded', { action: 'reply', confidence: decision.confidence, intent: decision.intent });
+
+  const boundary = new Date(source.sent_at).getTime();
+  const coveredInboundIds = messages
+    .filter((message) => message.direction === 'inbound' && new Date(message.sent_at).getTime() <= boundary)
+    .map((message) => message.id)
+    .filter((id) => id !== job.source_message_id);
+  await completeSiblingJobs(conversation.id, coveredInboundIds);
   await completeJob(job, decision as unknown as Record<string, unknown>);
   return { processed: true, action: 'reply', messageId: aiMessageId };
 }
@@ -544,7 +556,7 @@ export async function processAiAgentJob(job: AiJob) {
     try { adKnowledge = await resolveAdKnowledge(job.workspace_id, adAttribution); }
     catch (error) { console.warn('AI ad knowledge lookup failed:', error instanceof Error ? error.message : error); }
     const knowledge = await retrieveKnowledge(job, inbound, adAttribution);
-    const runId = await createRun(job, agent, knowledge);
+    const runId = await createRun(job, agent, knowledge, inbound.id);
 
     const providerResult = await decideWithAiProviderDetailed(job.workspace_id, {
       name: agent.name,
@@ -597,18 +609,8 @@ export async function processAiAgentJob(job: AiJob) {
     const minDelay = Math.max(0, Number(agent.response_delay_min_seconds) || 0);
     const maxDelay = Math.max(minDelay, Number(agent.response_delay_max_seconds) || minDelay);
     const delaySeconds = minDelay + Math.random() * (maxDelay - minDelay);
-    if (delaySeconds > 0.25) {
-      const due = await scheduleReply(job, decision, runId, delaySeconds);
-      return { processed: true, action: 'scheduled', sendDueAt: due };
-    }
-
-    job.phase = 'send';
-    job.scheduled_decision = decision;
-    job.run_id = runId;
-    const result = await sendScheduledReply(job, agent, conversation, messages);
-    const processedInboundIds = messages.filter((message) => message.direction === 'inbound').map((message) => message.id);
-    await completeSiblingJobs(conversation.id, processedInboundIds.filter((id) => id !== job.source_message_id));
-    return result;
+    const due = await scheduleReply(job, decision, runId, Math.max(0, delaySeconds), inbound.id);
+    return { processed: true, action: 'scheduled', sendDueAt: due };
   } catch (error) {
     const failure = await failJob(job, error);
     return { processed: false, ...failure };
