@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processMetaHistorySyncJob } from '@/lib/integrations/meta-history-worker';
+import { processAiAgentJob } from '@/lib/ai/agent-worker';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
   claimIntegrationSyncJob,
   completeIntegrationSyncJob,
@@ -20,18 +22,45 @@ function safeSecretMatch(actual: string | null, expected: string | undefined) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+async function processOneAiJob() {
+  const admin = createSupabaseAdminClient();
+
+  await admin.from('ai_agent_jobs').update({
+    status: 'queued',
+    locked_at: null,
+    next_attempt_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_error: 'Recovered after an interrupted AI worker cycle.',
+  })
+    .eq('status', 'processing')
+    .lt('locked_at', new Date(Date.now() - 5 * 60_000).toISOString());
+
+  const { data, error } = await admin.rpc('claim_ai_agent_job');
+  if (error) {
+    // Older databases may not have the AI migration yet while a deployment is rolling out.
+    if (error.code !== 'PGRST202' && error.code !== '42883') console.error('AI worker claim failed:', error.message);
+    return null;
+  }
+  const job = Array.isArray(data) ? data[0] : data;
+  if (!job) return null;
+  return { jobId: job.id, result: await processAiAgentJob(job) };
+}
+
 export async function POST(request: Request) {
   if (!safeSecretMatch(request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || null, process.env.INTEGRATION_SYNC_SECRET?.trim())) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
+
+  const ai = await processOneAiJob();
+
   if (!isRedisConfigured()) {
-    return NextResponse.json({ error: 'Redis is not configured.' }, { status: 503 });
+    return NextResponse.json({ success: Boolean(ai), processed: ai ? 1 : 0, ai, warning: 'Redis is not configured; integration history sync is unavailable.' }, { status: ai ? 200 : 503 });
   }
 
   const recovered = await recoverStaleIntegrationSyncJobs(20);
   const claimed = await claimIntegrationSyncJob();
   if (!claimed) {
-    return NextResponse.json({ success: true, processed: 0, recovered });
+    return NextResponse.json({ success: true, processed: ai ? 1 : 0, ai, recovered });
   }
 
   try {
@@ -54,7 +83,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      processed: 1,
+      processed: 1 + (ai ? 1 : 0),
+      ai,
       recovered,
       jobId: claimed.job.id,
       continuing: output.shouldContinue,
@@ -70,7 +100,8 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       success: false,
-      processed: 1,
+      processed: 1 + (ai ? 1 : 0),
+      ai,
       recovered,
       jobId: claimed.job.id,
       error: message,
