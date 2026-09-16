@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret } from '@/lib/integrations/secrets';
 import { aiProviderPreset, type AiApiStyle, type AiProviderKind } from './provider-catalog';
+import type { AiAdAttribution, AiAdKnowledge } from './ad-context';
 
 const ConfidenceSchema = z.preprocess((value) => {
   if (value === null || value === undefined || value === '') return 0;
@@ -56,6 +57,8 @@ export type AiConversationContext = {
   customerEmail?: string | null;
   lifecycle?: string | null;
   opportunity?: Record<string, unknown> | null;
+  adAttribution?: AiAdAttribution | null;
+  adKnowledge?: AiAdKnowledge | null;
   conversation: Array<{
     direction: 'inbound' | 'outbound' | 'internal';
     body: string | null;
@@ -100,6 +103,9 @@ function systemPrompt(agent: AiAgentConfig) {
     `Tone: ${agent.tone || 'professional and friendly'}.`,
     languageInstruction,
     'Never invent prices, policies, availability, documents, promises, account status, or business facts that are not explicitly present in the supplied context.',
+    'When AD ORIGIN is present, treat vague references such as “price?”, “details?”, “is this available?”, “interested”, or similar short replies as referring to that ad unless the customer clearly changes the subject.',
+    'AD KNOWLEDGE is the workspace-approved interpretation of that ad and is more authoritative than creative copy. If AD KNOWLEDGE is missing, do not invent offer terms that are not explicit in the ad origin or CRM context.',
+    'If AD KNOWLEDGE is marked expired or upcoming, never present the offer as currently active. Explain the limitation or choose handoff when the current offer cannot be verified safely.',
     'If the customer asks for a human, raises a complaint/payment dispute/refund/legal issue, or the available context is insufficient for a safe answer, choose handoff.',
     'If no response is needed, choose noop.',
     'Return only a JSON object with keys: action, reply, confidence, intent, handoff_reason, suggested_lifecycle.',
@@ -108,6 +114,8 @@ function systemPrompt(agent: AiAgentConfig) {
 }
 
 function userPrompt(context: AiConversationContext) {
+  const attribution = context.adAttribution;
+  const knowledge = context.adKnowledge;
   return [
     '# CRM context',
     `Workspace: ${context.workspaceName}`,
@@ -116,6 +124,12 @@ function userPrompt(context: AiConversationContext) {
     `Email: ${context.customerEmail || 'Unknown'}`,
     `Lifecycle: ${context.lifecycle || 'Unknown'}`,
     context.opportunity ? `Opportunity: ${JSON.stringify(context.opportunity)}` : 'Opportunity: none',
+    '',
+    '# AD ORIGIN',
+    attribution ? JSON.stringify(attribution) : 'none',
+    '',
+    '# AD KNOWLEDGE',
+    knowledge ? JSON.stringify(knowledge) : 'none',
     '',
     '# Conversation',
     transcript(context),
