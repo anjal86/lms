@@ -43,7 +43,7 @@ export default function WorkspaceSettingsHubPage() {
     { href: '/connections', title: 'Connections', description: 'Manage messaging channels, webhooks and external system connections.', icon: PlugZap, visible: true },
     { href: '/settings/ai-providers', title: 'AI Providers', description: 'Bring your own OpenAI, Claude, Gemini, Mistral, OpenRouter or compatible LLM key.', icon: KeyRound, visible: true },
     { href: '/settings/ai-agents', title: 'AI Agents', description: 'Configure workspace agents for assisted replies, automatic responses and human handoff.', icon: Bot, visible: true },
-    { href: '/settings/ad-knowledge', title: 'Ad Knowledge', description: 'Map paid-ad IDs to approved offers and facts so AI understands vague replies from ad-origin chats.', icon: Megaphone, visible: true },
+    { href: '/settings/ad-knowledge', title: 'Ads & AI Context', description: 'Automatically capture Meta ad creative, campaign and status for ad-origin chats; add optional business overrides only when needed.', icon: Megaphone, visible: true },
     { href: '/templates', title: 'Saved replies', description: 'Reusable customer replies available to the communication workflow.', icon: MessageSquareQuote, visible: true },
     { href: '/team/users', title: 'Users', description: 'Manage workspace members, roles and availability.', icon: UserCog, visible: true },
     { href: '/settings/automations', title: 'Automations', description: 'Workflow rules that progress or route work automatically.', icon: Zap, visible: can('automations.view') },
