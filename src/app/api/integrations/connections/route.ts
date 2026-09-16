@@ -7,10 +7,21 @@ import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } 
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { enqueueMetaHistorySyncJob } from '@/lib/redis/integration-sync-queue';
 import { isRedisConfigured } from '@/lib/redis/client';
+import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const CONNECTIONS_CACHE_TTL_SECONDS = 15;
+
+type ConnectionsPayload = {
+  connections: unknown[];
+  catalog: unknown[];
+  setup: unknown;
+  migrationRequired: boolean;
+  message?: string;
+};
 
 const ManualConnectionSchema = z.object({
   provider: z.enum(['email', 'website', 'api']),
@@ -34,14 +45,32 @@ export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
+  const requestUrl = new URL(request.url);
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+  const workspaceId = actor.profile.workspace_id;
+  const appUrl = publicAppUrl(request.url);
+  const cacheKey = redisCacheKey({
+    workspaceId,
+    namespace: 'integrations:connections',
+    dimensions: { appUrl },
+  });
+
+  let cacheStatus: RedisCacheStatus = 'BYPASS';
+  if (!forceRefresh) {
+    const cached = await readRedisJson<ConnectionsPayload>(cacheKey);
+    cacheStatus = cached.status;
+    if (cached.value) {
+      return NextResponse.json(cached.value, { headers: cacheResponseHeaders('HIT') });
+    }
+  }
+
   const { data, error } = await actor.supabase
     .from('integration_connections')
     .select('id,workspace_id,provider,display_name,external_account_id,status,capabilities,config,visibility_scope,connected_by,last_sync_at,last_event_at,last_error,created_at,updated_at')
-    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('workspace_id', workspaceId)
     .order('provider', { ascending: true })
     .order('display_name', { ascending: true });
 
-  const appUrl = publicAppUrl(request.url);
   const catalog = integrationCatalogWithEnvStatus();
   const setup = buildIntegrationSetup(appUrl);
 
@@ -64,7 +93,9 @@ export async function GET(request: Request) {
     return config.hidden_from_account_picker !== true && config.removed_from_connections_ui !== true;
   });
 
-  return NextResponse.json({ connections, catalog, setup, migrationRequired: false });
+  const payload: ConnectionsPayload = { connections, catalog, setup, migrationRequired: false };
+  await writeRedisJson(cacheKey, payload, CONNECTIONS_CACHE_TTL_SECONDS);
+  return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
 }
 
 export async function POST(request: Request) {
