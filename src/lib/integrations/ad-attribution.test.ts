@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mergeReferralObjects, normalizeMetaAdAttribution } from './ad-attribution';
 
 describe('ad attribution normalization', () => {
-  it('normalizes Click-to-WhatsApp referral data', () => {
+  it('normalizes Click-to-WhatsApp referral data and promotes source_id to ad_id', () => {
     const result = normalizeMetaAdAttribution({
       source_url: 'https://www.facebook.com/ads/example',
       source_id: '120203456789012345',
@@ -18,6 +18,7 @@ describe('ad attribution normalization', () => {
       provider: 'whatsapp',
       platform: 'meta',
       source_id: '120203456789012345',
+      ad_id: '120203456789012345',
       headline: 'Study in Japan — October Intake',
       ctwa_clid: 'clid-123',
       media_url: 'https://example.com/creative.jpg',
@@ -60,5 +61,15 @@ describe('ad attribution normalization', () => {
 
   it('does not treat an organic source id as paid attribution by itself', () => {
     expect(normalizeMetaAdAttribution({ source: 'POST', source_id: 'organic-post-1', type: 'OPEN_THREAD' }, 'instagram')).toBeNull();
+  });
+
+  it('does not promote an organic post source_id to ad_id', () => {
+    const result = normalizeMetaAdAttribution({
+      source_type: 'post',
+      source_id: '120203456789099999',
+      ctwa_clid: 'clid-post-referral',
+    }, 'whatsapp');
+    expect(result?.source_id).toBe('120203456789099999');
+    expect(result?.ad_id).toBeNull();
   });
 });
