@@ -60,6 +60,10 @@ const migrations = [
     file: '202609160081_ai_agent_provider_binding.sql',
     marker: "select to_regprocedure('public.save_workspace_ai_agent(uuid,text,text,text,uuid,text,text,text[],text,boolean,numeric,numeric,integer,integer,text,text[],boolean,uuid[])') is not null",
   },
+  {
+    file: '202609160082_ai_provider_routing_integrity.sql',
+    marker: "select exists(select 1 from pg_trigger where tgname='trg_protect_ai_provider_identity' and not tgisinternal) and position('pc.is_active = true' in pg_get_functiondef(to_regprocedure('public.route_live_inbound_conversation()'))) > 0 and position('pc.is_active = true' in pg_get_functiondef(to_regprocedure('public.queue_live_ai_agent_message()'))) > 0",
+  },
 ];
 
 for (const migration of migrations) {
