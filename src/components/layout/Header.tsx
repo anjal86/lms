@@ -63,7 +63,7 @@ export default function Header() {
     ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users }] : []),
     ...(!isAgent ? [{ label: 'Team', href: '/team', icon: Users }] : []),
     ...(!isAgent && can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3 }] : []),
-    ...(!isAgent ? [{ label: 'Settings', href: '/settings/workspace', icon: Settings }] : []),
+    { label: 'Settings', href: '/settings', icon: Settings },
   ];
 
   const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
