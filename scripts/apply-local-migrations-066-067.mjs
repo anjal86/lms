@@ -63,6 +63,10 @@ const migrations = [
     file: '202609150072_conversation_team_queues.sql',
     marker: "select to_regclass('public.conversation_teams') is not null and to_regclass('public.conversation_team_members') is not null and to_regprocedure('public.set_conversation_team(uuid,text,boolean,text)') is not null",
   },
+  {
+    file: '202609150073_conversation_team_management.sql',
+    marker: "select to_regprocedure('public.save_conversation_team(uuid,text,text,text,boolean,uuid[])') is not null",
+  },
 ];
 
 for (const migration of migrations) {
