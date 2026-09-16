@@ -133,12 +133,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: 'The attached AI agent is not active.' }, { status: 409 });
     }
 
-    const { error: unassignError } = await actor.supabase
-      .from('lead_conversations')
-      .update({ assigned_to: null, updated_at: new Date().toISOString() })
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('id', id);
-    if (unassignError) return NextResponse.json({ error: 'Unable to release human ownership.' }, { status: 500 });
+    // Autonomous modes reclaim the conversation. Assist mode intentionally stays
+    // alongside the human owner because it only creates drafts for staff to send.
+    if (agent.mode !== 'assist') {
+      const { error: unassignError } = await actor.supabase
+        .from('lead_conversations')
+        .update({ assigned_to: null, updated_at: new Date().toISOString() })
+        .eq('workspace_id', actor.profile.workspace_id)
+        .eq('id', id);
+      if (unassignError) return NextResponse.json({ error: 'Unable to release human ownership.' }, { status: 500 });
+    }
 
     const { error } = await actor.supabase.from('conversation_ai_states').update({
       state: 'active',
