@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { serverSupabaseUrl } from '@/lib/supabase/server-config';
 
 export type WorkspaceRole = 'owner' | 'admin' | 'manager' | 'agent';
 
@@ -27,7 +28,7 @@ function bearerToken(request: Request) {
 }
 
 function userScopedBearerClient(token: string) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = serverSupabaseUrl();
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) throw new Error('Supabase server configuration is missing.');
 
