@@ -36,9 +36,17 @@ type ConversationExceptions = {
   next_actions_due: number;
   automation_failures_24h: number;
 };
+type DashboardSnapshot = {
+  summary: DashboardSummary;
+  pipeline: PipelineSummary;
+  exceptions: ConversationExceptions;
+  fetchedAt: number;
+};
 
 const EMPTY_SUMMARY: DashboardSummary = { overdue_followups: 0, sla_breaches: 0, unassigned_leads: 0, stale_leads: 0, payments_due: 0, passport_risks: 0 };
+const EMPTY_PIPELINE: PipelineSummary = { won_count: 0, won_value: 0, visible_count: 0, my_count: 0 };
 const EMPTY_EXCEPTIONS: ConversationExceptions = { needs_reply: 0, sla_overdue: 0, unassigned: 0, urgent: 0, next_actions_due: 0, automation_failures_24h: 0 };
+const DASHBOARD_RUNTIME_CACHE = new Map<string, DashboardSnapshot>();
 
 function Metric({ title, value, hint, href, icon: Icon, danger = false }: { title: string; value: number | string; hint: string; href: string; icon: typeof AlertTriangle; danger?: boolean }) {
   return <Link href={href} className={`group rounded-xl border p-4 transition hover:-translate-y-0.5 hover:shadow-sm ${danger ? 'border-rose-100 bg-rose-50/50' : 'border-zinc-200 bg-white'}`}>
@@ -55,10 +63,12 @@ export default function DashboardPage() {
   const { config, term, moduleEnabled } = useWorkspace();
   const { can } = useWorkspacePermissions();
   const isAgent = currentUser.role === 'agent';
-  const [summary, setSummary] = useState<DashboardSummary>(EMPTY_SUMMARY);
-  const [pipeline, setPipeline] = useState<PipelineSummary>({ won_count: 0, won_value: 0, visible_count: 0, my_count: 0 });
-  const [exceptions, setExceptions] = useState<ConversationExceptions>(EMPTY_EXCEPTIONS);
-  const [loading, setLoading] = useState(true);
+  const runtimeCacheKey = `${currentUser.id}::${config.workspace.id}`;
+  const initialSnapshot = DASHBOARD_RUNTIME_CACHE.get(runtimeCacheKey);
+  const [summary, setSummary] = useState<DashboardSummary>(() => initialSnapshot?.summary || EMPTY_SUMMARY);
+  const [pipeline, setPipeline] = useState<PipelineSummary>(() => initialSnapshot?.pipeline || EMPTY_PIPELINE);
+  const [exceptions, setExceptions] = useState<ConversationExceptions>(() => initialSnapshot?.exceptions || EMPTY_EXCEPTIONS);
+  const [loading, setLoading] = useState(() => !initialSnapshot);
   const [error, setError] = useState<string | null>(null);
 
   const leadPlural = term('lead_plural', 'Opportunities');
@@ -78,51 +88,66 @@ export default function DashboardPage() {
     }
   }, [config.workspace.currency, config.workspace.locale]);
 
-  const loadSummary = useCallback(async () => {
-    setLoading(true);
+  const loadSummary = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const quiet = options?.quiet === true;
+    const force = options?.force === true;
+    if (!quiet) setLoading(true);
     setError(null);
     try {
+      const suffix = force ? '?refresh=1' : '';
       const [summaryResponse, exceptionResponse] = await Promise.all([
-        fetch('/api/dashboard/summary', { cache: 'no-store' }),
-        fetch('/api/dashboard/conversation-exceptions', { cache: 'no-store' }),
+        fetch(`/api/dashboard/summary${suffix}`, { cache: 'no-store' }),
+        fetch(`/api/dashboard/conversation-exceptions${suffix}`, { cache: 'no-store' }),
       ]);
       const payload = await summaryResponse.json().catch(() => ({}));
       if (!summaryResponse.ok) throw new Error(payload.error || 'Could not load today’s work.');
       const exceptionPayload = exceptionResponse.ok ? await exceptionResponse.json().catch(() => ({})) : {};
       const raw = payload.summary || {};
       const rawPipeline = payload.pipelineSummary || {};
-      setSummary({
+      const nextSummary: DashboardSummary = {
         overdue_followups: Number(raw.overdue_followups || 0),
         sla_breaches: Number(raw.sla_breaches || 0),
         unassigned_leads: Number(raw.unassigned_leads || 0),
         stale_leads: Number(raw.stale_leads || 0),
         payments_due: Number(raw.payments_due || 0),
         passport_risks: Number(raw.passport_risks || 0),
-      });
-      setPipeline({
+      };
+      const nextPipeline: PipelineSummary = {
         won_count: Number(rawPipeline.won_count || 0),
         won_value: Number(rawPipeline.won_value || 0),
         visible_count: Number(rawPipeline.visible_count || 0),
         my_count: Number(rawPipeline.my_count || 0),
+      };
+      const nextExceptions: ConversationExceptions = { ...EMPTY_EXCEPTIONS, ...(exceptionPayload.exceptions || {}) };
+      setSummary(nextSummary);
+      setPipeline(nextPipeline);
+      setExceptions(nextExceptions);
+      DASHBOARD_RUNTIME_CACHE.set(runtimeCacheKey, {
+        summary: nextSummary,
+        pipeline: nextPipeline,
+        exceptions: nextExceptions,
+        fetchedAt: Date.now(),
       });
-      setExceptions({ ...EMPTY_EXCEPTIONS, ...(exceptionPayload.exceptions || {}) });
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not load today’s work.');
+      if (!quiet || !DASHBOARD_RUNTIME_CACHE.has(runtimeCacheKey)) {
+        setError(loadError instanceof Error ? loadError.message : 'Could not load today’s work.');
+      }
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [runtimeCacheKey]);
 
   useEffect(() => {
     document.title = `Today — ${config.workspace.name}`;
-    const initial = window.setTimeout(() => void loadSummary(), 0);
-    const handleMutation = () => void loadSummary();
+    const hasSnapshot = DASHBOARD_RUNTIME_CACHE.has(runtimeCacheKey);
+    const initial = window.setTimeout(() => void loadSummary({ quiet: hasSnapshot }), 0);
+    const handleMutation = () => void loadSummary({ force: true, quiet: true });
     window.addEventListener('crm:data-mutated', handleMutation);
     return () => {
       window.clearTimeout(initial);
       window.removeEventListener('crm:data-mutated', handleMutation);
     };
-  }, [config.workspace.name, loadSummary]);
+  }, [config.workspace.name, loadSummary, runtimeCacheKey]);
 
   const dueActions = summary.overdue_followups + (inboxEnabled ? exceptions.next_actions_due : 0);
   const primaryAttention = (inboxEnabled ? exceptions.needs_reply + exceptions.sla_overdue : summary.sla_breaches) + dueActions;
@@ -135,7 +160,7 @@ export default function DashboardPage() {
         <p className="page-description">A short command center. Reply in Inbox, execute scheduled actions in Due Work, and progress commercial work in Opportunities.</p>
       </div>
       <div className="page-actions">
-        <button type="button" onClick={() => void loadSummary()} disabled={loading} className="button-secondary px-3" aria-label="Refresh Today">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}</button>
+        <button type="button" onClick={() => void loadSummary({ force: true })} disabled={loading} className="button-secondary px-3" aria-label="Refresh Today">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}</button>
       </div>
     </header>
 
