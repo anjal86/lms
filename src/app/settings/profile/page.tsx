@@ -15,7 +15,6 @@ type PersonalPreferences = UserPreferences & {
   notification_volume?: number;
   mute_sound_in_call?: boolean;
   browser_push_enabled?: boolean;
-  toast_duration_seconds?: number;
 };
 
 export default function ProfileSettingsPage() {
@@ -36,7 +35,6 @@ export default function ProfileSettingsPage() {
   const [volume, setVolume] = useState(75);
   const [muteInCall, setMuteInCall] = useState(true);
   const [browserPush, setBrowserPush] = useState(false);
-  const [toastDuration, setToastDuration] = useState(3);
 
   useEffect(() => {
     setFullName(currentUser.full_name || '');
@@ -53,7 +51,6 @@ export default function ProfileSettingsPage() {
     setVolume(preferences.notification_volume ?? 75);
     setMuteInCall(preferences.mute_sound_in_call ?? true);
     setBrowserPush(preferences.browser_push_enabled ?? false);
-    setToastDuration(preferences.toast_duration_seconds || 3);
   }, [currentUser.id, currentUser.full_name, currentUser.phone, currentUser.avatar_url, currentUser.bio, currentUser.office_location, preferences]);
 
   const save = () => {
@@ -75,7 +72,6 @@ export default function ProfileSettingsPage() {
       notification_volume: volume,
       mute_sound_in_call: muteInCall,
       browser_push_enabled: browserPush,
-      toast_duration_seconds: toastDuration,
     } as Partial<UserPreferences>);
     showToast('Personal settings saved.', 'success');
   };
@@ -119,14 +115,13 @@ export default function ProfileSettingsPage() {
         </section>
 
         <section className="surface-flat p-5 lg:col-span-2">
-          <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><BellRing className="h-4 w-4" /></span><div><h2 className="section-heading">My notifications</h2><p className="section-description">Personal alert preferences no longer modify workspace-wide notification behavior.</p></div></div>
+          <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><BellRing className="h-4 w-4" /></span><div><h2 className="section-heading">My notifications</h2><p className="section-description">Personal sound and browser alert preferences for live assignment notifications.</p></div></div>
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800"><span><span className="block">Notification sound</span><span className="text-xs font-normal text-zinc-500">Play sound for supported alerts.</span></span><input type="checkbox" checked={soundEnabled} onChange={(event) => setSoundEnabled(event.target.checked)} /></label>
             <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800"><span><span className="block">Mute while in a call</span><span className="text-xs font-normal text-zinc-500">Reduce interruptions while your status is in-call.</span></span><input type="checkbox" checked={muteInCall} onChange={(event) => setMuteInCall(event.target.checked)} /></label>
             <label className="text-xs font-semibold text-zinc-700">Sound<select value={soundPreset} onChange={(event) => setSoundPreset(event.target.value as SoundPreset)} className="select-field mt-1.5 w-full">{(['chime','modern_bell','radar','subtle','off'] as SoundPreset[]).map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>
             <label className="text-xs font-semibold text-zinc-700">Volume<input type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} className="mt-3 w-full" /></label>
-            <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800"><span><span className="block">Browser notifications</span><span className="text-xs font-normal text-zinc-500">Allow supported browser push alerts.</span></span><input type="checkbox" checked={browserPush} onChange={(event) => setBrowserPush(event.target.checked)} /></label>
-            <label className="text-xs font-semibold text-zinc-700">Toast duration (seconds)<input type="number" min={1} max={15} value={toastDuration} onChange={(event) => setToastDuration(Number(event.target.value))} className="field mt-1.5" /></label>
+            <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800 md:col-span-2"><span><span className="block">Browser notifications</span><span className="text-xs font-normal text-zinc-500">Allow supported browser push alerts.</span></span><input type="checkbox" checked={browserPush} onChange={(event) => setBrowserPush(event.target.checked)} /></label>
           </div>
           <div className="mt-4"><button type="button" onClick={() => playNotificationSound(soundPreset, volume)} className="button-secondary"><Volume2 className="h-4 w-4" /> Test sound</button></div>
         </section>
