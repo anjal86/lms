@@ -114,3 +114,8 @@ export async function getApiActor(request: Request) {
 export function isManagement(profile: ApiProfile) {
   return profile.workspace_role === 'owner' || profile.workspace_role === 'admin' || profile.workspace_role === 'manager';
 }
+
+export async function isPlatformSuperAdmin(actor: ApiActor) {
+  const { data, error } = await actor.supabase.rpc('is_platform_super_admin');
+  return !error && data === true;
+}
