@@ -283,6 +283,7 @@ services:
     container_name: travel-lms-integration-sync-worker
     restart: unless-stopped
     environment:
+      CRM_INTERNAL_URL: ${CRM_INTERNAL_URL:-http://app:3000}
       INTEGRATION_SYNC_SECRET: ${INTEGRATION_SYNC_SECRET:-local-integration-sync-secret-change-me}
       INTEGRATION_SYNC_INTERVAL_SECONDS: ${INTEGRATION_SYNC_INTERVAL_SECONDS:-3}
     command:
@@ -290,7 +291,7 @@ services:
       - -c
       - >-
         while true; do
-          curl -fsS -X POST -H "Authorization: Bearer $$INTEGRATION_SYNC_SECRET" http://host.docker.internal:3000/api/cron/integration-sync || true;
+          curl -fsS -X POST -H "Authorization: Bearer $$INTEGRATION_SYNC_SECRET" "$$CRM_INTERNAL_URL/api/cron/integration-sync" || true;
           sleep "$$INTEGRATION_SYNC_INTERVAL_SECONDS";
         done
     extra_hosts:
@@ -304,9 +305,9 @@ services:
     container_name: travel-lms-sla-worker
     restart: unless-stopped
     environment:
+      CRM_INTERNAL_URL: ${CRM_INTERNAL_URL:-http://app:3000}
       SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
       SLA_INTERVAL_SECONDS: ${SLA_INTERVAL_SECONDS:-60}
-      SLA_CRON_INTERVAL_SECONDS: ${SLA_CRON_INTERVAL_SECONDS:-60}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
@@ -314,10 +315,9 @@ services:
       - -c
       - >-
         while true; do
-          curl -fsS -X POST -H "Authorization: Bearer $$SLA_CRON_SECRET" http://host.docker.internal:3000/api/cron/sla || true;
-          sleep "$$SLA_CRON_INTERVAL_SECONDS";
+          curl -fsS -X POST -H "Authorization: Bearer $$SLA_CRON_SECRET" "$$CRM_INTERNAL_URL/api/cron/sla" || true;
+          sleep "$$SLA_INTERVAL_SECONDS";
         done
-
 
 volumes:
   db-data:
