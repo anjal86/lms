@@ -7,15 +7,31 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { decryptIntegrationSecret } from '@/lib/integrations/secrets';
 import { aiProviderPreset, type AiApiStyle, type AiProviderKind } from './provider-catalog';
 
+const ConfidenceSchema = z.preprocess((value) => {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (raw.endsWith('%')) {
+      const percent = Number(raw.slice(0, -1));
+      return Number.isFinite(percent) ? percent / 100 : 0;
+    }
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return numeric > 1 && numeric <= 100 ? numeric / 100 : numeric;
+}, z.number().min(0).max(1));
+
 const DecisionSchema = z.object({
   action: z.string().nullish().transform((v) => {
     const s = (v || '').toLowerCase().trim();
     if (s === 'handoff' || s.includes('handoff') || s.includes('escalat') || s.includes('human')) return 'handoff';
     if (s === 'noop' || s.includes('noop') || s.includes('ignore') || s.includes('nothing')) return 'noop';
-    return 'reply';
+    if (s === 'reply' || s.includes('reply') || s.includes('respond') || s.includes('answer') || s.includes('clarif') || s.includes('ask')) return 'reply';
+    // Unknown or missing actions must never become an autonomous reply by accident.
+    return 'handoff';
   }),
   reply: z.string().trim().max(4000).nullish().transform((v) => v || null),
-  confidence: z.coerce.number().min(0).max(1).default(0.7),
+  confidence: ConfidenceSchema,
   intent: z.string().trim().max(120).nullish().transform((v) => v || 'unknown'),
   handoff_reason: z.string().trim().max(500).nullish().transform((v) => v || null),
   suggested_lifecycle: z.string().trim().max(80).nullish().transform((v) => v || null),
