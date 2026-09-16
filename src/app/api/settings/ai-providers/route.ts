@@ -19,13 +19,13 @@ const SaveSchema = z.object({
   is_active: z.boolean().optional().default(true),
 });
 
+const PROVIDER_SELECT = 'id,workspace_id,name,provider,api_style,base_url,is_active,health_status,last_health_check_at,last_health_latency_ms,last_health_error,consecutive_failures,created_at,updated_at';
+
 function validateCustomUrl(raw: string) {
   let url: URL;
   try { url = new URL(raw); } catch { return 'Enter a valid custom provider base URL.'; }
   const allowPrivate = process.env.AI_ALLOW_PRIVATE_PROVIDER_NETWORKS?.trim().toLowerCase() === 'true';
-  if (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:')) {
-    return 'Custom providers must use HTTPS unless private provider networks are explicitly enabled on the server.';
-  }
+  if (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:')) return 'Custom providers must use HTTPS unless private provider networks are explicitly enabled on the server.';
   if (url.username || url.password || url.hash) return 'Provider URL cannot contain credentials or fragments.';
   return null;
 }
@@ -35,18 +35,12 @@ export async function GET(request: Request) {
   if ('error' in actor) return actor.error;
   if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required.' }, { status: 403 });
 
-  const { data: configs, error } = await actor.supabase
-    .from('ai_provider_configs')
-    .select('id,workspace_id,name,provider,api_style,base_url,is_active,created_at,updated_at')
-    .eq('workspace_id', actor.profile.workspace_id)
-    .order('updated_at', { ascending: false });
+  const { data: configs, error } = await actor.supabase.from('ai_provider_configs')
+    .select(PROVIDER_SELECT).eq('workspace_id', actor.profile.workspace_id).order('updated_at', { ascending: false });
   if (error) return NextResponse.json({ error: 'Unable to load AI providers.' }, { status: 500 });
 
   const admin = createSupabaseAdminClient();
-  const { data: secrets } = await admin
-    .from('ai_provider_secrets')
-    .select('provider_config_id')
-    .eq('workspace_id', actor.profile.workspace_id);
+  const { data: secrets } = await admin.from('ai_provider_secrets').select('provider_config_id').eq('workspace_id', actor.profile.workspace_id);
   const secretIds = new Set((secrets || []).map((row) => String(row.provider_config_id)));
 
   return NextResponse.json({
@@ -77,28 +71,16 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   let hasExistingKey = false;
   if (input.id) {
-    const { data: existing } = await admin.from('ai_provider_configs')
-      .select('id,provider')
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('id', input.id)
-      .maybeSingle();
+    const { data: existing } = await admin.from('ai_provider_configs').select('id,provider').eq('workspace_id', actor.profile.workspace_id).eq('id', input.id).maybeSingle();
     if (!existing) return NextResponse.json({ error: 'AI provider connection not found.' }, { status: 404 });
-    if (existing.provider !== input.provider) {
-      return NextResponse.json({ error: 'Provider type cannot be changed after creation. Add a new provider connection instead so credentials are never reused across vendors.' }, { status: 400 });
-    }
-    const { data: secret } = await admin.from('ai_provider_secrets')
-      .select('provider_config_id')
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('provider_config_id', input.id)
-      .maybeSingle();
+    if (existing.provider !== input.provider) return NextResponse.json({ error: 'Provider type cannot be changed after creation. Add a new provider connection instead so credentials are never reused across vendors.' }, { status: 400 });
+    const { data: secret } = await admin.from('ai_provider_secrets').select('provider_config_id').eq('workspace_id', actor.profile.workspace_id).eq('provider_config_id', input.id).maybeSingle();
     hasExistingKey = Boolean(secret);
   }
 
   const needsKey = input.provider !== 'custom_openai';
   const willHaveKey = input.clear_api_key ? false : Boolean(input.api_key || hasExistingKey);
-  if (input.is_active && needsKey && !willHaveKey) {
-    return NextResponse.json({ error: `${preset.label} requires an API key before it can be enabled.` }, { status: 400 });
-  }
+  if (input.is_active && needsKey && !willHaveKey) return NextResponse.json({ error: `${preset.label} requires an API key before it can be enabled.` }, { status: 400 });
 
   let encryptedKey: string | null = null;
   if (input.api_key && !input.clear_api_key) {
@@ -124,12 +106,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message || 'Unable to save AI provider.' }, { status });
   }
 
-  const { data: config } = await actor.supabase
-    .from('ai_provider_configs')
-    .select('id,workspace_id,name,provider,api_style,base_url,is_active,created_at,updated_at')
-    .eq('workspace_id', actor.profile.workspace_id)
-    .eq('id', providerId)
-    .single();
+  const { data: config } = await actor.supabase.from('ai_provider_configs')
+    .select(PROVIDER_SELECT).eq('workspace_id', actor.profile.workspace_id).eq('id', providerId).single();
 
   return NextResponse.json({ provider: { ...config, has_api_key: input.clear_api_key ? false : Boolean(input.api_key || hasExistingKey) } }, { status: input.id ? 200 : 201 });
 }
