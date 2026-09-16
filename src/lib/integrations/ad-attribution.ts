@@ -48,18 +48,24 @@ export function normalizeMetaAdAttribution(
   const raw = rawInput as Record<string, unknown>;
 
   const source = firstText(raw.source, raw.referral_source);
-  const sourceType = firstText(raw.source_type, raw.type) || 'ad';
+  const sourceType = firstText(raw.source_type, raw.type);
   const adId = firstText(raw.ad_id);
   const sourceId = firstText(raw.source_id, raw.ad_id, raw.id);
   const ctwaClid = firstText(raw.ctwa_clid);
+  const normalizedSource = source?.toLowerCase() || '';
+  const normalizedType = sourceType?.toLowerCase().replace(/[\s-]+/g, '_') || '';
+  const paidTypes = new Set(['ad', 'ads', 'paid_ad', 'advertisement', 'click_to_whatsapp', 'ctwa']);
 
+  // Meta referral payloads also exist for organic posts, short links and other
+  // entry points. A source_id by itself is therefore not proof of paid traffic.
+  // Require an explicit ad identifier/click ID or a provider marker that clearly
+  // denotes advertising so organic referrals never contaminate paid attribution.
   const looksPaid = Boolean(
     adId
     || ctwaClid
-    || sourceId
-    || source?.toUpperCase() === 'ADS'
-    || sourceType.toLowerCase() === 'ad'
-    || sourceType.toLowerCase().includes('ad')
+    || normalizedSource === 'ads'
+    || normalizedSource === 'ad'
+    || paidTypes.has(normalizedType)
   );
   if (!looksPaid) return null;
 
@@ -70,7 +76,7 @@ export function normalizeMetaAdAttribution(
     origin: 'paid_ad',
     provider,
     platform,
-    source_type: sourceType,
+    source_type: sourceType || 'ad',
     campaign_id: firstText(raw.campaign_id),
     campaign_name: firstText(raw.campaign_name),
     adset_id: firstText(raw.adset_id),
