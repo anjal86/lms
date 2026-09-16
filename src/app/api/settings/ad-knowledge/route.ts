@@ -6,8 +6,6 @@ import { uuidSchema } from '@/lib/validation';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const NullableText = z.string().trim().max(4000).nullable().optional();
-
 const SaveSchema = z.object({
   id: uuidSchema.nullable().optional(),
   name: z.string().trim().min(1).max(160),
