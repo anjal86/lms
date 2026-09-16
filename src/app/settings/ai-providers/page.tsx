@@ -85,8 +85,8 @@ export default function AiProvidersPage() {
     setDraft((current) => ({
       ...current,
       provider: kind,
-      name: current.id ? current.name : (preset?.label || 'AI Provider'),
-      base_url: kind === 'custom_openai' ? current.base_url : (preset?.defaultBaseUrl || ''),
+      name: preset?.label || 'AI Provider',
+      base_url: kind === 'custom_openai' ? '' : (preset?.defaultBaseUrl || ''),
     }));
   };
 
@@ -146,7 +146,7 @@ export default function AiProvidersPage() {
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <label className="text-xs font-semibold text-zinc-700">Connection name<input className="field mt-1.5" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Company OpenAI" /></label>
-          <label className="text-xs font-semibold text-zinc-700">Provider<select className="select-field mt-1.5" value={draft.provider} onChange={(event) => chooseKind(event.target.value as AiProviderKind)}>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+          <label className="text-xs font-semibold text-zinc-700">Provider<select className="select-field mt-1.5" value={draft.provider} onChange={(event) => chooseKind(event.target.value as AiProviderKind)} disabled={Boolean(draft.id)}>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select>{draft.id && <span className="mt-1 block text-[10px] font-normal text-zinc-400">Provider type is fixed after creation so one vendor’s key is never reused with another. Add a new provider connection to switch vendors.</span>}</label>
         </div>
 
         {selectedPreset && <div className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-500">{selectedPreset.description}</div>}
