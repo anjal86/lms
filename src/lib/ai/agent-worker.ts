@@ -2,7 +2,7 @@ import 'server-only';
 
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { sendChannelText } from '@/lib/integrations/channel-sender';
-import { decideWithMistral, type AiAgentDecision } from './mistral-agent';
+import { decideWithAiProvider, type AiAgentDecision } from './llm-provider';
 
 type AiJob = {
   id: string;
@@ -18,6 +18,7 @@ type AgentRow = {
   id: string;
   workspace_id: string;
   name: string;
+  provider_config_id: string | null;
   model: string;
   instructions: string;
   tone: string;
@@ -403,13 +404,14 @@ export async function processAiAgentJob(job: AiJob) {
         : Promise.resolve({ data: null }),
     ]);
 
-    const decision = await decideWithMistral({
+    const decision = await decideWithAiProvider(job.workspace_id, {
       name: agent.name,
       model: agent.model,
       instructions: agent.instructions,
       tone: agent.tone,
       languages: agent.languages || ['auto'],
       temperature: Number(agent.temperature) || 0.3,
+      providerConfigId: agent.provider_config_id,
     }, {
       workspaceName: workspace.name,
       customerName: conversation.customer_name,
