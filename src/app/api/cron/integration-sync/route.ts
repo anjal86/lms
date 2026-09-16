@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processMetaHistorySyncJob } from '@/lib/integrations/meta-history-worker';
+import { processMetaAdEnrichmentJob } from '@/lib/integrations/meta-ad-enrichment';
 import { processAiAgentJob } from '@/lib/ai/agent-worker';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
@@ -46,6 +47,32 @@ async function processOneAiJob() {
   return { jobId: job.id, result: await processAiAgentJob(job) };
 }
 
+async function processOneMetaAdJob() {
+  const admin = createSupabaseAdminClient();
+
+  await admin.from('meta_ad_enrichment_jobs').update({
+    status: 'queued',
+    locked_at: null,
+    next_attempt_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_error: 'Recovered after an interrupted Meta ad enrichment cycle.',
+  })
+    .eq('status', 'processing')
+    .lt('locked_at', new Date(Date.now() - 10 * 60_000).toISOString());
+
+  const { data, error } = await admin.rpc('claim_meta_ad_enrichment_job');
+  if (error) {
+    // Allow rolling deployments where the ad-registry migration has not reached the database yet.
+    if (error.code !== 'PGRST202' && error.code !== '42883' && error.code !== '42P01') {
+      console.error('Meta ad worker claim failed:', error.message);
+    }
+    return null;
+  }
+  const job = Array.isArray(data) ? data[0] : data;
+  if (!job) return null;
+  return { jobId: job.id, result: await processMetaAdEnrichmentJob(job) };
+}
+
 export async function POST(request: Request) {
   if (!safeSecretMatch(request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || null, process.env.INTEGRATION_SYNC_SECRET?.trim())) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
@@ -58,13 +85,16 @@ export async function POST(request: Request) {
     aiResults.push(aiJob);
   }
   const ai = aiResults[0] || null;
+  const metaAd = await processOneMetaAdJob();
+  const backgroundProcessed = aiResults.length + (metaAd ? 1 : 0);
 
   if (!isRedisConfigured()) {
     return NextResponse.json({
       success: true,
-      processed: aiResults.length,
+      processed: backgroundProcessed,
       ai,
       aiResults,
+      metaAd,
       warning: 'Redis is not configured; integration history sync is unavailable.',
     }, { status: 200 });
   }
@@ -72,7 +102,14 @@ export async function POST(request: Request) {
   const recovered = await recoverStaleIntegrationSyncJobs(20);
   const claimed = await claimIntegrationSyncJob();
   if (!claimed) {
-    return NextResponse.json({ success: true, processed: aiResults.length, ai, aiResults, recovered });
+    return NextResponse.json({
+      success: true,
+      processed: backgroundProcessed,
+      ai,
+      aiResults,
+      metaAd,
+      recovered,
+    });
   }
 
   try {
@@ -95,9 +132,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      processed: 1 + aiResults.length,
+      processed: 1 + backgroundProcessed,
       ai,
       aiResults,
+      metaAd,
       recovered,
       jobId: claimed.job.id,
       continuing: output.shouldContinue,
@@ -113,9 +151,10 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       success: false,
-      processed: 1 + aiResults.length,
+      processed: 1 + backgroundProcessed,
       ai,
       aiResults,
+      metaAd,
       recovered,
       jobId: claimed.job.id,
       error: message,
