@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const TEAM_CACHE_TTL_SECONDS = 45;
+
+type TeamPayload = {
+  workspaceId: string;
+  members: unknown[];
+};
 
 function compatibilityRole(role: string) {
   if (role === 'owner' || role === 'admin') return 'admin';
@@ -14,6 +22,25 @@ function compatibilityRole(role: string) {
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
+
+  const workspaceId = actor.profile.workspace_id;
+  const requestUrl = new URL(request.url);
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+  const cacheKey = redisCacheKey({
+    workspaceId,
+    namespace: 'team:members',
+    userId: actor.user.id,
+    dimensions: { workspaceRole: actor.profile.workspace_role },
+  });
+
+  let cacheStatus: RedisCacheStatus = 'BYPASS';
+  if (!forceRefresh) {
+    const cached = await readRedisJson<TeamPayload>(cacheKey);
+    cacheStatus = cached.status;
+    if (cached.value) {
+      return NextResponse.json(cached.value, { headers: cacheResponseHeaders('HIT') });
+    }
+  }
 
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
@@ -27,7 +54,7 @@ export async function GET(request: Request) {
       joined_at,
       profile:profiles!workspace_members_user_id_fkey(*)
     `)
-    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('workspace_id', workspaceId)
     .eq('is_active', true)
     .order('joined_at', { ascending: true });
 
@@ -42,15 +69,14 @@ export async function GET(request: Request) {
     return [{
       ...profile,
       role: compatibilityRole(membership.role),
-      workspace_id: actor.profile.workspace_id,
+      workspace_id: workspaceId,
       workspace_role: membership.role,
       workspace_permissions: membership.permissions || {},
       workspace_joined_at: membership.joined_at || null,
     }];
   });
 
-  return NextResponse.json(
-    { workspaceId: actor.profile.workspace_id, members },
-    { headers: { 'Cache-Control': 'private, no-store' } }
-  );
+  const payload: TeamPayload = { workspaceId, members };
+  await writeRedisJson(cacheKey, payload, TEAM_CACHE_TTL_SECONDS);
+  return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
 }
