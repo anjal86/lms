@@ -37,4 +37,8 @@ describe('ad attribution normalization', () => {
   it('ignores non-ad referral payloads with no paid-ad identifiers', () => {
     expect(normalizeMetaAdAttribution({ source: 'SHORTLINK', type: 'OPEN_THREAD' }, 'facebook')).toBeNull();
   });
+
+  it('does not treat an organic source id as paid attribution by itself', () => {
+    expect(normalizeMetaAdAttribution({ source: 'POST', source_id: 'organic-post-1', type: 'OPEN_THREAD' }, 'instagram')).toBeNull();
+  });
 });
