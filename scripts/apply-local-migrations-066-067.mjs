@@ -64,6 +64,10 @@ const migrations = [
     file: '202609160082_ai_provider_routing_integrity.sql',
     marker: "select exists(select 1 from pg_trigger where tgname='trg_protect_ai_provider_identity' and not tgisinternal) and position('pc.is_active = true' in pg_get_functiondef(to_regprocedure('public.route_live_inbound_conversation()'))) > 0 and position('pc.is_active = true' in pg_get_functiondef(to_regprocedure('public.queue_live_ai_agent_message()'))) > 0",
   },
+  {
+    file: '202609160083_conversation_ad_attribution.sql',
+    marker: "select to_regclass('public.conversation_attributions') is not null and to_regclass('public.ad_knowledge') is not null and exists(select 1 from pg_trigger where tgname='trg_capture_message_ad_attribution' and not tgisinternal)",
+  },
 ];
 
 for (const migration of migrations) {
