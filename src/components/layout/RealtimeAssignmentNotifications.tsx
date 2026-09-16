@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import type { SoundPreset } from '@/lib/types';
 
 type AssignmentNotification = {
   id: string;
@@ -11,6 +12,14 @@ type AssignmentNotification = {
   message: string;
   type: 'lead_assigned' | 'reassignment' | string;
   link?: string | null;
+};
+
+type PersonalAlertPreferences = {
+  notification_sound_enabled?: boolean;
+  notification_sound_preset?: SoundPreset;
+  notification_volume?: number;
+  mute_sound_in_call?: boolean;
+  browser_push_enabled?: boolean;
 };
 
 export default function RealtimeAssignmentNotifications() {
@@ -23,19 +32,36 @@ export default function RealtimeAssignmentNotifications() {
     playNotificationSound,
   } = useApp();
 
+  const preferences = (currentUser.user_preferences || {}) as PersonalAlertPreferences;
+  const soundEnabled = preferences.notification_sound_enabled ?? agencySettings.notification_sound_enabled ?? true;
+  const soundPreset = preferences.notification_sound_preset || agencySettings.notification_sound_preset || 'chime';
+  const soundVolume = preferences.notification_volume ?? agencySettings.notification_volume ?? 75;
+  const muteInCall = preferences.mute_sound_in_call ?? agencySettings.mute_sound_in_call ?? true;
+  const browserPushEnabled = preferences.browser_push_enabled ?? agencySettings.browser_push_enabled ?? false;
+
   const alertRef = useRef({
     showToast,
     playNotificationSound,
-    browserPushEnabled: agencySettings.browser_push_enabled,
+    soundEnabled,
+    soundPreset,
+    soundVolume,
+    muteInCall,
+    currentStatus: currentUser.status,
+    browserPushEnabled,
   });
 
   useEffect(() => {
     alertRef.current = {
       showToast,
       playNotificationSound,
-      browserPushEnabled: agencySettings.browser_push_enabled,
+      soundEnabled,
+      soundPreset,
+      soundVolume,
+      muteInCall,
+      currentStatus: currentUser.status,
+      browserPushEnabled,
     };
-  }, [agencySettings.browser_push_enabled, playNotificationSound, showToast]);
+  }, [browserPushEnabled, currentUser.status, muteInCall, playNotificationSound, showToast, soundEnabled, soundPreset, soundVolume]);
 
   useEffect(() => {
     if (!isHydrated || !isAuthenticated || !currentUser.id) return;
@@ -58,7 +84,9 @@ export default function RealtimeAssignmentNotifications() {
           const title = notification.title || 'New assignment';
           const message = notification.message || 'New work was assigned to you.';
           alertRef.current.showToast(`${title} — ${message}`, 'info');
-          alertRef.current.playNotificationSound();
+          if (alertRef.current.soundEnabled && !(alertRef.current.muteInCall && alertRef.current.currentStatus === 'in_call')) {
+            alertRef.current.playNotificationSound(alertRef.current.soundPreset, alertRef.current.soundVolume);
+          }
 
           if (
             alertRef.current.browserPushEnabled
