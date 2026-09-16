@@ -39,6 +39,15 @@ const PROVIDER_ICONS: Record<string, typeof MessageSquare> = {
   website: Globe,
 };
 
+const PROVIDER_TONES: Record<string, string> = {
+  facebook: 'bg-blue-600 text-white',
+  instagram: 'bg-fuchsia-600 text-white',
+  whatsapp: 'bg-emerald-600 text-white',
+  tiktok: 'bg-zinc-900 text-white',
+  email: 'bg-amber-500 text-white',
+  website: 'bg-cyan-600 text-white',
+};
+
 function initials(value?: string | null) {
   return (value || 'C').trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'C';
 }
@@ -59,6 +68,7 @@ function relativeTime(value?: string | null) {
 
 export default function InboxConversationListItem({ conversation, selected, contactLabel, statusText, statusDanger, onSelect }: Props) {
   const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare;
+  const providerTone = PROVIDER_TONES[conversation.provider] || 'bg-zinc-700 text-white';
   const unread = conversation.unread_count > 0;
   const assignee = conversation.assigned_profile?.full_name || 'Unassigned';
   const account = conversation.connection?.display_name || conversation.provider;
@@ -69,32 +79,32 @@ export default function InboxConversationListItem({ conversation, selected, cont
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, via ${account}`}
     onClick={onSelect}
-    className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-zinc-950 bg-zinc-50' : 'border-l-transparent bg-white'}`}
+    className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
   >
     <div className="flex min-w-0 items-start gap-2.5">
       <div className="relative shrink-0">
         {conversation.customer_avatar_url ? <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={conversation.customer_avatar_url} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-zinc-200" />
-        </> : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold ring-1 ring-zinc-200">{initials(conversation.customer_name)}</div>}
-        <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-white"><Icon className="h-2.5 w-2.5" /></span>
+        </> : <div className={`flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold ring-1 ${selected ? 'bg-white text-blue-700 ring-blue-100' : 'bg-zinc-100 text-zinc-700 ring-zinc-200'}`}>{initials(conversation.customer_name)}</div>}
+        <span className={`absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-white ${providerTone}`}><Icon className="h-2.5 w-2.5" /></span>
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
-          <span className={`min-w-0 flex-1 truncate text-sm text-zinc-950 ${unread ? 'font-bold' : 'font-semibold'}`}>{conversation.customer_name || contactLabel}</span>
-          <span className={`shrink-0 font-mono text-[10px] ${unread ? 'font-bold text-blue-600' : 'text-zinc-400'}`}>{relativeTime(conversation.last_message_at)}</span>
+          <span className={`min-w-0 flex-1 truncate text-[13px] text-zinc-950 ${unread ? 'font-semibold' : 'font-medium'}`}>{conversation.customer_name || contactLabel}</span>
+          <span className={`shrink-0 text-[10px] tabular-nums ${unread ? 'font-semibold text-blue-600' : 'text-zinc-400'}`}>{relativeTime(conversation.last_message_at)}</span>
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-2">
-          <p className={`min-w-0 flex-1 truncate text-xs leading-5 ${unread ? 'font-semibold text-zinc-800' : 'text-zinc-500'}`}>{conversation.last_message_preview || 'No message preview'}</p>
-          {unread && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-zinc-950 px-1.5 text-[10px] font-bold text-white">{conversation.unread_count}</span>}
+          <p className={`min-w-0 flex-1 truncate text-xs leading-5 ${unread ? 'font-medium text-zinc-800' : 'text-zinc-500'}`}>{conversation.last_message_preview || 'No message preview'}</p>
+          {unread && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-semibold text-white">{conversation.unread_count}</span>}
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-zinc-400">
           <span className="max-w-[150px] truncate font-medium capitalize">{account}</span>
           <span>·</span>
           <span className="max-w-[90px] truncate">{assignee}</span>
-          {conversation.priority !== 'normal' && <span className="ml-1 shrink-0 rounded-md bg-zinc-100 px-1.5 py-0.5 font-medium uppercase text-zinc-600">{conversation.priority}</span>}
-          <span className={`ml-auto shrink-0 font-semibold ${statusDanger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : 'text-zinc-400'}`}>{statusText}</span>
+          {conversation.priority !== 'normal' && <span className={`ml-1 shrink-0 rounded-md px-1.5 py-0.5 font-medium capitalize ${conversation.priority === 'urgent' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>{conversation.priority}</span>}
+          <span className={`ml-auto shrink-0 font-medium ${statusDanger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : 'text-zinc-400'}`}>{statusText}</span>
         </div>
       </div>
     </div>
