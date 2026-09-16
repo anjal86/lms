@@ -33,6 +33,7 @@ import AuthorizationProfiles from '@/components/integrations/AuthorizationProfil
 import BaileysWhatsAppConnect from '@/components/integrations/BaileysWhatsAppConnect';
 import AppOverlayPortal from '@/components/layout/AppOverlayPortal';
 import { useApp } from '@/lib/store';
+import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 
 type ProviderId = 'facebook' | 'instagram' | 'whatsapp' | 'tiktok' | 'email' | 'website' | 'api';
 
@@ -81,6 +82,7 @@ type ConnectionsResponse = {
   message?: string;
 };
 
+const CONNECTIONS_RUNTIME_CACHE = new Map<string, ConnectionsResponse>();
 const ICONS = {
   facebook: Facebook,
   instagram: Instagram,
@@ -146,8 +148,12 @@ function statusDot(status: Connection['status']) {
 export default function ConnectionsPage() {
   const params = useSearchParams();
   const { currentUser } = useApp();
-  const [data, setData] = useState<ConnectionsResponse>({ connections: [], catalog: [] });
-  const [loading, setLoading] = useState(true);
+  const { config } = useWorkspace();
+  const connectedProvider = params.get('connected');
+  const runtimeCacheKey = `${currentUser.id}::${config.workspace.id}`;
+  const initialSnapshot = CONNECTIONS_RUNTIME_CACHE.get(runtimeCacheKey);
+  const [data, setData] = useState<ConnectionsResponse>(() => initialSnapshot || { connections: [], catalog: [] });
+  const [loading, setLoading] = useState(() => !initialSnapshot);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(friendlyError(params.get('error')));
   const [notice, setNotice] = useState<string | null>(null);
@@ -163,30 +169,54 @@ export default function ConnectionsPage() {
   const [manualName, setManualName] = useState('');
   const [manualExternalId, setManualExternalId] = useState('');
   const [pendingDeleteConnection, setPendingDeleteConnection] = useState<Connection | null>(null);
-  const connectedProvider = params.get('connected');
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const force = options?.force === true;
+    const quiet = options?.quiet === true;
+    if (!quiet) setLoading(true);
     try {
-      const response = await fetch('/api/integrations/connections', { cache: 'no-store' });
+      const response = await fetch(`/api/integrations/connections${force ? '?refresh=1' : ''}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to load connections.');
-      setData(payload as ConnectionsResponse);
+      const nextData = payload as ConnectionsResponse;
+      setData(nextData);
+      CONNECTIONS_RUNTIME_CACHE.set(runtimeCacheKey, nextData);
+      setError(friendlyError(params.get('error')));
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load connections.');
+      if (!quiet || !CONNECTIONS_RUNTIME_CACHE.has(runtimeCacheKey)) {
+        setError(loadError instanceof Error ? loadError.message : 'Unable to load connections.');
+      }
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [params, runtimeCacheKey]);
 
   useEffect(() => {
     document.title = 'Connections — CRM';
-    void load();
-  }, [load]);
+    const hasSnapshot = CONNECTIONS_RUNTIME_CACHE.has(runtimeCacheKey);
+    const timer = window.setTimeout(() => void load({ force: Boolean(connectedProvider), quiet: hasSnapshot }), 0);
+    return () => window.clearTimeout(timer);
+  }, [connectedProvider, load, runtimeCacheKey]);
 
   useEffect(() => {
-    if (params.get('whatsapp') === 'open') setWhatsappDrawerOpen(true);
+    const openWhatsApp = params.get('whatsapp') === 'open';
+    const setup = params.get('setup');
+    const validSetup = ['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api'].includes(setup || '')
+      ? setup as ProviderId
+      : null;
+    if (!openWhatsApp && !validSetup) return;
+
+    const timer = window.setTimeout(() => {
+      if (openWhatsApp) setWhatsappDrawerOpen(true);
+      if (validSetup) setSetupProviderId(validSetup);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('whatsapp');
+      url.searchParams.delete('setup');
+      const nextSearch = url.searchParams.toString();
+      window.history.replaceState(window.history.state, '', `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash}`);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [params]);
 
   const byProvider = useMemo(() => {
@@ -243,7 +273,7 @@ export default function ConnectionsPage() {
       setManualProviderId(null);
       setManualName('');
       setManualExternalId('');
-      await load();
+      await load({ force: true, quiet: true });
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to add this source.');
     } finally {
@@ -274,7 +304,7 @@ export default function ConnectionsPage() {
             : `History sync complete. ${conversations} conversations and ${messages} message previews added.`
         );
       }
-      await load();
+      await load({ force: true, quiet: true });
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to update this account.');
     } finally {
@@ -297,7 +327,7 @@ export default function ConnectionsPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to delete this connection.');
       setPendingDeleteConnection(null);
-      await load();
+      await load({ force: true, quiet: true });
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : 'Unable to delete this connection.');
     } finally {
@@ -370,7 +400,7 @@ export default function ConnectionsPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-950">Connections</h1>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-500">One workspace for every customer channel. Each Page, number, advertiser, inbox, or source is kept as its own account.</p>
         </div>
-        <button type="button" onClick={() => void load()} className="button-secondary button-sm self-start sm:self-auto" disabled={loading}>
+        <button type="button" onClick={() => void load({ force: true })} className="button-secondary button-sm self-start sm:self-auto" disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
         </button>
       </header>
@@ -395,7 +425,7 @@ export default function ConnectionsPage() {
         </div>
       )}
 
-      <AuthorizationProfiles onChanged={load} />
+      <AuthorizationProfiles onChanged={() => void load({ force: true, quiet: true })} />
 
       <section className="grid gap-3 lg:grid-cols-2">
         {data.catalog.map((provider) => {
@@ -507,7 +537,7 @@ export default function ConnectionsPage() {
         </div>
       </details>
 
-      <BaileysWhatsAppConnect isOpen={whatsappDrawerOpen} onClose={() => setWhatsappDrawerOpen(false)} onChanged={load} />
+      <BaileysWhatsAppConnect isOpen={whatsappDrawerOpen} onClose={() => setWhatsappDrawerOpen(false)} onChanged={() => void load({ force: true, quiet: true })} />
 
       {manualProvider && (
         <AppOverlayPortal>
