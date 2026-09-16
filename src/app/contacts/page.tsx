@@ -48,13 +48,26 @@ type Contact = {
 };
 
 type SegmentKey = 'all' | 'new' | 'qualified' | 'opportunity' | 'customer' | 'lost' | 'duplicates';
+type ContactSnapshot = { contacts: Contact[]; total: number; fetchedAt: number };
 
+const CONTACTS_RUNTIME_CACHE = new Map<string, ContactSnapshot>();
 const PROVIDER_ICONS: Record<string, typeof MessageSquare> = {
   facebook: Facebook,
   instagram: Instagram,
   whatsapp: MessageCircle,
   email: Mail,
 };
+
+function contactRuntimeCacheKey(scope: string, search: string, segment: SegmentKey) {
+  return `${scope}::${segment}::${search.trim().toLowerCase()}`;
+}
+
+function invalidateContactRuntimeScope(scope: string) {
+  const prefix = `${scope}::`;
+  for (const key of CONTACTS_RUNTIME_CACHE.keys()) {
+    if (key.startsWith(prefix)) CONTACTS_RUNTIME_CACHE.delete(key);
+  }
+}
 
 function relativeTime(value?: string | null) {
   if (!value) return 'Never';
@@ -96,46 +109,70 @@ function uniqueProviders(contact: Contact) {
 
 export default function ContactsPage() {
   const { currentUser, showToast } = useApp();
-  const { term } = useWorkspace();
+  const { config, term } = useWorkspace();
   const contactLabel = term('contact', 'Contact');
   const contactPlural = term('contact_plural', 'Contacts');
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
+  const runtimeCacheScope = `${currentUser.id}::${config.workspace.id}`;
+  const initialRuntimeKey = contactRuntimeCacheKey(runtimeCacheScope, '', 'all');
+  const initialSnapshot = CONTACTS_RUNTIME_CACHE.get(initialRuntimeKey);
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>(() => initialSnapshot?.contacts || []);
   const [search, setSearch] = useState('');
   const [segment, setSegment] = useState<SegmentKey>('all');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialSnapshot);
   const [merging, setMerging] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState(() => initialSnapshot?.total || 0);
   const [copied, setCopied] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const force = options?.force === true;
+    const quiet = options?.quiet === true;
+    const normalizedSearch = search.trim();
+    const runtimeKey = contactRuntimeCacheKey(runtimeCacheScope, normalizedSearch, segment);
+    const cached = CONTACTS_RUNTIME_CACHE.get(runtimeKey);
+
+    if (cached) {
+      setContacts(cached.contacts);
+      setTotal(cached.total);
+      setLoading(false);
+    } else if (!quiet) {
+      setLoading(true);
+    }
+
     try {
       const params = new URLSearchParams({ limit: '300' });
-      if (search.trim()) params.set('search', search.trim());
+      if (normalizedSearch) params.set('search', normalizedSearch);
       if (segment !== 'all' && segment !== 'duplicates') params.set('lifecycle', segment);
+      if (force) params.set('refresh', '1');
       const response = await fetch(`/api/contacts?${params.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `Unable to load ${contactPlural.toLowerCase()}.`);
-      setContacts(payload.contacts || []);
-      setTotal(payload.total || 0);
-      setSelectedIds((current) => current.filter((id) => (payload.contacts || []).some((contact: Contact) => contact.id === id)));
+      const nextContacts = Array.isArray(payload.contacts) ? payload.contacts as Contact[] : [];
+      const nextTotal = Number(payload.total || 0);
+      setContacts(nextContacts);
+      setTotal(nextTotal);
+      CONTACTS_RUNTIME_CACHE.set(runtimeKey, { contacts: nextContacts, total: nextTotal, fetchedAt: Date.now() });
+      setSelectedIds((current) => current.filter((id) => nextContacts.some((contact) => contact.id === id)));
     } catch (error) {
-      showToast(error instanceof Error ? error.message : `Unable to load ${contactPlural.toLowerCase()}.`, 'error');
+      if (!quiet || !cached) {
+        showToast(error instanceof Error ? error.message : `Unable to load ${contactPlural.toLowerCase()}.`, 'error');
+      }
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
-  }, [contactPlural, search, segment, showToast]);
+  }, [contactPlural, runtimeCacheScope, search, segment, showToast]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 180);
+    const runtimeKey = contactRuntimeCacheKey(runtimeCacheScope, search, segment);
+    const hasSnapshot = CONTACTS_RUNTIME_CACHE.has(runtimeKey);
+    const timer = window.setTimeout(() => void load({ quiet: hasSnapshot }), 180);
     return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [load, runtimeCacheScope, search, segment]);
 
   const duplicateKeys = useMemo(() => {
     const counts = new Map<string, number>();
@@ -194,8 +231,9 @@ export default function ContactsPage() {
       setSelectedIds([]);
       setPrimaryId(null);
       setActiveId(null);
+      invalidateContactRuntimeScope(runtimeCacheScope);
       showToast(`${contactLabel} identities merged.`, 'success');
-      await load();
+      await load({ force: true });
     } catch (error) {
       showToast(error instanceof Error ? error.message : `Unable to merge ${contactPlural.toLowerCase()}.`, 'error');
     } finally {
@@ -235,14 +273,14 @@ export default function ContactsPage() {
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative min-w-[240px] flex-1"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${contactPlural.toLowerCase()} by name, phone or email`} className="field h-9 pl-8 text-xs" /></div>
               <select value={segment} onChange={(event) => setSegment(event.target.value as SegmentKey)} className="select-field h-9 text-xs lg:hidden">{segments.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>
-              <button type="button" onClick={() => void load()} className="button-secondary button-sm h-9"><RefreshCw className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={() => void load({ force: true })} className="button-secondary button-sm h-9"><RefreshCw className="h-3.5 w-3.5" /></button>
               {canManage && selectedIds.length === 2 && <button type="button" onClick={openMerge} className="button-primary button-sm h-9"><Merge className="h-3.5 w-3.5" /> Review merge</button>}
             </div>
             {canManage && selected.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-blue-700"><span className="font-semibold">Merge selection:</span>{selected.map((contact, index) => <span key={contact.id} className="rounded bg-blue-50 px-2 py-1">{index + 1}. {contact.display_name || contact.primary_phone || contact.primary_email || contactLabel}</span>)}{selected.length === 1 && <span className="text-blue-500">Choose one more duplicate.</span>}</div>}
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto">
-            {loading ? <div className="flex h-40 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading {contactPlural.toLowerCase()}…</div> : visibleContacts.length === 0 ? <div className="py-20 text-center"><UserRound className="mx-auto h-7 w-7 text-zinc-300" /><p className="mt-2 text-sm font-medium text-zinc-700">No {contactPlural.toLowerCase()} found</p></div> : <table className="w-full min-w-[780px] text-left text-xs"><thead className="sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/95 text-[9px] uppercase tracking-[0.12em] text-zinc-400 backdrop-blur"><tr>{canManage && <th className="w-12 px-4 py-2.5">Merge</th>}<th className="px-4 py-2.5">{contactLabel}</th><th className="px-4 py-2.5">Channels</th><th className="px-4 py-2.5">Lifecycle</th><th className="px-4 py-2.5">Owner</th><th className="px-4 py-2.5">Last seen</th><th className="w-10 px-3 py-2.5" /></tr></thead><tbody className="divide-y divide-zinc-100">{visibleContacts.map((contact) => {
+            {loading && contacts.length === 0 ? <div className="flex h-40 items-center justify-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading {contactPlural.toLowerCase()}…</div> : visibleContacts.length === 0 ? <div className="py-20 text-center"><UserRound className="mx-auto h-7 w-7 text-zinc-300" /><p className="mt-2 text-sm font-medium text-zinc-700">No {contactPlural.toLowerCase()} found</p></div> : <table className="w-full min-w-[780px] text-left text-xs"><thead className="sticky top-0 z-10 border-b border-zinc-200 bg-zinc-50/95 text-[9px] uppercase tracking-[0.12em] text-zinc-400 backdrop-blur"><tr>{canManage && <th className="w-12 px-4 py-2.5">Merge</th>}<th className="px-4 py-2.5">{contactLabel}</th><th className="px-4 py-2.5">Channels</th><th className="px-4 py-2.5">Lifecycle</th><th className="px-4 py-2.5">Owner</th><th className="px-4 py-2.5">Last seen</th><th className="w-10 px-3 py-2.5" /></tr></thead><tbody className="divide-y divide-zinc-100">{visibleContacts.map((contact) => {
               const selectedIndex = selectedIds.indexOf(contact.id);
               const providers = uniqueProviders(contact);
               return <tr key={contact.id} className={`${activeId === contact.id ? 'bg-blue-50/50' : selectedIndex >= 0 ? 'bg-blue-50/30' : 'hover:bg-zinc-50/70'} cursor-pointer`} onClick={() => setActiveId(contact.id)}>{canManage && <td className="px-4 py-3" onClick={(event) => event.stopPropagation()}><button type="button" onClick={() => toggleSelection(contact.id)} className={`flex h-6 w-6 items-center justify-center rounded border ${selectedIndex >= 0 ? 'border-blue-600 bg-blue-600 text-white' : 'border-zinc-200 text-transparent hover:border-zinc-400'}`} aria-label={`Select ${contact.display_name || contactLabel} for merge`}>{selectedIndex >= 0 ? <span className="font-mono text-[9px] font-bold">{selectedIndex + 1}</span> : <Check className="h-3 w-3" />}</button></td>}<td className="px-4 py-3"><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600">{contact.avatar_url ? <img src={contact.avatar_url} alt="" className="h-full w-full object-cover" /> : initials(contact.display_name)}</span><div className="min-w-0"><div className="max-w-56 truncate font-semibold text-zinc-900">{contact.display_name || contactLabel}</div><div className="mt-0.5 max-w-56 truncate text-[10px] text-zinc-400">{contact.primary_phone || contact.primary_email || 'No primary contact detail'}</div></div></div></td><td className="px-4 py-3"><div className="flex gap-1">{providers.length ? providers.slice(0, 4).map((provider) => { const Icon = PROVIDER_ICONS[provider] || MessageSquare; return <span key={provider} title={provider} className="flex h-6 w-6 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-500"><Icon className="h-3 w-3" /></span>; }) : <span className="text-zinc-400">CRM only</span>}</div></td><td className="px-4 py-3"><span className="rounded bg-zinc-100 px-1.5 py-1 text-[10px] font-medium text-zinc-600">{lifecycleLabel(contact.lifecycle_key)}</span></td><td className="px-4 py-3 text-zinc-600">{contact.owner?.full_name || 'Unassigned'}</td><td className="px-4 py-3 text-zinc-500">{relativeTime(contact.last_seen_at)}</td><td className="px-3 py-3"><ChevronRight className="h-4 w-4 text-zinc-300" /></td></tr>;
