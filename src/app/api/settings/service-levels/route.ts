@@ -15,6 +15,7 @@ const PatchSchema = z.object({
   auto_reassign_after_minutes: z.number().int().min(0).max(10080),
   auto_close_waiting_hours: z.number().int().min(0).max(720),
   next_action_reminders: z.boolean(),
+  auto_assign_new_conversations: z.boolean(),
   online_only_routing: z.boolean(),
   routing_strategy: z.enum(ROUTING_STRATEGIES),
 });
@@ -44,6 +45,7 @@ function normalized(settings: unknown) {
     auto_reassign_after_minutes: numberValue(sla.auto_reassign_after_minutes, 30, 0, 10080),
     auto_close_waiting_hours: numberValue(operations.auto_close_waiting_hours, 0, 0, 720),
     next_action_reminders: operations.next_action_reminders !== false,
+    auto_assign_new_conversations: routing.auto_assign_new === true,
     online_only_routing: routing.online_only === true,
     routing_strategy: strategy,
   };
@@ -98,6 +100,7 @@ export async function PATCH(request: Request) {
     },
     conversation_routing: {
       ...record(root.conversation_routing),
+      auto_assign_new: parsed.data.auto_assign_new_conversations,
       online_only: parsed.data.online_only_routing,
       strategy: parsed.data.routing_strategy,
     },
