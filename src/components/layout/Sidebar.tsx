@@ -13,6 +13,7 @@ import {
   Settings,
   Settings2,
   UserCog,
+  UserRound,
   Users,
   Zap,
 } from 'lucide-react';
@@ -144,7 +145,10 @@ function UserMenu({
 
           <div className="p-1.5">
             <Link href="/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950">
-              <Settings className="h-3.5 w-3.5 text-zinc-400" /> Account settings
+              <UserRound className="h-3.5 w-3.5 text-zinc-400" /> Work profile
+            </Link>
+            <Link href="/settings/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950">
+              <Settings className="h-3.5 w-3.5 text-zinc-400" /> Personal settings
             </Link>
             <button type="button" role="menuitem" onClick={() => { setOpen(false); onSignOut(); }} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-rose-50 hover:text-rose-700">
               <LogOut className="h-3.5 w-3.5 text-zinc-400" /> Sign out
@@ -185,7 +189,7 @@ export default function Sidebar() {
   ];
 
   const admin: NavItem[] = isAgent ? [] : [
-    { label: 'Settings', href: '/settings/workspace', icon: Settings },
+    { label: 'Settings', href: '/settings', icon: Settings },
   ];
 
   const handleStatusChange = (status: AgentStatus) => {
