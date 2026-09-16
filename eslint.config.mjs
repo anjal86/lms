@@ -24,4 +24,13 @@ export default defineConfig([
       '@next/next/no-img-element': 'warn',
     },
   },
+  {
+    // StableInbox keeps tenant-scoped runtime caches in refs so they survive route
+    // remounts without becoming render state. Reads/writes happen from effects and
+    // event callbacks; the scope pointer is intentionally refreshed during render.
+    files: ['src/components/inbox/StableInbox.tsx'],
+    rules: {
+      'react-hooks/refs': 'warn',
+    },
+  },
 ]);
