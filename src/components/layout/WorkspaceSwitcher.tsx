@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Building2, Check, ChevronsUpDown, Loader2, Plus } from 'lucide-react';
+import { AlertCircle, Building2, Check, ChevronsUpDown, Loader2, Plus } from 'lucide-react';
 
 type WorkspaceMembership = {
   id: string;
@@ -25,6 +25,7 @@ export default function WorkspaceSwitcher() {
   const [currentId, setCurrentId] = useState('');
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -69,6 +70,7 @@ export default function WorkspaceSwitcher() {
 
   const switchWorkspace = async (workspaceId: string) => {
     if (!workspaceId || workspaceId === current?.id || switching) return;
+    setSwitchError(null);
     setSwitching(workspaceId);
     setOpen(false);
     try {
@@ -83,7 +85,9 @@ export default function WorkspaceSwitcher() {
       // providers/stores must rehydrate before data from the next company is shown.
       window.location.assign('/dashboard');
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to switch workspace.';
       console.error(err);
+      setSwitchError(message);
       setSwitching(null);
     }
   };
@@ -102,10 +106,11 @@ export default function WorkspaceSwitcher() {
       <button
         type="button"
         onClick={() => !switching && setOpen((v) => !v)}
+        disabled={Boolean(switching)}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Switch workspace"
-        className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
+        className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 disabled:cursor-wait disabled:opacity-80"
       >
         {current ? <WorkspaceAvatar name={current.name} active /> : (
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-zinc-400"><Building2 className="h-3.5 w-3.5" /></span>
@@ -116,6 +121,13 @@ export default function WorkspaceSwitcher() {
         </span>
         {switching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" /> : <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
       </button>
+
+      {switchError && (
+        <button type="button" onClick={() => setSwitchError(null)} className="mt-1.5 flex w-full items-start gap-1.5 rounded-lg bg-rose-50 px-2 py-1.5 text-left text-[10px] leading-4 text-rose-700" aria-label="Dismiss workspace switch error">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="min-w-0 flex-1">{switchError}</span>
+        </button>
+      )}
 
       {open && (
         <div role="listbox" aria-label="Workspaces" className="absolute left-0 top-[calc(100%+6px)] z-50 w-72 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl animate-in fade-in-0 zoom-in-95 duration-100">
