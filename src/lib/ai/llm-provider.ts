@@ -226,6 +226,7 @@ async function requestOpenAiCompatible(runtime: ProviderRuntime, agent: AiAgentC
   const run = async (includeTemperature: boolean) => fetch(url, {
     method: 'POST',
     headers,
+    redirect: 'error',
     body: JSON.stringify(includeTemperature
       ? { ...basePayload, temperature: Math.min(1.5, Math.max(0, Number(agent.temperature) || 0.3)) }
       : basePayload),
@@ -251,6 +252,7 @@ async function requestAnthropic(runtime: ProviderRuntime, agent: AiAgentConfig, 
       'x-api-key': runtime.apiKey,
       'anthropic-version': '2023-06-01',
     },
+    redirect: 'error',
     body: JSON.stringify({
       model: agent.model,
       max_tokens: 1200,
@@ -277,6 +279,7 @@ async function requestGoogle(runtime: ProviderRuntime, agent: AiAgentConfig, sys
       'Content-Type': 'application/json',
       'x-goog-api-key': runtime.apiKey,
     },
+    redirect: 'error',
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -300,6 +303,7 @@ export async function decideWithAiProvider(
   agent: AiAgentConfig,
   context: AiConversationContext,
 ): Promise<AiAgentDecision> {
+  if (!agent.model.trim()) throw new Error('AI model ID is required.');
   const runtime = await resolveAiProviderRuntime(workspaceId, agent.providerConfigId);
   const system = systemPrompt(agent);
   const user = userPrompt(context);
