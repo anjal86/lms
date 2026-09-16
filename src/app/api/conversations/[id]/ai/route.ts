@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,6 +33,70 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   return NextResponse.json({ ai: state || null }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 
+async function requeueLatestUnansweredInbound(input: {
+  workspaceId: string;
+  conversationId: string;
+  agentId: string;
+}) {
+  const admin = createSupabaseAdminClient();
+  const { data: rows, error } = await admin
+    .from('lead_messages')
+    .select('id,direction,sent_at')
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId)
+    .in('direction', ['inbound','outbound'])
+    .order('sent_at', { ascending: false })
+    .limit(30);
+  if (error) throw error;
+
+  const messages = rows || [];
+  const latestInbound = messages.find((message) => message.direction === 'inbound');
+  if (!latestInbound) return false;
+
+  const inboundAt = new Date(latestInbound.sent_at).getTime();
+  const hasLaterOutbound = messages.some((message) => (
+    message.direction === 'outbound' && new Date(message.sent_at).getTime() > inboundAt
+  ));
+  if (hasLaterOutbound) return false;
+
+  const { data: existingJob, error: jobReadError } = await admin
+    .from('ai_agent_jobs')
+    .select('id')
+    .eq('source_message_id', latestInbound.id)
+    .maybeSingle();
+  if (jobReadError) throw jobReadError;
+
+  const now = new Date().toISOString();
+  if (existingJob?.id) {
+    const { error: resetError } = await admin.from('ai_agent_jobs').update({
+      workspace_id: input.workspaceId,
+      agent_id: input.agentId,
+      conversation_id: input.conversationId,
+      status: 'queued',
+      attempt_count: 0,
+      next_attempt_at: now,
+      locked_at: null,
+      completed_at: null,
+      last_error: null,
+      result: {},
+      updated_at: now,
+    }).eq('id', existingJob.id);
+    if (resetError) throw resetError;
+  } else {
+    const { error: insertError } = await admin.from('ai_agent_jobs').insert({
+      workspace_id: input.workspaceId,
+      agent_id: input.agentId,
+      conversation_id: input.conversationId,
+      source_message_id: latestInbound.id,
+      status: 'queued',
+      next_attempt_at: now,
+    });
+    if (insertError) throw insertError;
+  }
+
+  return true;
+}
+
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
@@ -58,6 +123,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required to return a conversation to AI.' }, { status: 403 });
     if (!existing?.agent_id) return NextResponse.json({ error: 'No AI agent is attached to this conversation.' }, { status: 409 });
 
+    const { data: agent } = await actor.supabase
+      .from('ai_agents')
+      .select('id,is_active,mode')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', existing.agent_id)
+      .maybeSingle();
+    if (!agent?.is_active || agent.mode === 'off') {
+      return NextResponse.json({ error: 'The attached AI agent is not active.' }, { status: 409 });
+    }
+
     const { error: unassignError } = await actor.supabase
       .from('lead_conversations')
       .update({ assigned_to: null, updated_at: new Date().toISOString() })
@@ -74,11 +149,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       updated_at: new Date().toISOString(),
     }).eq('workspace_id', actor.profile.workspace_id).eq('conversation_id', id);
     if (error) return NextResponse.json({ error: 'Unable to resume AI.' }, { status: 500 });
+
+    try {
+      await requeueLatestUnansweredInbound({
+        workspaceId: actor.profile.workspace_id,
+        conversationId: id,
+        agentId: existing.agent_id,
+      });
+    } catch (queueError) {
+      console.error('Unable to requeue conversation for AI after resume:', queueError);
+      return NextResponse.json({ error: 'AI was resumed, but the latest customer message could not be queued.' }, { status: 500 });
+    }
   } else {
     if (!existing?.agent_id) return NextResponse.json({ error: 'No AI agent is attached to this conversation.' }, { status: 409 });
-    const nextState = parsed.data.action === 'takeover' ? 'paused' : 'paused';
     const patch: Record<string, unknown> = {
-      state: nextState,
+      state: 'paused',
       last_human_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
