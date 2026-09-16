@@ -259,7 +259,7 @@ export default function TeamMemberDrawer({
                     disabled={!canManage}
                     className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition ${
                       member.accepting_leads
-                        ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                        ? 'text-zinc-900 bg-zinc-200 hover:bg-zinc-300'
                         : 'text-zinc-500 bg-zinc-100 hover:bg-zinc-200'
                     }`}
                     title="Toggle auto-assign participation"

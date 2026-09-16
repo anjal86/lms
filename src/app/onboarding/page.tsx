@@ -53,7 +53,7 @@ export default function WorkspaceOnboardingPage() {
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
-            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-950 text-white shadow-sm">
+            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm">
               <Building2 className="h-5 w-5" />
             </div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Workspace setup</p>
@@ -67,7 +67,7 @@ export default function WorkspaceOnboardingPage() {
           )}
         </div>
 
-        <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+        <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
           <label className="block text-xs font-semibold text-zinc-700">Company name</label>
           <input
             autoFocus
@@ -89,7 +89,7 @@ export default function WorkspaceOnboardingPage() {
                     type="button"
                     key={template.key}
                     onClick={() => setTemplateKey(template.key)}
-                    className={`flex items-start gap-3 rounded-xl border p-3.5 text-left transition ${selected ? 'border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900' : 'border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50/60'}`}
+                    className={`flex items-start gap-3 rounded-lg border p-3.5 text-left transition ${selected ? 'border-zinc-900 bg-zinc-50 ring-1 ring-zinc-900' : 'border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50/60'}`}
                   >
                     <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 text-transparent'}`}>
                       <Check className="h-3 w-3" />

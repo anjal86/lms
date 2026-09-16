@@ -59,13 +59,13 @@ const CHANNEL_LABELS: Record<string, string> = {
 };
 
 const CHANNEL_TONES: Record<string, string> = {
-  facebook: 'border-blue-200 bg-blue-50 text-blue-700',
-  instagram: 'border-pink-200 bg-pink-50 text-pink-700',
-  whatsapp: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  tiktok: 'border-zinc-300 bg-zinc-100 text-zinc-800',
-  email: 'border-amber-200 bg-amber-50 text-amber-700',
-  website: 'border-cyan-200 bg-cyan-50 text-cyan-700',
-  api: 'border-violet-200 bg-violet-50 text-violet-700',
+  facebook: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  instagram: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  whatsapp: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  tiktok: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  email: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  website: 'border-zinc-200 bg-zinc-50 text-zinc-600',
+  api: 'border-zinc-200 bg-zinc-50 text-zinc-600',
   legacy: 'border-zinc-200 bg-zinc-50 text-zinc-600',
 };
 
@@ -228,7 +228,7 @@ export default function ManagerPipeline() {
       </section>
 
       <section className="surface-flat overflow-visible">
-        <div className="border-b border-line px-3 pt-2 sm:px-4">
+        <div className="border-b border-zinc-200 px-3 pt-2 sm:px-4">
           <nav className="flex gap-1 overflow-x-auto" aria-label="Lead views">
             {tabs.map((item) => {
               const active = tab === item.id;
@@ -246,7 +246,7 @@ export default function ManagerPipeline() {
           </nav>
         </div>
 
-        <div className="flex flex-col gap-2 border-b border-line p-3 sm:flex-row sm:items-center sm:p-4">
+        <div className="flex flex-col gap-2 border-b border-zinc-200 p-3 sm:flex-row sm:items-center sm:p-4">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input type="search" value={q} onChange={(event) => updateParams({ q: event.target.value || null })} placeholder="Search traveler, phone, email, lead code, destination or source" aria-label="Search leads" className="field pl-9" />
@@ -256,7 +256,7 @@ export default function ManagerPipeline() {
               <Filter className="h-4 w-4" /> Filters {activeFilterCount > 0 && <span className="font-mono text-[10px] text-zinc-500">{activeFilterCount}</span>}
             </button>
             {filtersOpen && (
-              <div className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-app border border-line bg-surface p-4 shadow-panel">
+              <div className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-zinc-200 bg-white p-4 shadow-lg">
                 <div className="mb-3 flex items-center justify-between">
                   <div><div className="section-heading">Filter leads</div><div className="section-description">Filter by source, destination or trip status.</div></div>
                   <button type="button" onClick={() => setFiltersOpen(false)} className="button-ghost button-sm" aria-label="Close filters"><X className="h-4 w-4" /></button>
@@ -295,7 +295,7 @@ export default function ManagerPipeline() {
         </div>
 
         {activeFilterCount > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+          <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-3 py-2 sm:px-4">
             <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-400" />
             {channel !== 'ALL' && <button type="button" onClick={() => updateParams({ channel: null })} className="button-ghost button-sm">Channel: {CHANNEL_LABELS[channel] || channel} <X className="h-3 w-3" /></button>}
             {destination !== 'ALL' && <button type="button" onClick={() => updateParams({ dest: null })} className="button-ghost button-sm">Destination: {destination} <X className="h-3 w-3" /></button>}
@@ -319,7 +319,7 @@ export default function ManagerPipeline() {
                     const owner = allProfiles.find((profile) => profile.id === lead.assigned_to);
                     const value = lead.package_sale_price || lead.won_deal_value || 0;
                     return (
-                      <tr key={lead.id} className={selectedIds.includes(lead.id) ? 'bg-surface-selected' : undefined}>
+                      <tr key={lead.id} className={selectedIds.includes(lead.id) ? 'bg-blue-50/50' : undefined}>
                         <td className="text-center"><input type="checkbox" checked={selectedIds.includes(lead.id)} onChange={() => setSelectedIds((ids) => ids.includes(lead.id) ? ids.filter((id) => id !== lead.id) : [...ids, lead.id])} aria-label={`Select ${lead.customer_name}`} /></td>
                         <td>
                           <Link href={`/leads/${lead.id}/workspace`} className="group block min-w-[12rem]">
@@ -329,7 +329,7 @@ export default function ManagerPipeline() {
                           </Link>
                         </td>
                         <td><div className="font-medium text-zinc-800">{lead.destination}</div><div className="mt-0.5 text-[11px] text-zinc-500">{lead.travel_dates || `${lead.duration_days} days`}</div></td>
-                        <td><select value={lead.stage} aria-label={`Update stage for ${lead.customer_name}`} onChange={(event) => changeStage(lead, event.target.value as LeadStage)} className="field-sm rounded-app-sm border border-line-strong bg-surface px-2 text-xs font-semibold text-zinc-700">{Object.entries(STAGE_LABELS).map(([valueKey, label]) => <option key={valueKey} value={valueKey}>{label}</option>)}</select></td>
+                        <td><select value={lead.stage} aria-label={`Update stage for ${lead.customer_name}`} onChange={(event) => changeStage(lead, event.target.value as LeadStage)} className="field-sm rounded-md border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700">{Object.entries(STAGE_LABELS).map(([valueKey, label]) => <option key={valueKey} value={valueKey}>{label}</option>)}</select></td>
                         <td><SlaBadge lead={lead} />{lead.next_follow_up_at && <div className="mt-1 font-mono text-[10px] text-zinc-500">{new Date(lead.next_follow_up_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}</td>
                         <td>
                           <label className="sr-only" htmlFor={`owner-${lead.id}`}>Owner for {lead.customer_name}</label>
@@ -356,7 +356,7 @@ export default function ManagerPipeline() {
                       <div><div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Stage</div><div className="mt-0.5 text-zinc-700">{STAGE_LABELS[lead.stage]}</div></div>
                       <div><div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">Next action</div><div className="mt-0.5"><SlaBadge lead={lead} /></div></div>
                     </div>
-                    <div className="mt-3 flex gap-2 border-t border-line pt-3"><button type="button" onClick={() => setActiveLogLead(lead)} className="button-secondary flex-1"><Phone className="h-4 w-4" /> Log contact</button><button type="button" onClick={() => setActiveWaLead(lead)} className="button-secondary flex-1"><MessageSquare className="h-4 w-4" /> WhatsApp</button></div>
+                    <div className="mt-3 flex gap-2 border-t border-zinc-200 pt-3"><button type="button" onClick={() => setActiveLogLead(lead)} className="button-secondary flex-1"><Phone className="h-4 w-4" /> Log contact</button><button type="button" onClick={() => setActiveWaLead(lead)} className="button-secondary flex-1"><MessageSquare className="h-4 w-4" /> WhatsApp</button></div>
                   </article>
                 );
               })}
@@ -364,21 +364,21 @@ export default function ManagerPipeline() {
           </>
         )}
 
-        <footer className="flex flex-col gap-3 border-t border-line px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+        <footer className="flex flex-col gap-3 border-t border-zinc-200 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
           <div className="text-xs text-zinc-500">{total > 0 ? <>Showing <span className="font-mono font-medium text-zinc-700">{firstItem}–{lastItem}</span> of <span className="font-mono font-medium text-zinc-700">{total}</span></> : 'No results'}</div>
           <div className="flex items-center gap-1">
             <button type="button" className="button-secondary button-sm px-2" disabled={page <= 1 || isLoading} onClick={() => updateParams({ page: String(page - 1) })} aria-label="Previous page"><ChevronLeft className="h-3.5 w-3.5" /></button>
-            {pages.map((pageNumber) => <button key={pageNumber} type="button" onClick={() => updateParams({ page: String(pageNumber) })} className={`button-sm min-w-8 rounded-app-sm border text-xs font-semibold ${pageNumber === page ? 'border-blue-600 bg-blue-600 text-white' : 'border-line-strong bg-white text-zinc-600 hover:bg-blue-50 hover:text-blue-700'}`} aria-current={pageNumber === page ? 'page' : undefined}>{pageNumber}</button>)}
+            {pages.map((pageNumber) => <button key={pageNumber} type="button" onClick={() => updateParams({ page: String(pageNumber) })} className={`button-sm min-w-8 rounded-md border text-xs font-semibold ${pageNumber === page ? 'border-zinc-950 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'}`} aria-current={pageNumber === page ? 'page' : undefined}>{pageNumber}</button>)}
             <button type="button" className="button-secondary button-sm px-2" disabled={page >= totalPages || isLoading} onClick={() => updateParams({ page: String(page + 1) })} aria-label="Next page"><ChevronRight className="h-3.5 w-3.5" /></button>
           </div>
         </footer>
       </section>
 
       {selectedIds.length > 0 && (
-        <div className="fixed bottom-5 left-1/2 z-40 w-[min(44rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-blue-800 bg-slate-950 p-2.5 text-white shadow-2xl">
+        <div className="fixed bottom-5 left-1/2 z-40 w-[min(44rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-zinc-800 bg-zinc-950 p-2.5 text-white shadow-lg">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center"><div className="shrink-0 px-2 font-mono text-xs font-semibold">{selectedIds.length} selected</div><div className="flex flex-1 flex-col gap-2 sm:flex-row">
-            <select defaultValue="" aria-label="Assign selected leads" className="min-h-9 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 text-xs text-zinc-100" onChange={(event) => { if (!event.target.value) return; bulkAssignLeads(selectedIds, event.target.value); setSelectedIds([]); }}><option value="" disabled>Assign to…</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select>
-            <select defaultValue="" aria-label="Change stage for selected leads" className="min-h-9 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 text-xs text-zinc-100" onChange={(event) => { if (!event.target.value) return; bulkUpdateLeadStage(selectedIds, event.target.value as LeadStage); setSelectedIds([]); }}><option value="" disabled>Move stage…</option><option value="new">New</option><option value="contacted">Contacted</option><option value="quote_sent">Quote sent</option><option value="in_negotiation">Negotiation</option><option value="lost">Lost</option></select>
+            <select defaultValue="" aria-label="Assign selected leads" className="min-h-9 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-100" onChange={(event) => { if (!event.target.value) return; bulkAssignLeads(selectedIds, event.target.value); setSelectedIds([]); }}><option value="" disabled>Assign to…</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select>
+            <select defaultValue="" aria-label="Change stage for selected leads" className="min-h-9 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-100" onChange={(event) => { if (!event.target.value) return; bulkUpdateLeadStage(selectedIds, event.target.value as LeadStage); setSelectedIds([]); }}><option value="" disabled>Move stage…</option><option value="new">New</option><option value="contacted">Contacted</option><option value="quote_sent">Quote sent</option><option value="in_negotiation">Negotiation</option><option value="lost">Lost</option></select>
           </div><button type="button" onClick={() => setSelectedIds([])} className="button-ghost button-sm text-zinc-300 hover:bg-zinc-800 hover:text-white" aria-label="Clear selection"><X className="h-4 w-4" /></button></div>
         </div>
       )}

@@ -55,10 +55,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!isHydrated) {
     return (
-      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
-        <div className="surface-flat flex items-center gap-3 px-4 py-3 text-sm font-medium text-zinc-600">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-          Loading workspace…
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50" role="status" aria-live="polite">
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400 [animation-delay:150ms]" />
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400 [animation-delay:300ms]" />
         </div>
       </div>
     );
@@ -79,10 +80,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (needsWorkspace && !isOnboarding) {
     return (
-      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
-        <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-          Preparing workspace setup…
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50" role="status" aria-live="polite">
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
+          Setting up workspace…
         </div>
       </div>
     );
@@ -95,16 +96,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (redirectTarget) {
     return (
-      <div className="app-shell flex min-h-screen items-center justify-center" role="status" aria-live="polite">
-        <div className="flex items-center gap-3 text-sm font-medium text-zinc-500">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-          Opening your workspace…
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50" role="status" aria-live="polite">
+        <div className="flex items-center gap-2 text-sm text-zinc-500">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-400" />
+          Opening workspace…
         </div>
       </div>
     );
   }
 
-  const isInbox = pathname === '/inbox';
+  // Pages that render their own inner headers/tables need edge-to-edge layout
+  // (no padding from app-main — they handle their own spacing internally)
+  const isFullBleed = (
+    pathname === '/inbox' ||
+    pathname.startsWith('/inbox/') ||
+    pathname === '/contacts' ||
+    pathname.startsWith('/contacts/')
+  );
 
   return (
     <WorkspaceProvider>
@@ -116,12 +124,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             id="main-content"
             tabIndex={-1}
             className={
-              isInbox
+              isFullBleed
                 ? 'flex flex-1 min-w-0 min-h-0 overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0 bg-white'
                 : 'app-main'
             }
           >
-            <div className={isInbox ? 'flex h-full w-full min-w-0 flex-1 overflow-hidden' : 'app-page-frame'}>
+            <div className={isFullBleed ? 'flex h-full w-full min-w-0 flex-1 overflow-hidden' : 'app-page-frame'}>
               {children}
             </div>
           </main>
@@ -131,3 +139,4 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </WorkspaceProvider>
   );
 }
+

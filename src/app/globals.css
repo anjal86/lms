@@ -50,32 +50,32 @@
     --color-surface: var(--zinc-0);
     --color-surface-subtle: #f8f9fb;
     --color-surface-hover: var(--zinc-50);
-    --color-surface-selected: var(--blue-50);
+    --color-surface-selected: var(--zinc-100);
     --color-border: var(--zinc-200);
     --color-border-strong: var(--zinc-300);
     --color-text-primary: var(--zinc-950);
     --color-text-secondary: var(--zinc-600);
     --color-text-muted: var(--zinc-500);
     --color-text-disabled: var(--zinc-400);
-    --color-accent: var(--blue-600);
-    --color-accent-hover: var(--blue-700);
-    --color-accent-soft: var(--blue-50);
+    --color-accent: var(--zinc-900);
+    --color-accent-hover: var(--zinc-800);
+    --color-accent-soft: var(--zinc-100);
     --color-danger: var(--red-600);
     --color-danger-soft: var(--red-50);
     --color-warning: var(--amber-500);
     --color-warning-soft: var(--amber-50);
     --color-success: var(--emerald-500);
     --color-success-soft: var(--emerald-50);
-    --color-focus: rgba(37, 99, 235, 0.18);
+    --color-focus: rgba(9, 9, 11, 0.18);
 
     /* Component tokens */
     --page-gutter-x: 2rem;
     --page-gutter-y: 1.5rem;
     --page-section-gap: 1.5rem;
-    --panel-radius: var(--radius-md);
+    --panel-radius: var(--radius-sm);
     --control-radius: var(--radius-sm);
     --control-height: var(--control-md);
-    --header-height: 4rem;
+    --header-height: 3rem;
     --shadow-2xs: 0 1px 2px rgba(9, 9, 11, 0.04);
     --shadow-panel: 0 1px 2px rgba(9, 9, 11, 0.03), 0 8px 24px rgba(9, 9, 11, 0.035);
 
@@ -140,8 +140,8 @@
   }
 
   ::selection {
-    background: var(--blue-100);
-    color: #172554;
+    background: var(--zinc-200);
+    color: var(--zinc-950);
   }
 }
 
@@ -160,14 +160,6 @@
   .app-page-frame {
     width: 100%;
     min-width: 0;
-  }
-
-  /* Enforce a single full-width workspace contract for legacy pages too. */
-  .app-page-frame > * {
-    width: 100% !important;
-    max-width: none !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
   }
 
   .workspace-header,
@@ -190,9 +182,9 @@
   .workspace-title,
   .page-title {
     color: var(--color-text-primary);
-    font-size: 1.5rem;
-    font-weight: 650;
-    letter-spacing: -0.025em;
+    font-size: 1.375rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
     line-height: 1.2;
   }
 
@@ -232,7 +224,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--panel-radius);
     background: var(--color-surface);
-    box-shadow: var(--shadow-panel);
   }
 
   .surface-flat {
@@ -263,7 +254,6 @@
     background: var(--color-surface-subtle);
   }
 
-  /* Toolbars and filters */
   .toolbar,
   .filter-bar {
     display: flex;
@@ -275,7 +265,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--panel-radius);
     background: var(--color-surface);
-    box-shadow: var(--shadow-2xs);
   }
 
   .toolbar-group {
@@ -422,7 +411,6 @@
     border: 1px solid var(--color-border);
     border-radius: var(--panel-radius);
     background: var(--color-surface);
-    box-shadow: var(--shadow-2xs);
   }
 
   .metric-label {
@@ -511,8 +499,6 @@
 
 header.sticky {
   height: var(--header-height);
-  padding-left: 1rem;
-  padding-right: 1rem;
 }
 
 header.sticky button,
@@ -643,7 +629,7 @@ textarea:focus-visible {
     --page-gutter-x: 1rem;
     --page-gutter-y: 1rem;
     --page-section-gap: 1rem;
-    --header-height: 3.75rem;
+    --header-height: 3rem;
   }
 
   .app-main {

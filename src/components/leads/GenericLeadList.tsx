@@ -72,14 +72,16 @@ export default function GenericLeadList() {
   const contactLabel = term('contact', 'Contact');
 
   return (
-    <div className="app-page space-y-4">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="app-page">
+      <header className="page-header">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-400">{config.workspace.name}</div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-950">{leadPlural}</h1>
-          <p className="mt-1 text-sm text-zinc-500">{total.toLocaleString()} records · {pipeline?.name || 'Default pipeline'}</p>
+          <p className="page-eyebrow">{config.workspace.name}</p>
+          <h1 className="page-title">{leadPlural}</h1>
+          <p className="page-description">{total.toLocaleString()} records · {pipeline?.name || 'Default pipeline'}</p>
         </div>
-        <button type="button" onClick={() => setShowNew(true)} className="button-primary"><Plus className="h-4 w-4" /> New {leadLabel}</button>
+        <div className="page-actions">
+          <button type="button" onClick={() => setShowNew(true)} className="button-primary"><Plus className="h-4 w-4" /> New {leadLabel}</button>
+        </div>
       </header>
 
       <section className="surface-flat overflow-hidden">

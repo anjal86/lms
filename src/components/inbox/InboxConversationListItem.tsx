@@ -69,7 +69,7 @@ export default function InboxConversationListItem({ conversation, selected, cont
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, via ${account}`}
     onClick={onSelect}
-    className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-blue-600 bg-blue-50/40' : 'border-l-transparent bg-white'}`}
+    className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-zinc-950 bg-zinc-50' : 'border-l-transparent bg-white'}`}
   >
     <div className="flex min-w-0 items-start gap-2.5">
       <div className="relative shrink-0">
@@ -87,13 +87,13 @@ export default function InboxConversationListItem({ conversation, selected, cont
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-2">
           <p className={`min-w-0 flex-1 truncate text-xs leading-5 ${unread ? 'font-semibold text-zinc-800' : 'text-zinc-500'}`}>{conversation.last_message_preview || 'No message preview'}</p>
-          {unread && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-blue-600 px-1.5 text-[10px] font-bold text-white">{conversation.unread_count}</span>}
+          {unread && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-zinc-950 px-1.5 text-[10px] font-bold text-white">{conversation.unread_count}</span>}
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-zinc-400">
           <span className="max-w-[150px] truncate font-medium capitalize">{account}</span>
           <span>·</span>
           <span className="max-w-[90px] truncate">{assignee}</span>
-          {conversation.priority !== 'normal' && <span className="ml-1 shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 font-bold uppercase text-amber-700">{conversation.priority}</span>}
+          {conversation.priority !== 'normal' && <span className="ml-1 shrink-0 rounded-md bg-zinc-100 px-1.5 py-0.5 font-medium uppercase text-zinc-600">{conversation.priority}</span>}
           <span className={`ml-auto shrink-0 font-semibold ${statusDanger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : 'text-zinc-400'}`}>{statusText}</span>
         </div>
       </div>

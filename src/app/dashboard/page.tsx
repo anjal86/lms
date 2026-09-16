@@ -49,12 +49,15 @@ const EMPTY_EXCEPTIONS: ConversationExceptions = { needs_reply: 0, sla_overdue: 
 const DASHBOARD_RUNTIME_CACHE = new Map<string, DashboardSnapshot>();
 
 function Metric({ title, value, hint, href, icon: Icon, danger = false }: { title: string; value: number | string; hint: string; href: string; icon: typeof AlertTriangle; danger?: boolean }) {
-  return <Link href={href} className={`group rounded-xl border p-4 transition hover:-translate-y-0.5 hover:shadow-sm ${danger ? 'border-rose-100 bg-rose-50/50' : 'border-zinc-200 bg-white'}`}>
-    <div className="flex items-start justify-between gap-4">
-      <div><div className="text-xs font-semibold text-zinc-800">{title}</div><div className="mt-1 text-[11px] leading-5 text-zinc-500">{hint}</div></div>
-      <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${danger ? 'bg-rose-100 text-rose-700' : 'bg-zinc-100 text-zinc-600'}`}><Icon className="h-4 w-4" /></span>
+  return <Link href={href} className={`group flex flex-col justify-between p-5 transition hover:bg-zinc-50/80 ${danger ? 'bg-rose-50/30 hover:bg-rose-50' : 'bg-white'}`}>
+    <div>
+      <div className="flex items-center gap-2">
+        <Icon className={`h-4 w-4 ${danger ? 'text-rose-600' : 'text-zinc-400'}`} />
+        <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">{title}</span>
+      </div>
+      <div className={`mt-5 font-mono text-4xl font-medium tracking-tight ${danger ? 'text-rose-700' : 'text-zinc-950'}`}>{value}</div>
     </div>
-    <div className={`mt-4 font-mono text-3xl font-semibold ${danger ? 'text-rose-700' : 'text-zinc-950'}`}>{value}</div>
+    <div className="mt-6 border-t border-zinc-100 pt-3 text-[11px] leading-relaxed text-zinc-400">{hint}</div>
   </Link>;
 }
 
@@ -167,14 +170,16 @@ export default function DashboardPage() {
     {error && <div role="alert" className="surface-flat border-rose-200 bg-rose-50/70 p-4 text-sm text-rose-700">{error}</div>}
 
     <section>
-      <div className="mb-3"><h2 className="section-heading">Start here</h2><p className="section-description">{primaryAttention} item{primaryAttention === 1 ? '' : 's'} require near-term attention.</p></div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {inboxEnabled ? <Metric title="Needs reply" value={exceptions.needs_reply} hint={`${contactPlural} waiting on your team.`} href="/inbox?view=needs_reply" icon={Inbox} danger={exceptions.needs_reply > 0} /> : <Metric title="Replies needed" value={summary.sla_breaches} hint={`${contactPlural} still waiting for first contact.`} href={isAgent ? '/my-work' : '/leads'} icon={ShieldAlert} danger={summary.sla_breaches > 0} />}
-        <Metric title="Due actions" value={dueActions} hint="Scheduled follow-ups and conversation actions." href={isAgent ? '/work?owner=me' : '/work'} icon={CalendarClock} danger={dueActions > 0} />
-        <Metric title={isAgent ? `My ${leadPlural}` : `Active ${leadPlural}`} value={isAgent ? pipeline.my_count : pipeline.visible_count} hint="Commercial work currently in progress." href={isAgent ? '/my-work' : '/leads'} icon={BriefcaseBusiness} />
-        {inboxEnabled
-          ? <Metric title={isAgent ? 'Urgent conversations' : 'Unassigned conversations'} value={isAgent ? exceptions.urgent : exceptions.unassigned} hint={isAgent ? 'Highest-priority customer conversations.' : 'Open conversations without an owner.'} href={isAgent ? '/inbox?view=high_priority' : '/inbox?view=unassigned'} icon={isAgent ? AlertTriangle : UserRoundSearch} danger={(isAgent ? exceptions.urgent : exceptions.unassigned) > 0} />
-          : <Metric title={isAgent ? 'My active work' : 'Unassigned opportunities'} value={isAgent ? pipeline.my_count : summary.unassigned_leads} hint="Ownership that needs attention." href={isAgent ? '/my-work' : '/leads'} icon={UserRoundSearch} />}
+      <div className="mb-4"><h2 className="section-heading">Start here</h2><p className="section-description">{primaryAttention} item{primaryAttention === 1 ? '' : 's'} require near-term attention.</p></div>
+      <div className="surface-flat overflow-hidden">
+        <div className="grid divide-y divide-zinc-200 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4 xl:divide-x xl:divide-y-0">
+          {inboxEnabled ? <Metric title="Needs reply" value={exceptions.needs_reply} hint={`${contactPlural} waiting on your team.`} href="/inbox?view=needs_reply" icon={Inbox} danger={exceptions.needs_reply > 0} /> : <Metric title="Replies needed" value={summary.sla_breaches} hint={`${contactPlural} still waiting for first contact.`} href={isAgent ? '/my-work' : '/leads'} icon={ShieldAlert} danger={summary.sla_breaches > 0} />}
+          <Metric title="Due actions" value={dueActions} hint="Scheduled follow-ups and conversation actions." href={isAgent ? '/work?owner=me' : '/work'} icon={CalendarClock} danger={dueActions > 0} />
+          <Metric title={isAgent ? `My ${leadPlural}` : `Active ${leadPlural}`} value={isAgent ? pipeline.my_count : pipeline.visible_count} hint="Commercial work currently in progress." href={isAgent ? '/my-work' : '/leads'} icon={BriefcaseBusiness} />
+          {inboxEnabled
+            ? <Metric title={isAgent ? 'Urgent conversations' : 'Unassigned conversations'} value={isAgent ? exceptions.urgent : exceptions.unassigned} hint={isAgent ? 'Highest-priority customer conversations.' : 'Open conversations without an owner.'} href={isAgent ? '/inbox?view=high_priority' : '/inbox?view=unassigned'} icon={isAgent ? AlertTriangle : UserRoundSearch} danger={(isAgent ? exceptions.urgent : exceptions.unassigned) > 0} />
+            : <Metric title={isAgent ? 'My active work' : 'Unassigned opportunities'} value={isAgent ? pipeline.my_count : summary.unassigned_leads} hint="Ownership that needs attention." href={isAgent ? '/my-work' : '/leads'} icon={UserRoundSearch} />}
+        </div>
       </div>
     </section>
 

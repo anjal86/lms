@@ -107,10 +107,10 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
 
   return (
     <>
-      <section className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
+      <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white">
         <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-4 py-3.5">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-700">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-700">
               <KeyRound className="h-4 w-4" />
             </span>
             <div>
@@ -142,11 +142,11 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
                           <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" /> Disconnected
                         </span>
                       ) : profile.status === 'paused' ? (
-                        <span className="flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                        <span className="flex items-center gap-1 rounded bg-zinc-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
                           <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Paused
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">
+                        <span className="flex items-center gap-1 rounded bg-zinc-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Authorized
                         </span>
                       )}
@@ -213,7 +213,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
             aria-labelledby="disconnect-profile-title"
             onClick={(event) => { if (event.target === event.currentTarget && !busy) setPendingDisconnect(null); }}
           >
-            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl">
+            <div className="w-full max-w-md rounded-lg border border-zinc-200 bg-white shadow-lg">
               <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
                 <div className="flex gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><Unplug className="h-4 w-4" /></span>
@@ -251,7 +251,7 @@ export default function AuthorizationProfiles({ onChanged }: Props) {
             aria-labelledby="delete-profile-title"
             onClick={(event) => { if (event.target === event.currentTarget && !busy) setPendingDelete(null); }}
           >
-            <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-2xl">
+            <div className="w-full max-w-md rounded-lg border border-zinc-200 bg-white shadow-lg">
               <div className="flex items-start justify-between gap-3 border-b border-zinc-200 p-4">
                 <div className="flex gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><Trash2 className="h-4 w-4" /></span>
