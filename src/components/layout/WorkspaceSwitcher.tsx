@@ -11,18 +11,10 @@ type WorkspaceMembership = {
   is_current: boolean;
 };
 
-function WorkspaceAvatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' }) {
-  const initial = name.trim().charAt(0).toUpperCase();
-  // Stable color from name hash
-  const hues = [221, 262, 142, 24, 334, 196];
-  const hue = hues[(name.charCodeAt(0) + name.length) % hues.length];
-  const bg = `hsl(${hue} 65% 92%)`;
-  const color = `hsl(${hue} 65% 32%)`;
-  const cls = size === 'sm'
-    ? 'h-5 w-5 rounded text-[10px] font-bold shrink-0'
-    : 'h-6 w-6 rounded-md text-[11px] font-bold shrink-0';
+function WorkspaceAvatar({ name, active = false }: { name: string; active?: boolean }) {
+  const initial = name.trim().charAt(0).toUpperCase() || 'W';
   return (
-    <span className={`inline-flex items-center justify-center ${cls}`} style={{ background: bg, color }}>
+    <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold ${active ? 'bg-blue-600 text-white' : 'bg-zinc-100 text-zinc-600'}`}>
       {initial}
     </span>
   );
@@ -53,7 +45,6 @@ export default function WorkspaceSwitcher() {
     return () => { active = false; };
   }, []);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -63,7 +54,6 @@ export default function WorkspaceSwitcher() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Close on Escape
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
@@ -75,6 +65,7 @@ export default function WorkspaceSwitcher() {
     () => items.find((w) => w.id === currentId) ?? items.find((w) => w.is_current) ?? items[0],
     [currentId, items],
   );
+  const switchingWorkspace = switching ? items.find((item) => item.id === switching) : null;
 
   const switchWorkspace = async (workspaceId: string) => {
     if (!workspaceId || workspaceId === current?.id || switching) return;
@@ -88,6 +79,8 @@ export default function WorkspaceSwitcher() {
       });
       const payload = await r.json().catch(() => null);
       if (!r.ok) throw new Error(payload?.error ?? 'Unable to switch workspace.');
+      // A hard navigation is intentional here: workspace is tenant context and all
+      // providers/stores must rehydrate before data from the next company is shown.
       window.location.assign('/dashboard');
     } catch (err) {
       console.error(err);
@@ -97,55 +90,40 @@ export default function WorkspaceSwitcher() {
 
   if (loading) {
     return (
-      <div className="flex h-10 items-center gap-2 px-2">
-        <div className="h-6 w-6 animate-pulse rounded-md bg-zinc-200" />
-        <div className="h-3 flex-1 animate-pulse rounded bg-zinc-200" />
+      <div className="flex h-10 items-center gap-2 px-2" aria-label="Loading workspaces">
+        <div className="h-7 w-7 animate-pulse rounded-lg bg-zinc-100" />
+        <div className="h-3 w-28 animate-pulse rounded bg-zinc-100" />
       </div>
     );
   }
 
   return (
     <div ref={ref} className="relative">
-      {/* Trigger */}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => !switching && setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Switch workspace"
-        className="flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-zinc-200/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400"
+        className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
       >
-        {current ? (
-          <WorkspaceAvatar name={current.name} />
-        ) : (
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-dashed border-zinc-300 text-zinc-400">
-            <Building2 className="h-3.5 w-3.5" />
-          </span>
+        {current ? <WorkspaceAvatar name={current.name} active /> : (
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-zinc-400"><Building2 className="h-3.5 w-3.5" /></span>
         )}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-zinc-900">
-          {current?.name ?? 'Select workspace'}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-zinc-900">{switchingWorkspace?.name ?? current?.name ?? 'Select workspace'}</span>
+          {switchingWorkspace && <span className="mt-0.5 block text-[10px] text-blue-600">Switching workspace…</span>}
         </span>
-        {switching ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-zinc-400" />
-        ) : (
-          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-        )}
+        {switching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" /> : <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
       </button>
 
-      {/* Dropdown panel */}
       {open && (
-        <div
-          role="listbox"
-          aria-label="Workspaces"
-          className="absolute left-0 top-[calc(100%+4px)] z-50 w-64 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg animate-in fade-in-0 zoom-in-95 duration-100"
-        >
-          {/* Header */}
-          <div className="border-b border-zinc-100 px-3 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Workspaces</p>
+        <div role="listbox" aria-label="Workspaces" className="absolute left-0 top-[calc(100%+6px)] z-50 w-72 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl animate-in fade-in-0 zoom-in-95 duration-100">
+          <div className="border-b border-zinc-100 px-3 py-2.5">
+            <p className="text-[11px] font-medium text-zinc-500">Switch workspace</p>
           </div>
 
-          {/* List */}
-          <ul className="max-h-60 overflow-y-auto py-1">
+          <ul className="max-h-64 overflow-y-auto p-1.5">
             {items.map((ws) => {
               const isCurrent = ws.id === currentId || ws.is_current;
               return (
@@ -154,34 +132,24 @@ export default function WorkspaceSwitcher() {
                     type="button"
                     onClick={() => void switchWorkspace(ws.id)}
                     disabled={!!switching}
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-zinc-50 disabled:opacity-50"
+                    className={`flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors disabled:opacity-50 ${isCurrent ? 'bg-blue-50' : 'hover:bg-zinc-50'}`}
                   >
-                    <WorkspaceAvatar name={ws.name} />
+                    <WorkspaceAvatar name={ws.name} active={isCurrent} />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13px] font-medium text-zinc-900">{ws.name}</div>
-                      <div className="text-[10px] uppercase tracking-wide text-zinc-500">{ws.role}</div>
+                      <div className={`truncate text-[13px] font-medium ${isCurrent ? 'text-blue-800' : 'text-zinc-900'}`}>{ws.name}</div>
+                      <div className="mt-0.5 text-[10px] capitalize text-zinc-500">{ws.role}</div>
                     </div>
-                    {isCurrent && <Check className="h-3.5 w-3.5 shrink-0 text-zinc-900" />}
-                    {switching === ws.id && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-zinc-500" />}
+                    {isCurrent && <Check className="h-3.5 w-3.5 shrink-0 text-blue-600" />}
                   </button>
                 </li>
               );
             })}
-            {items.length === 0 && (
-              <li className="px-3 py-6 text-center text-xs text-zinc-500">No workspaces found.</li>
-            )}
+            {items.length === 0 && <li className="px-3 py-6 text-center text-xs text-zinc-500">No workspaces found.</li>}
           </ul>
 
-          {/* Footer */}
-          <div className="border-t border-zinc-100 p-1">
-            <Link
-              href="/onboarding?new=1"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
-            >
-              <span className="flex h-5 w-5 items-center justify-center rounded border border-dashed border-zinc-300 text-zinc-400">
-                <Plus className="h-3 w-3" />
-              </span>
+          <div className="border-t border-zinc-100 p-1.5">
+            <Link href="/onboarding?new=1" onClick={() => setOpen(false)} className="flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-950">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-zinc-400"><Plus className="h-3.5 w-3.5" /></span>
               Create workspace
             </Link>
           </div>
