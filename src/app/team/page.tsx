@@ -11,6 +11,8 @@ import InviteMemberModal from '@/components/team/InviteMemberModal';
 import BulkReassignModal from '@/components/team/BulkReassignModal';
 import EmployeeHealthModal from '@/components/team/EmployeeHealthModal';
 
+const TEAM_RUNTIME_CACHE = new Map<string, Profile[]>();
+
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('');
 }
@@ -47,8 +49,10 @@ export default function TeamPage() {
   const leadPlural = term('lead_plural', 'Leads');
   const agentLabel = isTravel ? 'Consultant' : 'Agent';
   const agentLabelPlural = isTravel ? 'Consultants' : 'Agents';
-  const [teamProfiles, setTeamProfiles] = useState<Profile[]>([]);
-  const [teamLoading, setTeamLoading] = useState(true);
+  const runtimeCacheKey = `${currentUser.id}::${config.workspace.id}`;
+  const initialTeam = TEAM_RUNTIME_CACHE.get(runtimeCacheKey);
+  const [teamProfiles, setTeamProfiles] = useState<Profile[]>(() => initialTeam || []);
+  const [teamLoading, setTeamLoading] = useState(() => !initialTeam);
   const [teamError, setTeamError] = useState<string | null>(null);
   const [role, setRole] = useState<'ALL' | Role>('ALL');
   const [status, setStatus] = useState<'ALL' | AgentStatus>('ALL');
@@ -59,24 +63,32 @@ export default function TeamPage() {
   const [reassignSourceAgent, setReassignSourceAgent] = useState<Profile | null>(null);
   const [now, setNow] = useState<number | null>(null);
 
-  const loadTeam = useCallback(async () => {
-    setTeamLoading(true);
+  const loadTeam = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const force = options?.force === true;
+    const quiet = options?.quiet === true;
+    if (!quiet) setTeamLoading(true);
     try {
-      const response = await fetch('/api/team/members', { cache: 'no-store' });
+      const response = await fetch(`/api/team/members${force ? '?refresh=1' : ''}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'Unable to load this workspace team.');
-      setTeamProfiles(Array.isArray(payload.members) ? payload.members as Profile[] : []);
+      const members = Array.isArray(payload.members) ? payload.members as Profile[] : [];
+      setTeamProfiles(members);
+      TEAM_RUNTIME_CACHE.set(runtimeCacheKey, members);
       setTeamError(null);
     } catch (error) {
-      setTeamError(error instanceof Error ? error.message : 'Unable to load this workspace team.');
+      if (!quiet || !TEAM_RUNTIME_CACHE.has(runtimeCacheKey)) {
+        setTeamError(error instanceof Error ? error.message : 'Unable to load this workspace team.');
+      }
     } finally {
-      setTeamLoading(false);
+      if (!quiet) setTeamLoading(false);
     }
-  }, []);
+  }, [runtimeCacheKey]);
 
   useEffect(() => {
-    void loadTeam();
-  }, [config.workspace.id, loadTeam]);
+    const hasSnapshot = TEAM_RUNTIME_CACHE.has(runtimeCacheKey);
+    const timer = window.setTimeout(() => void loadTeam({ quiet: hasSnapshot }), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadTeam, runtimeCacheKey]);
 
   useEffect(() => {
     document.title = `Team — ${config.workspace.name} CRM`;
@@ -138,7 +150,7 @@ export default function TeamPage() {
       {teamError && (
         <div role="alert" className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700">
           <span>{teamError}</span>
-          <button type="button" onClick={() => void loadTeam()} className="button-secondary button-sm shrink-0">Retry</button>
+          <button type="button" onClick={() => void loadTeam({ force: true })} className="button-secondary button-sm shrink-0">Retry</button>
         </div>
       )}
 
@@ -236,8 +248,8 @@ export default function TeamPage() {
         )}
       </section>
 
-      {selectedMember && <TeamMemberDrawer member={selectedMember} isOpen onClose={() => { setSelectedMember(null); void loadTeam(); }} />}
-      {inviteOpen && <InviteMemberModal isOpen onClose={() => { setInviteOpen(false); void loadTeam(); }} />}
+      {selectedMember && <TeamMemberDrawer member={selectedMember} isOpen onClose={() => { setSelectedMember(null); void loadTeam({ force: true, quiet: true }); }} />}
+      {inviteOpen && <InviteMemberModal isOpen onClose={() => { setInviteOpen(false); void loadTeam({ force: true, quiet: true }); }} />}
       {reassignSourceAgent && <BulkReassignModal sourceAgent={reassignSourceAgent} isOpen onClose={() => setReassignSourceAgent(null)} />}
       {selectedHealthMember && <EmployeeHealthModal member={selectedHealthMember} isOpen onClose={() => setSelectedHealthMember(null)} />}
     </div>
