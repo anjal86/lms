@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -10,7 +11,8 @@ const SaveSchema = z.object({
   id: uuidSchema.nullable().optional(),
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(600).nullable().optional(),
-  model: z.string().trim().min(1).max(120).default('mistral-medium-latest'),
+  provider_config_id: uuidSchema.nullable().optional(),
+  model: z.string().trim().min(1).max(240).default('mistral-medium-latest'),
   instructions: z.string().max(12000).default(''),
   tone: z.string().trim().min(1).max(240).default('professional and friendly'),
   languages: z.array(z.string().trim().min(1).max(40)).min(1).max(12).default(['auto']),
@@ -31,7 +33,7 @@ const SaveSchema = z.object({
 });
 
 const AGENT_SELECT = `
-  id,workspace_id,name,description,provider,model,mistral_agent_id,instructions,tone,languages,mode,is_active,
+  id,workspace_id,name,description,provider,provider_config_id,model,mistral_agent_id,instructions,tone,languages,mode,is_active,
   temperature,confidence_threshold,response_delay_min_seconds,response_delay_max_seconds,handoff_team_key,
   handoff_keywords,allow_when_human_assigned,created_by,created_at,updated_at,
   connections:ai_agent_connections(connection_id,is_enabled)
@@ -54,8 +56,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     agents: data || [],
-    provider: {
-      name: 'Mistral AI',
+    legacy_provider: {
+      name: 'Server Mistral',
       configured: Boolean(process.env.MISTRAL_API_KEY?.trim()),
     },
   }, { headers: { 'Cache-Control': 'private, no-store' } });
@@ -72,8 +74,30 @@ export async function POST(request: Request) {
   }
 
   const input = parsed.data;
-  if (input.is_active && input.mode !== 'off' && !process.env.MISTRAL_API_KEY?.trim()) {
-    return NextResponse.json({ error: 'Configure MISTRAL_API_KEY before activating this AI agent.' }, { status: 409 });
+  if (input.is_active && input.mode !== 'off') {
+    if (!input.provider_config_id) {
+      if (!process.env.MISTRAL_API_KEY?.trim()) {
+        return NextResponse.json({ error: 'Select a workspace AI provider with your own API key before activating this agent.' }, { status: 400 });
+      }
+    } else {
+      const admin = createSupabaseAdminClient();
+      const [{ data: provider }, { data: secret }] = await Promise.all([
+        admin.from('ai_provider_configs')
+          .select('id,provider,is_active')
+          .eq('workspace_id', actor.profile.workspace_id)
+          .eq('id', input.provider_config_id)
+          .maybeSingle(),
+        admin.from('ai_provider_secrets')
+          .select('provider_config_id')
+          .eq('workspace_id', actor.profile.workspace_id)
+          .eq('provider_config_id', input.provider_config_id)
+          .maybeSingle(),
+      ]);
+      if (!provider?.is_active) return NextResponse.json({ error: 'Selected AI provider is disabled or unavailable.' }, { status: 400 });
+      if (provider.provider !== 'custom_openai' && !secret) {
+        return NextResponse.json({ error: 'Selected AI provider does not have an API key configured.' }, { status: 400 });
+      }
+    }
   }
 
   const { data: agentId, error } = await actor.supabase.rpc('save_workspace_ai_agent', {
@@ -81,6 +105,7 @@ export async function POST(request: Request) {
     p_name: input.name,
     p_description: input.description ?? null,
     p_model: input.model,
+    p_provider_config_id: input.provider_config_id ?? null,
     p_instructions: input.instructions,
     p_tone: input.tone,
     p_languages: input.languages,
