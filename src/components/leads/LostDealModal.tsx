@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { AlertOctagon, X } from 'lucide-react';
 import type { Lead } from '@/lib/types';
 import { useApp } from '@/lib/store';
@@ -43,10 +43,9 @@ export default function LostDealModal({ lead, isOpen, onClose, onSuccess }: Lost
   const leadLabel = term('lead', 'Lead');
   const dealLabel = term('deal', 'Opportunity');
   const defaultReasons = isTravel ? TRAVEL_REASONS : GENERIC_REASONS;
-  const availableReasons = useMemo(
-    () => agencySettings.custom_lost_reasons?.length > 0 ? agencySettings.custom_lost_reasons : defaultReasons,
-    [agencySettings.custom_lost_reasons, defaultReasons],
-  );
+  const availableReasons = agencySettings.custom_lost_reasons?.length > 0
+    ? agencySettings.custom_lost_reasons
+    : defaultReasons;
 
   const [lostReason, setLostReason] = useState(() => availableReasons[0] || 'Other / custom reason');
   const [competitorName, setCompetitorName] = useState('');
