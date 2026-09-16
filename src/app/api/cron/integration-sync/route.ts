@@ -60,13 +60,19 @@ export async function POST(request: Request) {
   const ai = aiResults[0] || null;
 
   if (!isRedisConfigured()) {
-    return NextResponse.json({ success: true, processed: aiResults.length, ai: aiResults[0] || null, aiResults, warning: 'Redis is not configured; integration history sync is unavailable.' }, { status: 200 });
+    return NextResponse.json({
+      success: true,
+      processed: aiResults.length,
+      ai,
+      aiResults,
+      warning: 'Redis is not configured; integration history sync is unavailable.',
+    }, { status: 200 });
   }
 
   const recovered = await recoverStaleIntegrationSyncJobs(20);
   const claimed = await claimIntegrationSyncJob();
   if (!claimed) {
-    return NextResponse.json({ success: true, processed: aiResults.length, ai: aiResults[0] || null, aiResults, recovered });
+    return NextResponse.json({ success: true, processed: aiResults.length, ai, aiResults, recovered });
   }
 
   try {
@@ -89,8 +95,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      processed: 1 + (ai ? 1 : 0),
+      processed: 1 + aiResults.length,
       ai,
+      aiResults,
       recovered,
       jobId: claimed.job.id,
       continuing: output.shouldContinue,
@@ -106,8 +113,9 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       success: false,
-      processed: 1 + (ai ? 1 : 0),
+      processed: 1 + aiResults.length,
       ai,
+      aiResults,
       recovered,
       jobId: claimed.job.id,
       error: message,
