@@ -1,18 +1,54 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { actorHasPermission } from '@/lib/auth/permissions';
+import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const DASHBOARD_EXCEPTIONS_TTL_SECONDS = 12;
+
+type ExceptionPayload = {
+  workspaceId: string;
+  exceptions: {
+    needs_reply: number;
+    sla_overdue: number;
+    unassigned: number;
+    urgent: number;
+    next_actions_due: number;
+    automation_failures_24h: number;
+  } | null;
+};
+
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
-  if (!(await actorHasPermission(actor, 'inbox.view'))) {
-    return NextResponse.json({ exceptions: null }, { headers: { 'Cache-Control': 'private, no-store' } });
+
+  const canViewInbox = await actorHasPermission(actor, 'inbox.view');
+  if (!canViewInbox) {
+    return NextResponse.json({ exceptions: null }, { headers: cacheResponseHeaders('BYPASS') });
   }
 
   const workspaceId = actor.profile.workspace_id;
+  const canViewAutomations = await actorHasPermission(actor, 'automations.view');
+  const requestUrl = new URL(request.url);
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+  const cacheKey = redisCacheKey({
+    workspaceId,
+    namespace: 'dashboard:conversation-exceptions',
+    userId: actor.user.id,
+    dimensions: { canViewAutomations },
+  });
+
+  let cacheStatus: RedisCacheStatus = 'BYPASS';
+  if (!forceRefresh) {
+    const cached = await readRedisJson<ExceptionPayload>(cacheKey);
+    cacheStatus = cached.status;
+    if (cached.value) {
+      return NextResponse.json(cached.value, { headers: cacheResponseHeaders('HIT') });
+    }
+  }
+
   const now = new Date().toISOString();
   const base = () => actor.supabase
     .from('lead_conversations')
@@ -40,7 +76,7 @@ export async function GET(request: Request) {
   }
 
   let automationFailures = 0;
-  if (await actorHasPermission(actor, 'automations.view')) {
+  if (canViewAutomations) {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const failureResult = await actor.supabase
       .from('automation_runs')
@@ -56,7 +92,7 @@ export async function GET(request: Request) {
     automationFailures = failureResult.count || 0;
   }
 
-  return NextResponse.json({
+  const payload: ExceptionPayload = {
     workspaceId,
     exceptions: {
       needs_reply: needsReply.count || 0,
@@ -66,5 +102,8 @@ export async function GET(request: Request) {
       next_actions_due: nextAction.count || 0,
       automation_failures_24h: automationFailures,
     },
-  }, { headers: { 'Cache-Control': 'private, no-store' } });
+  };
+
+  await writeRedisJson(cacheKey, payload, DASHBOARD_EXCEPTIONS_TTL_SECONDS);
+  return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
 }
