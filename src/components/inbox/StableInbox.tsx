@@ -115,13 +115,40 @@ type Session = { id: string; owner_id: string | null; opened_at: string; first_r
 type AssistResult = { mode: 'provider' | 'local'; action: 'summary' | 'reply' | 'extract'; result?: string; data?: Record<string, unknown> };
 type ThreadSnapshot = { conversation: Conversation; messages: Message[]; messageTotal: number; hasOlderMessages: boolean; messageLimit: number; fetchedAt: number };
 type SecondarySnapshot = { events: TimelineEvent[]; collaborators: Collaborator[]; fetchedAt: number };
+type ListSnapshot = { conversations: Conversation[]; metrics: Metrics; selectedId: string | null; fetchedAt: number };
+type SavedViewsSnapshot = { views: SavedView[]; fetchedAt: number };
 
 const EMPTY_METRICS: Metrics = { totalOpen: 0, unassigned: 0, collaborations: 0, waiting: 0, snoozed: 0, unread: 0, needsReply: 0, slaOverdue: 0, highPriority: 0, hasPhone: 0 };
 const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed', 'collaborator_added', 'collaborator_removed']);
 const THREAD_TTL_MS = 30_000;
 const SECONDARY_TTL_MS = 60_000;
 const INITIAL_MESSAGE_LIMIT = 160;
+const RUNTIME_LIST_CACHE = new Map<string, ListSnapshot>();
+const RUNTIME_THREAD_CACHE = new Map<string, ThreadSnapshot>();
+const RUNTIME_SECONDARY_CACHE = new Map<string, SecondarySnapshot>();
+const RUNTIME_SESSIONS_CACHE = new Map<string, Session[]>();
+const RUNTIME_SAVED_VIEWS_CACHE = new Map<string, SavedViewsSnapshot>();
 
+function remember<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+function scopedCacheKey(scope: string, id: string) { return `${scope}::${id}`; }
+function listCacheKey(scope: string, queue: QueueKey, provider: string, sort: SortKey, state: string, priority: string, search: string) {
+  return JSON.stringify([scope, queue, provider, sort, state, priority, search]);
+}
+function createScopedRuntimeCache<T>(backing: Map<string, T>, scope: () => string, maxEntries: number) {
+  return {
+    get(id: string) { return backing.get(scopedCacheKey(scope(), id)); },
+    set(id: string, value: T) { remember(backing, scopedCacheKey(scope(), id), value, maxEntries); },
+    delete(id: string) { return backing.delete(scopedCacheKey(scope(), id)); },
+  };
+}
 function asRecord(value: unknown): UnknownRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {}; }
 function contactOf(conversation: Conversation | null) { if (!conversation?.contact) return null; return Array.isArray(conversation.contact) ? conversation.contact[0] || null : conversation.contact; }
 function leadOf(conversation: Conversation | null) { if (!conversation?.lead) return null; return Array.isArray(conversation.lead) ? conversation.lead[0] || null : conversation.lead; }
@@ -155,6 +182,14 @@ export default function StableInbox() {
   const { can } = useWorkspacePermissions();
   const contactLabel = term('contact', 'Contact');
   const leadLabel = term('lead', 'Lead');
+  const cacheScope = `${currentUser.id}::${config.workspace.id}`;
+  const initialListKey = listCacheKey(cacheScope, initialParams.queue, initialParams.provider, initialParams.sort, initialParams.state, initialParams.priority, initialParams.search.trim());
+  const initialListSnapshot = RUNTIME_LIST_CACHE.get(initialListKey);
+  const initialSelectedId = initialParams.conversationId || initialListSnapshot?.selectedId || null;
+  const initialThreadSnapshot = initialSelectedId ? RUNTIME_THREAD_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSecondarySnapshot = initialSelectedId ? RUNTIME_SECONDARY_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSessionsSnapshot = initialSelectedId ? RUNTIME_SESSIONS_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSavedViews = RUNTIME_SAVED_VIEWS_CACHE.get(cacheScope)?.views || [];
 
   const [queue, setQueue] = useState<QueueKey>(() => initialParams.queue);
   const [provider, setProvider] = useState(() => initialParams.provider);
@@ -163,24 +198,24 @@ export default function StableInbox() {
   const [sort, setSort] = useState<SortKey>(() => initialParams.sort);
   const [search, setSearch] = useState(() => initialParams.search);
   const [debouncedSearch, setDebouncedSearch] = useState(() => initialParams.search);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
-  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(() => initialListSnapshot?.conversations || []);
+  const [metrics, setMetrics] = useState<Metrics>(() => initialListSnapshot?.metrics || EMPTY_METRICS);
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => initialSavedViews);
   const [activeSavedView, setActiveSavedView] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialParams.conversationId);
-  const [selected, setSelected] = useState<Conversation | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messageTotal, setMessageTotal] = useState(0);
-  const [hasOlderMessages, setHasOlderMessages] = useState(false);
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialSelectedId);
+  const [selected, setSelected] = useState<Conversation | null>(() => initialThreadSnapshot?.conversation || initialListSnapshot?.conversations.find((row) => row.id === initialSelectedId) || null);
+  const [messages, setMessages] = useState<Message[]>(() => initialThreadSnapshot?.messages || []);
+  const [messageTotal, setMessageTotal] = useState(() => initialThreadSnapshot?.messageTotal || 0);
+  const [hasOlderMessages, setHasOlderMessages] = useState(() => initialThreadSnapshot?.hasOlderMessages || false);
+  const [events, setEvents] = useState<TimelineEvent[]>(() => initialSecondarySnapshot?.events || []);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>(() => initialSecondarySnapshot?.collaborators || []);
+  const [sessions, setSessions] = useState<Session[]>(() => initialSessionsSnapshot || []);
   const [contextTab, setContextTab] = useState<ContextTab>(() => initialParams.tab);
   const [contextOpen, setContextOpen] = useState(false);
   const [replyMode, setReplyMode] = useState<ReplyMode>('outbound');
   const [replyBody, setReplyBody] = useState('');
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingThread, setLoadingThread] = useState(false);
+  const [loadingList, setLoadingList] = useState(() => !initialListSnapshot);
+  const [loadingThread, setLoadingThread] = useState(() => Boolean(initialSelectedId && !initialThreadSnapshot));
   const [refreshingThread, setRefreshingThread] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
@@ -195,9 +230,11 @@ export default function StableInbox() {
   const [resolution, setResolution] = useState('resolved');
   const [closingNote, setClosingNote] = useState('');
 
-  const threadCache = useRef(new Map<string, ThreadSnapshot>());
-  const secondaryCache = useRef(new Map<string, SecondarySnapshot>());
-  const sessionsCache = useRef(new Map<string, Session[]>());
+  const cacheScopeRef = useRef(cacheScope);
+  cacheScopeRef.current = cacheScope;
+  const threadCache = useRef(createScopedRuntimeCache(RUNTIME_THREAD_CACHE, () => cacheScopeRef.current, 160));
+  const secondaryCache = useRef(createScopedRuntimeCache(RUNTIME_SECONDARY_CACHE, () => cacheScopeRef.current, 160));
+  const sessionsCache = useRef(createScopedRuntimeCache(RUNTIME_SESSIONS_CACHE, () => cacheScopeRef.current, 160));
   const selectedIdRef = useRef<string | null>(selectedId);
   const coreAbort = useRef<AbortController | null>(null);
   const coreRequestToken = useRef(0);
@@ -379,14 +416,33 @@ export default function StableInbox() {
   }, []);
 
   const loadViews = useCallback(async () => {
+    const cached = RUNTIME_SAVED_VIEWS_CACHE.get(cacheScope);
+    if (cached) setSavedViews(cached.views);
     try {
       const response = await fetch('/api/inbox/views', { cache: 'no-store' });
-      if (response.ok) setSavedViews((await response.json()).views || []);
+      if (response.ok) {
+        const views = (await response.json()).views || [];
+        setSavedViews(views);
+        remember(RUNTIME_SAVED_VIEWS_CACHE, cacheScope, { views, fetchedAt: Date.now() }, 24);
+      }
     } catch { /* optional */ }
-  }, []);
+  }, [cacheScope]);
 
   const loadList = useCallback(async (quiet = false) => {
-    if (!quiet) setLoadingList(true);
+    const currentListKey = listCacheKey(cacheScope, queue, provider, sort, state, priority, debouncedSearch);
+    const cached = RUNTIME_LIST_CACHE.get(currentListKey);
+    if (cached) {
+      setConversations(cached.conversations);
+      setMetrics(cached.metrics);
+      if (!selectedIdRef.current && cached.selectedId) {
+        selectedIdRef.current = cached.selectedId;
+        setSelectedId(cached.selectedId);
+      }
+      setLoadingList(false);
+    } else if (!quiet) {
+      setLoadingList(true);
+    }
+
     try {
       const query = new URLSearchParams({ filter: queue, provider, sort, limit: '180' });
       if (state) query.set('state', state);
@@ -396,24 +452,36 @@ export default function StableInbox() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to load Inbox.');
       const rows = (payload.conversations || []) as Conversation[];
+      const nextMetrics = { ...EMPTY_METRICS, ...(payload.metrics || {}) };
       setConversations(rows);
-      setMetrics({ ...EMPTY_METRICS, ...(payload.metrics || {}) });
-      setSelectedId((current) => {
-        if (current) return current;
+      setMetrics(nextMetrics);
+
+      let target = selectedIdRef.current;
+      if (!target) {
         const fromParam = initialParams.conversationId;
         const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 1024;
-        const target = fromParam || (isDesktop ? rows[0]?.id : null) || null;
+        target = fromParam || (isDesktop ? rows[0]?.id : null) || null;
+        if (target) {
+          selectedIdRef.current = target;
+          setSelectedId(target);
+        }
         if (target && isDesktop && !fromParam && rows[0]?.id === target) {
           syncUrl({ conversationId: target }, { replace: true });
         }
-        return target;
-      });
+      }
+
+      remember(RUNTIME_LIST_CACHE, currentListKey, {
+        conversations: rows,
+        metrics: nextMetrics,
+        selectedId: target,
+        fetchedAt: Date.now(),
+      }, 32);
     } catch (error) {
-      if (!quiet) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
+      if (!quiet && !cached) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
     } finally {
       if (!quiet) setLoadingList(false);
     }
-  }, [debouncedSearch, initialParams.conversationId, priority, provider, queue, showToast, sort, state, syncUrl]);
+  }, [cacheScope, debouncedSearch, initialParams.conversationId, priority, provider, queue, showToast, sort, state, syncUrl]);
 
   const applyThreadSnapshot = useCallback((snapshot: ThreadSnapshot) => {
     setSelected(snapshot.conversation);
