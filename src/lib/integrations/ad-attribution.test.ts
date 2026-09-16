@@ -34,6 +34,26 @@ describe('ad attribution normalization', () => {
     expect(result?.platform).toBe('facebook');
   });
 
+  it('normalizes nested Messenger ads_context_data creative fields', () => {
+    const result = normalizeMetaAdAttribution({
+      source: 'ADS',
+      type: 'OPEN_THREAD',
+      ad_id: 'ad-99',
+      referer_uri: 'https://m.me/example',
+      ads_context_data: {
+        ad_title: 'October Intake',
+        photo_url: 'https://example.com/messenger-creative.jpg',
+      },
+    }, 'facebook');
+
+    expect(result).toMatchObject({
+      ad_id: 'ad-99',
+      source_url: 'https://m.me/example',
+      headline: 'October Intake',
+      media_url: 'https://example.com/messenger-creative.jpg',
+    });
+  });
+
   it('ignores non-ad referral payloads with no paid-ad identifiers', () => {
     expect(normalizeMetaAdAttribution({ source: 'SHORTLINK', type: 'OPEN_THREAD' }, 'facebook')).toBeNull();
   });
