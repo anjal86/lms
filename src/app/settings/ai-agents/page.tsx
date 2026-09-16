@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Bot,
+  KeyRound,
   Loader2,
   MessageSquare,
   Play,
@@ -17,12 +18,15 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import type { AiProviderPreset } from '@/lib/ai/provider-catalog';
 
 type AgentConnectionRef = { connection_id: string; is_enabled: boolean };
 type Agent = {
   id: string;
   name: string;
   description?: string | null;
+  provider?: string | null;
+  provider_config_id?: string | null;
   model: string;
   instructions: string;
   tone: string;
@@ -39,6 +43,14 @@ type Agent = {
   connections?: AgentConnectionRef[] | null;
 };
 
+type AiProvider = {
+  id: string;
+  name: string;
+  provider: string;
+  is_active: boolean;
+  has_api_key: boolean;
+};
+
 type Connection = {
   id: string;
   provider: string;
@@ -53,6 +65,7 @@ type Draft = {
   id: string | null;
   name: string;
   description: string;
+  provider_config_id: string;
   model: string;
   instructions: string;
   tone: string;
@@ -73,6 +86,7 @@ const EMPTY_DRAFT: Draft = {
   id: null,
   name: '',
   description: '',
+  provider_config_id: '',
   model: 'mistral-medium-latest',
   instructions: 'Answer accurately and concisely using only the CRM context provided. Ask a short clarifying question when essential information is missing.',
   tone: 'professional and friendly',
@@ -105,6 +119,7 @@ function toDraft(agent: Agent): Draft {
     id: agent.id,
     name: agent.name,
     description: agent.description || '',
+    provider_config_id: agent.provider_config_id || '',
     model: agent.model,
     instructions: agent.instructions || '',
     tone: agent.tone || 'professional and friendly',
@@ -126,9 +141,11 @@ export default function AiAgentsPage() {
   const { currentUser, showToast } = useApp();
   const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [providers, setProviders] = useState<AiProvider[]>([]);
+  const [providerPresets, setProviderPresets] = useState<AiProviderPreset[]>([]);
+  const [legacyMistralConfigured, setLegacyMistralConfigured] = useState(false);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [teams, setTeams] = useState<RoutingTeam[]>([]);
-  const [providerConfigured, setProviderConfigured] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -141,18 +158,26 @@ export default function AiAgentsPage() {
     if (!canManage) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [agentResponse, connectionResponse, teamResponse] = await Promise.all([
+      const [agentResponse, providerResponse, connectionResponse, teamResponse] = await Promise.all([
         fetch('/api/settings/ai-agents', { cache: 'no-store' }),
+        fetch('/api/settings/ai-providers', { cache: 'no-store' }),
         fetch('/api/integrations/connections', { cache: 'no-store' }),
         fetch('/api/routing/teams', { cache: 'no-store' }),
       ]);
       const agentPayload = await agentResponse.json().catch(() => ({}));
+      const providerPayload = await providerResponse.json().catch(() => ({}));
       const connectionPayload = await connectionResponse.json().catch(() => ({}));
       const teamPayload = await teamResponse.json().catch(() => ({}));
       if (!agentResponse.ok) throw new Error(agentPayload.error || 'Unable to load AI agents.');
+      if (!providerResponse.ok) throw new Error(providerPayload.error || 'Unable to load AI providers.');
+
       const nextAgents = Array.isArray(agentPayload.agents) ? agentPayload.agents as Agent[] : [];
+      const nextProviders = (Array.isArray(providerPayload.providers) ? providerPayload.providers : []) as AiProvider[];
       setAgents(nextAgents);
-      setProviderConfigured(agentPayload.provider?.configured === true);
+      setProviders(nextProviders.filter((provider) => provider.is_active));
+      setProviderPresets(Array.isArray(providerPayload.presets) ? providerPayload.presets : []);
+      setLegacyMistralConfigured(agentPayload.legacy_provider?.configured === true);
+
       const connectionRows = Array.isArray(connectionPayload.connections)
         ? connectionPayload.connections
         : Array.isArray(connectionPayload.items) ? connectionPayload.items : [];
@@ -161,6 +186,9 @@ export default function AiAgentsPage() {
       if (!selectedId && nextAgents[0]) {
         setSelectedId(nextAgents[0].id);
         setDraft(toDraft(nextAgents[0]));
+      } else if (!selectedId && nextProviders[0]) {
+        const preset = (Array.isArray(providerPayload.presets) ? providerPayload.presets : []).find((row: AiProviderPreset) => row.id === nextProviders[0].provider);
+        setDraft((current) => ({ ...current, provider_config_id: nextProviders[0].id, model: preset?.modelPlaceholder || current.model }));
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to load AI agent settings.', 'error');
@@ -172,6 +200,8 @@ export default function AiAgentsPage() {
   useEffect(() => { void load(); }, [load]);
 
   const selected = useMemo(() => agents.find((agent) => agent.id === selectedId) || null, [agents, selectedId]);
+  const selectedProvider = useMemo(() => providers.find((provider) => provider.id === draft.provider_config_id) || null, [providers, draft.provider_config_id]);
+  const selectedPreset = useMemo(() => providerPresets.find((preset) => preset.id === selectedProvider?.provider) || null, [providerPresets, selectedProvider]);
 
   const chooseAgent = (agent: Agent) => {
     setSelectedId(agent.id);
@@ -181,7 +211,9 @@ export default function AiAgentsPage() {
 
   const newAgent = () => {
     setSelectedId(null);
-    setDraft(EMPTY_DRAFT);
+    const provider = providers[0];
+    const preset = providerPresets.find((row) => row.id === provider?.provider);
+    setDraft({ ...EMPTY_DRAFT, provider_config_id: provider?.id || '', model: preset?.modelPlaceholder || EMPTY_DRAFT.model });
     setTestResult(null);
   };
 
@@ -192,6 +224,12 @@ export default function AiAgentsPage() {
         ? current.connection_ids.filter((value) => value !== id)
         : [...current.connection_ids, id],
     }));
+  };
+
+  const chooseProvider = (id: string) => {
+    const provider = providers.find((row) => row.id === id);
+    const preset = providerPresets.find((row) => row.id === provider?.provider);
+    setDraft((current) => ({ ...current, provider_config_id: id, model: preset?.modelPlaceholder || current.model }));
   };
 
   const save = async () => {
@@ -205,6 +243,7 @@ export default function AiAgentsPage() {
           id: draft.id,
           name: draft.name,
           description: draft.description || null,
+          provider_config_id: draft.provider_config_id || null,
           model: draft.model,
           instructions: draft.instructions,
           tone: draft.tone,
@@ -260,18 +299,20 @@ export default function AiAgentsPage() {
     return <div className="mx-auto max-w-xl px-6 py-20 text-center"><ShieldCheck className="mx-auto h-7 w-7 text-zinc-400" /><h1 className="mt-3 text-lg font-semibold">Manager access required</h1><p className="mt-1 text-sm text-zinc-500">Only workspace managers can configure customer-facing AI agents.</p></div>;
   }
 
+  const noProviderAvailable = providers.length === 0 && !legacyMistralConfigured;
+
   return <div className="app-page max-w-7xl space-y-5">
     <header className="page-header">
-      <div><p className="page-eyebrow">Workspace intelligence</p><h1 className="page-title">AI Agents</h1><p className="page-description">Configure Mistral-powered agents that can draft replies, respond automatically, or hand conversations to your team.</p></div>
-      <div className="page-actions"><Link href="/settings/workspace" className="button-secondary"><ArrowLeft className="h-4 w-4" /> Settings</Link><button type="button" onClick={newAgent} className="button-primary"><Plus className="h-4 w-4" /> New agent</button></div>
+      <div><p className="page-eyebrow">Workspace intelligence</p><h1 className="page-title">AI Agents</h1><p className="page-description">Build customer-facing agents with your own LLM provider, then choose whether they draft, reply automatically, or hand off to staff.</p></div>
+      <div className="page-actions"><Link href="/settings/workspace" className="button-secondary"><ArrowLeft className="h-4 w-4" /> Settings</Link><Link href="/settings/ai-providers" className="button-secondary"><KeyRound className="h-4 w-4" /> Providers</Link><button type="button" onClick={newAgent} className="button-primary"><Plus className="h-4 w-4" /> New agent</button></div>
     </header>
 
-    {!providerConfigured && <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-semibold">Mistral is not configured on the server</div><p className="mt-0.5 text-xs text-amber-700">Add MISTRAL_API_KEY before testing or activating automatic replies. You can still configure agents now.</p></div></div>}
+    {noProviderAvailable && <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><div className="font-semibold">No AI provider is configured</div><p className="mt-0.5 text-xs text-amber-700">Add your OpenAI, Anthropic, Gemini, Mistral, OpenRouter, Groq, DeepSeek, xAI, Together, Fireworks, or custom-compatible key before activating an agent. <Link href="/settings/ai-providers" className="font-semibold underline">Configure provider</Link></p></div></div>}
 
     <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="surface-flat overflow-hidden">
         <div className="panel-header"><div><h2 className="section-heading">Workspace agents</h2><p className="section-description">{agents.length} configured</p></div></div>
-        {loading ? <div className="flex items-center justify-center gap-2 py-16 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading agents…</div> : agents.length === 0 ? <div className="px-5 py-14 text-center"><Bot className="mx-auto h-7 w-7 text-zinc-300" /><div className="mt-2 text-sm font-semibold text-zinc-700">No AI agents yet</div><p className="mt-1 text-xs text-zinc-400">Create one and test it before enabling live replies.</p></div> : <div className="divide-y divide-zinc-100">{agents.map((agent) => <button key={agent.id} type="button" onClick={() => chooseAgent(agent)} className={`flex w-full items-start gap-3 px-4 py-3 text-left ${selectedId === agent.id ? 'bg-blue-50' : 'hover:bg-zinc-50'}`}><span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${selectedId === agent.id ? 'bg-blue-100 text-blue-700' : 'bg-zinc-100 text-zinc-500'}`}><Bot className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-zinc-900">{agent.name}</span><span className="mt-0.5 block text-[10px] capitalize text-zinc-500">{agent.mode.replace('_', ' ')} · {agent.is_active ? 'Active' : 'Inactive'}</span><span className="mt-1 block truncate font-mono text-[9px] text-zinc-400">{agent.model}</span></span></button>)}</div>}
+        {loading ? <div className="flex items-center justify-center gap-2 py-16 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading agents…</div> : agents.length === 0 ? <div className="px-5 py-14 text-center"><Bot className="mx-auto h-7 w-7 text-zinc-300" /><div className="mt-2 text-sm font-semibold text-zinc-700">No AI agents yet</div><p className="mt-1 text-xs text-zinc-400">Create one and test it before enabling live replies.</p></div> : <div className="divide-y divide-zinc-100">{agents.map((agent) => { const provider = providers.find((row) => row.id === agent.provider_config_id); return <button key={agent.id} type="button" onClick={() => chooseAgent(agent)} className={`flex w-full items-start gap-3 px-4 py-3 text-left ${selectedId === agent.id ? 'bg-blue-50' : 'hover:bg-zinc-50'}`}><span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${selectedId === agent.id ? 'bg-blue-100 text-blue-700' : 'bg-zinc-100 text-zinc-500'}`}><Bot className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-zinc-900">{agent.name}</span><span className="mt-0.5 block text-[10px] capitalize text-zinc-500">{agent.mode.replace('_', ' ')} · {agent.is_active ? 'Active' : 'Inactive'}</span><span className="mt-1 block truncate text-[9px] text-zinc-400">{provider?.name || 'Legacy Mistral'} · <span className="font-mono">{agent.model}</span></span></span></button>; })}</div>}
       </aside>
 
       <main className="space-y-4">
@@ -280,9 +321,12 @@ export default function AiAgentsPage() {
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="text-xs font-semibold text-zinc-700">Agent name<input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Syourai AI Counsellor" className="field mt-1.5" /></label>
-            <label className="text-xs font-semibold text-zinc-700">Mistral model<select value={draft.model} onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} className="select-field mt-1.5"><option value="mistral-medium-latest">Mistral Medium · Recommended</option><option value="mistral-large-latest">Mistral Large</option><option value="mistral-small-latest">Mistral Small</option><option value="ministral-14b-latest">Ministral 14B</option><option value="ministral-8b-latest">Ministral 8B</option></select></label>
+            <label className="text-xs font-semibold text-zinc-700">AI provider<select value={draft.provider_config_id} onChange={(event) => chooseProvider(event.target.value)} className="select-field mt-1.5"><option value="">{legacyMistralConfigured ? 'Server Mistral · legacy' : 'Select provider…'}</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
           </div>
-          <label className="mt-4 block text-xs font-semibold text-zinc-700">Description<input value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Handles initial counselling and qualification." className="field mt-1.5" /></label>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <label className="text-xs font-semibold text-zinc-700">Model ID<input value={draft.model} onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} placeholder={selectedPreset?.modelPlaceholder || 'provider-model-id'} className="field mt-1.5 font-mono text-xs" /><span className="mt-1 block text-[10px] font-normal text-zinc-400">Use the exact model ID from your provider.</span></label>
+            <label className="text-xs font-semibold text-zinc-700">Description<input value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Handles initial counselling and qualification." className="field mt-1.5" /></label>
+          </div>
 
           <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
             <label className="text-xs font-semibold text-zinc-700">Instructions<textarea value={draft.instructions} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} rows={9} className="field mt-1.5 min-h-48 resize-y text-sm leading-6" placeholder="Explain the agent's role, what it may answer, what it must never promise, and when it should hand off." /></label>
@@ -307,12 +351,12 @@ export default function AiAgentsPage() {
             <label className="text-xs font-semibold text-zinc-700">Maximum delay · sec<input type="number" min="0" max="180" value={draft.response_delay_max_seconds} onChange={(event) => setDraft((current) => ({ ...current, response_delay_max_seconds: Number(event.target.value) }))} className="field mt-1.5" /></label>
             <label className="text-xs font-semibold text-zinc-700">Handoff team<select value={draft.handoff_team_key} onChange={(event) => setDraft((current) => ({ ...current, handoff_team_key: event.target.value }))} className="select-field mt-1.5"><option value="">Unassigned queue</option>{teams.map((team) => <option key={team.team_key} value={team.team_key}>{team.name}</option>)}</select></label>
           </div>
-          <label className="mt-4 block text-xs font-semibold text-zinc-700">Handoff keywords<input value={draft.handoffKeywordsText} onChange={(event) => setDraft((current) => ({ ...current, handoffKeywordsText: event.target.value }))} className="field mt-1.5" /><span className="mt-1 block text-[10px] font-normal text-zinc-400">Comma separated. Matching a live customer message sends it to a human without asking Mistral to improvise.</span></label>
+          <label className="mt-4 block text-xs font-semibold text-zinc-700">Handoff keywords<input value={draft.handoffKeywordsText} onChange={(event) => setDraft((current) => ({ ...current, handoffKeywordsText: event.target.value }))} className="field mt-1.5" /><span className="mt-1 block text-[10px] font-normal text-zinc-400">Comma separated. Matching a live customer message sends it to a human without asking the LLM to improvise.</span></label>
           <div className="mt-4 grid gap-2 sm:grid-cols-2"><label className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3"><input type="checkbox" checked={draft.is_active} onChange={(event) => setDraft((current) => ({ ...current, is_active: event.target.checked }))} className="mt-0.5" /><span><span className="block text-xs font-semibold text-zinc-900">Agent active</span><span className="mt-0.5 block text-[10px] leading-4 text-zinc-500">The agent can be selected for live channel work. Mode still controls whether it drafts or sends.</span></span></label><label className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3"><input type="checkbox" checked={draft.allow_when_human_assigned} onChange={(event) => setDraft((current) => ({ ...current, allow_when_human_assigned: event.target.checked }))} className="mt-0.5" /><span><span className="block text-xs font-semibold text-zinc-900">Allow AI on human-owned conversations</span><span className="mt-0.5 block text-[10px] leading-4 text-zinc-500">Keep this off unless you intentionally want AI and staff sharing the same owned conversation.</span></span></label></div>
         </section>
 
         <section className="surface-flat p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Play className="h-4 w-4 text-blue-600" /><h2 className="section-heading">Test Agent</h2></div><p className="section-description mt-1">Uses the saved configuration and Mistral, but never sends anything to a real channel.</p></div><button type="button" onClick={() => void test()} disabled={testing || !draft.id || !providerConfigured} className="button-secondary">{testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run test</button></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Play className="h-4 w-4 text-blue-600" /><h2 className="section-heading">Test Agent</h2></div><p className="section-description mt-1">Uses the saved provider and model configuration, but never sends anything to a real channel.</p></div><button type="button" onClick={() => void test()} disabled={testing || !draft.id} className="button-secondary">{testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Run test</button></div>
           <textarea value={testMessage} onChange={(event) => setTestMessage(event.target.value)} rows={3} className="field mt-4 min-h-20 resize-y" />
           {testResult && <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50 p-4"><div className="flex items-center gap-2 text-xs font-semibold text-zinc-900"><Bot className="h-4 w-4" /> Decision: <span className="capitalize text-blue-700">{String(testResult.action || 'unknown')}</span><span className="font-normal text-zinc-400">confidence {Number(testResult.confidence || 0).toFixed(2)}</span></div>{testResult.reply ? <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-zinc-700">{String(testResult.reply)}</p> : null}{testResult.handoff_reason ? <p className="mt-3 text-xs text-amber-700">Handoff: {String(testResult.handoff_reason)}</p> : null}</div>}
         </section>
