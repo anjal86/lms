@@ -5,6 +5,8 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider } from '@/lib/integrations/catalog';
 import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } from '@/lib/integrations/environment';
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
+import { enqueueMetaHistorySyncJob } from '@/lib/redis/integration-sync-queue';
+import { isRedisConfigured } from '@/lib/redis/client';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -142,6 +144,34 @@ export async function PATCH(request: Request) {
     }
 
     try {
+      if (isRedisConfigured()) {
+        // Keep the request fast enough to provide immediate visible progress, then let
+        // the Redis worker continue discovery/backfill until the saved cursor is done.
+        const historySync = await discoverMetaConversationHistory({
+          connectionIds: [target.id],
+          maxPages: 1,
+        });
+        const backgroundSync = await enqueueMetaHistorySyncJob({
+          workspaceId: actor.profile.workspace_id,
+          connectionId: target.id,
+          requestedBy: actor.user.id,
+        });
+        const now = new Date().toISOString();
+        const firstError = historySync.errors[0] || null;
+        await admin
+          .from('integration_connections')
+          .update({ last_sync_at: now, last_error: firstError })
+          .eq('workspace_id', actor.profile.workspace_id)
+          .eq('id', target.id);
+        return NextResponse.json({
+          success: historySync.errors.length === 0,
+          historySync,
+          backgroundSync,
+          queued: backgroundSync.queued,
+        }, { status: backgroundSync.queued ? 202 : 200 });
+      }
+
+      // Safe fallback for installations that have not enabled Redis yet.
       const historySync = await discoverMetaConversationHistory({
         connectionIds: [target.id],
         maxPages: 8,
@@ -156,6 +186,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({
         success: historySync.errors.length === 0,
         historySync,
+        queued: false,
       });
     } catch (syncError) {
       const message = syncError instanceof Error ? syncError.message : 'Unable to sync channel history.';
