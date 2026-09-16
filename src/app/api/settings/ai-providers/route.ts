@@ -92,13 +92,13 @@ export async function POST(request: Request) {
   }
 
   const needsKey = input.provider !== 'custom_openai';
-  const willHaveKey = Boolean(input.api_key) || (hasExistingKey && !input.clear_api_key);
+  const willHaveKey = input.clear_api_key ? false : Boolean(input.api_key || hasExistingKey);
   if (input.is_active && needsKey && !willHaveKey) {
     return NextResponse.json({ error: `${preset.label} requires an API key before it can be enabled.` }, { status: 400 });
   }
 
   let encryptedKey: string | null = null;
-  if (input.api_key) {
+  if (input.api_key && !input.clear_api_key) {
     try { encryptedKey = encryptIntegrationSecret(input.api_key); }
     catch (error) {
       console.error('AI provider key encryption failed:', error);
