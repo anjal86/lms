@@ -6,6 +6,8 @@ import { uuidSchema } from '@/lib/validation';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type AuthenticatedActor = Exclude<Awaited<ReturnType<typeof getApiActor>>, { error: unknown }>;
+
 const SaveSchema = z.object({
   id: uuidSchema.nullable().optional(),
   name: z.string().trim().min(1).max(80),
@@ -15,7 +17,7 @@ const SaveSchema = z.object({
   member_ids: z.array(uuidSchema).max(100).default([]),
 });
 
-async function readTeams(actor: Awaited<ReturnType<typeof getApiActor>> extends infer T ? Exclude<T, { error: unknown }> : never) {
+async function readTeams(actor: AuthenticatedActor) {
   const { data, error } = await actor.supabase
     .from('conversation_teams')
     .select('id,workspace_id,team_key,name,description,is_active,sort_order,created_at,updated_at,members:conversation_team_members(user_id,is_active)')
