@@ -6,6 +6,8 @@ import { actorHasPermission } from '@/lib/auth/permissions';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const ROUTING_STRATEGIES = ['workload_balanced','least_open','round_robin','conversion_weighted'] as const;
+
 const PatchSchema = z.object({
   first_response_minutes: z.number().int().min(1).max(1440),
   warning_minutes_before: z.number().int().min(0).max(1440),
@@ -14,7 +16,7 @@ const PatchSchema = z.object({
   auto_close_waiting_hours: z.number().int().min(0).max(720),
   next_action_reminders: z.boolean(),
   online_only_routing: z.boolean(),
-  routing_strategy: z.enum(['least_open','round_robin','conversion_weighted']),
+  routing_strategy: z.enum(ROUTING_STRATEGIES),
 });
 
 function record(value: unknown): Record<string, unknown> {
@@ -31,7 +33,10 @@ function normalized(settings: unknown) {
   const sla = record(root.conversation_sla);
   const operations = record(root.conversation_operations);
   const routing = record(root.conversation_routing);
-  const strategy = ['least_open','round_robin','conversion_weighted'].includes(String(routing.strategy)) ? String(routing.strategy) : 'least_open';
+  const rawStrategy = String(routing.strategy || '');
+  const strategy = ROUTING_STRATEGIES.includes(rawStrategy as (typeof ROUTING_STRATEGIES)[number])
+    ? rawStrategy
+    : 'workload_balanced';
   return {
     first_response_minutes: numberValue(sla.first_response_minutes, 30, 1, 1440),
     warning_minutes_before: numberValue(sla.warning_minutes_before, 10, 0, 1440),
