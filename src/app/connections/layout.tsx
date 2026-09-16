@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import ConsumeConnectionEntryParams from './ConsumeConnectionEntryParams';
 
 export default function ConnectionsLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -14,6 +15,7 @@ export default function ConnectionsLayout({ children }: { children: React.ReactN
         </div>
       }
     >
+      <ConsumeConnectionEntryParams />
       {children}
     </Suspense>
   );
