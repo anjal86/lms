@@ -15,6 +15,7 @@ const DECISION_SELECT = `
   workspace_id,
   contact_id,
   lead_id,
+  team_key,
   workflow_state,
   priority,
   needs_reply,
