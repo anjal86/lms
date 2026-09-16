@@ -66,20 +66,26 @@ function relativeTime(value?: string | null) {
   return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+function exactTime(value?: string | null) {
+  if (!value) return undefined;
+  return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export default function InboxConversationListItem({ conversation, selected, contactLabel, statusText, statusDanger, onSelect }: Props) {
   const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare;
   const providerTone = PROVIDER_TONES[conversation.provider] || 'bg-zinc-700 text-white';
   const unread = conversation.unread_count > 0;
   const assignee = conversation.assigned_profile?.full_name || 'Unassigned';
   const account = conversation.connection?.display_name || conversation.provider;
+  const actionState = statusDanger ? statusText : conversation.needs_reply ? (statusText || 'Needs reply') : (statusText || 'Waiting on customer');
 
   return <button
     type="button"
     data-conversation-item="true"
     aria-current={selected ? 'true' : undefined}
-    aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, via ${account}`}
+    aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, ${actionState}, via ${account}`}
     onClick={onSelect}
-    className={`relative w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
+    className={`relative min-h-[5.25rem] w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
   >
     <div className="flex min-w-0 items-start gap-2.5">
       <div className="relative shrink-0">
@@ -93,7 +99,7 @@ export default function InboxConversationListItem({ conversation, selected, cont
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className={`min-w-0 flex-1 truncate text-[13px] text-zinc-950 ${unread ? 'font-semibold' : 'font-medium'}`}>{conversation.customer_name || contactLabel}</span>
-          <span className={`shrink-0 text-[10px] tabular-nums ${unread ? 'font-semibold text-blue-600' : 'text-zinc-400'}`}>{relativeTime(conversation.last_message_at)}</span>
+          <time dateTime={conversation.last_message_at || undefined} title={exactTime(conversation.last_message_at)} className={`shrink-0 text-[10px] tabular-nums ${unread ? 'font-semibold text-blue-600' : 'text-zinc-400'}`}>{relativeTime(conversation.last_message_at)}</time>
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-2">
           <p className={`min-w-0 flex-1 truncate text-xs leading-5 ${unread ? 'font-medium text-zinc-800' : 'text-zinc-500'}`}>{conversation.last_message_preview || 'No message preview'}</p>
@@ -101,10 +107,10 @@ export default function InboxConversationListItem({ conversation, selected, cont
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 text-[10px] text-zinc-400">
           <span className="max-w-[150px] truncate font-medium capitalize">{account}</span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
           <span className="max-w-[90px] truncate">{assignee}</span>
           {conversation.priority !== 'normal' && <span className={`ml-1 shrink-0 rounded-md px-1.5 py-0.5 font-medium capitalize ${conversation.priority === 'urgent' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>{conversation.priority}</span>}
-          <span className={`ml-auto shrink-0 font-medium ${statusDanger ? 'text-rose-600' : conversation.needs_reply ? 'text-blue-600' : 'text-zinc-400'}`}>{statusText}</span>
+          <span className={`ml-auto shrink-0 rounded-md px-1.5 py-0.5 font-medium ${statusDanger ? 'bg-rose-50 text-rose-700' : conversation.needs_reply ? 'bg-blue-50 text-blue-700' : 'bg-zinc-50 text-zinc-500'}`}>{actionState}</span>
         </div>
       </div>
     </div>
