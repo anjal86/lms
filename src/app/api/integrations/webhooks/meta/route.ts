@@ -5,6 +5,7 @@ import { ingestNormalizedLead } from '@/lib/integrations/ingest';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
 import { mergeReferralObjects, normalizeMetaAdAttribution } from '@/lib/integrations/ad-attribution';
+import { bufferPendingAdReferral, claimPendingAdReferral, consumePendingAdReferral } from '@/lib/integrations/ad-referral-buffer';
 import {
   extractLeadFormDemographics,
   detectLocationFromText,
@@ -266,6 +267,7 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
 async function processMetaMessage(provider: 'facebook' | 'instagram', accountId: string, messaging: Record<string, unknown>) {
   const connection = await findMetaConnection(provider, accountId);
   if (!connection) throw new Error(`No connected ${provider} account matches ${accountId}.`);
+  if (!connection.workspace_id) throw new Error(`The ${provider} connection is not attached to a workspace.`);
 
   const delivery = record(messaging.delivery);
   if (Object.keys(delivery).length > 0) {
@@ -278,8 +280,6 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   const sender = record(messaging.sender);
   const recipient = record(messaging.recipient);
   const message = record(messaging.message);
-  if (!message.mid) return;
-
   const isEcho = message.is_echo === true;
   const customerId = isEcho ? String(recipient.id || '') : String(sender.id || '');
   if (!customerId) return;
@@ -290,8 +290,33 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     postback.referral,
     message.referral,
   );
-  const adAttribution = isEcho ? null : normalizeMetaAdAttribution(referralPayload, provider);
+  const directAdAttribution = isEcho ? null : normalizeMetaAdAttribution(referralPayload, provider);
   const sentAt = safeTimestamp(messaging.timestamp);
+
+  if (!message.mid) {
+    if (directAdAttribution && !isEcho) {
+      await bufferPendingAdReferral({
+        workspaceId: connection.workspace_id,
+        connectionId: connection.id,
+        provider,
+        accountId,
+        externalContactId: customerId,
+        attribution: directAdAttribution,
+        capturedAt: sentAt,
+      });
+    }
+    return;
+  }
+
+  const pendingReferral = !isEcho
+    ? await claimPendingAdReferral({
+      workspaceId: connection.workspace_id,
+      connectionId: connection.id,
+      provider,
+      externalContactId: customerId,
+    })
+    : null;
+  const adAttribution = directAdAttribution || pendingReferral?.attribution || null;
   const text = typeof message.text === 'string' ? message.text : null;
   const threadId = `${accountId}:${customerId}`;
 
@@ -405,6 +430,14 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
       ...(demographics ? { customer_profile: demographics } : {}),
     },
   });
+
+  if (pendingReferral?.id) {
+    try {
+      await consumePendingAdReferral(pendingReferral.id);
+    } catch (error) {
+      console.warn('Unable to mark pending ad referral consumed:', error instanceof Error ? error.message : error);
+    }
+  }
 }
 
 async function processWhatsApp(entry: Record<string, unknown>) {
