@@ -4,6 +4,7 @@ import Link from 'next/link';
 import {
   Activity,
   ArrowRight,
+  Bot,
   Building2,
   ListPlus,
   MessageSquareQuote,
@@ -38,6 +39,7 @@ export default function WorkspaceSettingsHubPage() {
     { href: '/settings/business', title: 'Business setup', description: 'Industry pack, terminology, modules, pipelines and qualification behavior.', icon: Building2, visible: true },
     { href: '/settings/business/fields', title: 'Custom fields', description: 'Control the structured data collected on opportunities.', icon: ListPlus, visible: true },
     { href: '/connections', title: 'Connections', description: 'Manage messaging channels, webhooks and external system connections.', icon: PlugZap, visible: true },
+    { href: '/settings/ai-agents', title: 'AI Agents', description: 'Configure Mistral-powered agents for assisted replies, automatic responses and human handoff.', icon: Bot, visible: true },
     { href: '/templates', title: 'Saved replies', description: 'Reusable customer replies available to the communication workflow.', icon: MessageSquareQuote, visible: true },
     { href: '/team/users', title: 'Users', description: 'Manage workspace members, roles and availability.', icon: UserCog, visible: true },
     { href: '/settings/automations', title: 'Automations', description: 'Workflow rules that progress or route work automatically.', icon: Zap, visible: can('automations.view') },
