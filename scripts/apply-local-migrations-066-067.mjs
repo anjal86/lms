@@ -67,6 +67,18 @@ const migrations = [
     file: '202609150073_conversation_team_management.sql',
     marker: "select to_regprocedure('public.save_conversation_team(uuid,text,text,text,boolean,uuid[])') is not null",
   },
+  {
+    file: '202609150074_conversation_team_key_integrity.sql',
+    marker: "select exists(select 1 from pg_trigger where tgname='trg_protect_conversation_team_key' and not tgisinternal)",
+  },
+  {
+    file: '202609160075_workspace_ai_agents.sql',
+    marker: "select to_regclass('public.ai_agents') is not null and to_regclass('public.ai_agent_jobs') is not null and to_regprocedure('public.claim_ai_agent_job()') is not null and exists(select 1 from pg_trigger where tgname='trg_queue_live_ai_agent_message' and not tgisinternal)",
+  },
+  {
+    file: '202609160076_ai_agent_management.sql',
+    marker: "select to_regprocedure('public.save_workspace_ai_agent(uuid,text,text,text,text,text,text[],text,boolean,numeric,numeric,integer,integer,text,text[],boolean,uuid[])') is not null",
+  },
 ];
 
 for (const migration of migrations) {
