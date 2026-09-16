@@ -111,22 +111,28 @@ export function providerSupportsOutbound(provider: string) {
   return provider === 'facebook' || provider === 'instagram' || provider === 'whatsapp';
 }
 
+function withRequiredMetaScopes(provider: IntegrationProvider, scopes: string) {
+  const values = scopes.split(',').map((value) => value.trim()).filter(Boolean);
+  // ads_read is part of the product contract for connected Meta channels: the
+  // webhook provides immediate creative context, while this permission enables
+  // automatic campaign/ad-set/status enrichment. Keep explicit custom scope
+  // overrides, but never let an older override silently disable the feature.
+  if (['facebook', 'instagram', 'whatsapp'].includes(provider) && !values.includes('ads_read')) values.push('ads_read');
+  return Array.from(new Set(values)).join(',');
+}
+
 export function metaScopes(provider: IntegrationProvider) {
   const configured = process.env[`META_${provider.toUpperCase()}_SCOPES`]?.trim();
-  if (configured) return configured;
+  if (configured) return withRequiredMetaScopes(provider, configured);
 
-  // ads_read lets the CRM enrich an ad ID already supplied by Meta's messaging
-  // webhook with campaign/ad-set/creative/status metadata. Existing connections
-  // continue working without it; they simply show permission_required until the
-  // manager reconnects the Meta authorization.
   if (provider === 'facebook') {
-    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging,leads_retrieval,business_management,ads_read';
+    return withRequiredMetaScopes(provider, 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging,leads_retrieval,business_management');
   }
   if (provider === 'instagram') {
-    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management,ads_read';
+    return withRequiredMetaScopes(provider, 'pages_show_list,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management');
   }
   if (provider === 'whatsapp') {
-    return 'business_management,whatsapp_business_management,whatsapp_business_messaging,ads_read';
+    return withRequiredMetaScopes(provider, 'business_management,whatsapp_business_management,whatsapp_business_messaging');
   }
   return 'business_management';
 }
