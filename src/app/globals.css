@@ -17,18 +17,18 @@
     --zinc-800: #27272a;
     --zinc-900: #18181b;
     --zinc-950: #09090b;
-    --blue-50: #eff6ff;
-    --blue-100: #dbeafe;
-    --blue-500: #3b82f6;
-    --blue-600: #2563eb;
-    --blue-700: #1d4ed8;
+    --blue-50: #eef2ff;
+    --blue-100: #dfe7ff;
+    --blue-500: #3157f6;
+    --blue-600: #3157f6;
+    --blue-700: #2748dc;
     --red-50: #fef2f2;
     --red-500: #ef4444;
-    --red-600: #dc2626;
+    --red-600: #d92d20;
     --amber-50: #fffbeb;
     --amber-500: #f59e0b;
     --emerald-50: #ecfdf5;
-    --emerald-500: #10b981;
+    --emerald-500: #16845b;
 
     /* Primitive sizing tokens */
     --space-1: 0.25rem;
@@ -40,8 +40,8 @@
     --space-8: 2rem;
     --radius-sm: 0.375rem;
     --radius-md: 0.5rem;
-    --radius-lg: 0.625rem;
-    --control-sm: 2rem;
+    --radius-lg: 0.75rem;
+    --control-sm: 2.25rem;
     --control-md: 2.5rem;
     --control-lg: 2.75rem;
 
@@ -49,35 +49,35 @@
     --color-canvas: #f6f7f9;
     --color-surface: var(--zinc-0);
     --color-surface-subtle: #f8f9fb;
-    --color-surface-hover: var(--zinc-50);
-    --color-surface-selected: var(--zinc-100);
-    --color-border: var(--zinc-200);
-    --color-border-strong: var(--zinc-300);
-    --color-text-primary: var(--zinc-950);
-    --color-text-secondary: var(--zinc-600);
-    --color-text-muted: var(--zinc-500);
-    --color-text-disabled: var(--zinc-400);
-    --color-accent: var(--zinc-900);
-    --color-accent-hover: var(--zinc-800);
-    --color-accent-soft: var(--zinc-100);
+    --color-surface-hover: #f8f9fb;
+    --color-surface-selected: var(--blue-50);
+    --color-border: #e5e7eb;
+    --color-border-strong: #d6d9df;
+    --color-text-primary: #111318;
+    --color-text-secondary: #505866;
+    --color-text-muted: #6b7280;
+    --color-text-disabled: #9ca3af;
+    --color-accent: #3157f6;
+    --color-accent-hover: #2748dc;
+    --color-accent-soft: #eef2ff;
     --color-danger: var(--red-600);
     --color-danger-soft: var(--red-50);
     --color-warning: var(--amber-500);
     --color-warning-soft: var(--amber-50);
     --color-success: var(--emerald-500);
     --color-success-soft: var(--emerald-50);
-    --color-focus: rgba(9, 9, 11, 0.18);
+    --color-focus: rgba(49, 87, 246, 0.18);
 
     /* Component tokens */
     --page-gutter-x: 2rem;
-    --page-gutter-y: 1.5rem;
+    --page-gutter-y: 1.75rem;
     --page-section-gap: 1.5rem;
-    --panel-radius: var(--radius-sm);
-    --control-radius: var(--radius-sm);
+    --panel-radius: var(--radius-md);
+    --control-radius: var(--radius-md);
     --control-height: var(--control-md);
-    --header-height: 3rem;
-    --shadow-2xs: 0 1px 2px rgba(9, 9, 11, 0.04);
-    --shadow-panel: 0 1px 2px rgba(9, 9, 11, 0.03), 0 8px 24px rgba(9, 9, 11, 0.035);
+    --header-height: 3.25rem;
+    --shadow-2xs: 0 1px 2px rgba(17, 19, 24, 0.04);
+    --shadow-panel: 0 1px 2px rgba(17, 19, 24, 0.03), 0 10px 30px rgba(17, 19, 24, 0.035);
 
     /* Backward-compatible aliases */
     --background: var(--color-canvas);
@@ -100,7 +100,7 @@
     background: var(--color-canvas);
     color: var(--color-text-primary);
     font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    font-weight: 500;
+    font-weight: 400;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -112,13 +112,13 @@
   h4,
   h5,
   h6 {
-    font-weight: 700;
+    font-weight: 650;
     color: var(--color-text-primary);
   }
 
   b,
   strong {
-    font-weight: 700;
+    font-weight: 600;
   }
 
   .font-mono {
@@ -140,8 +140,8 @@
   }
 
   ::selection {
-    background: var(--zinc-200);
-    color: var(--zinc-950);
+    background: var(--blue-100);
+    color: var(--color-text-primary);
   }
 }
 
@@ -160,7 +160,12 @@
   .app-page-frame {
     width: 100%;
     min-width: 0;
+    margin-inline: auto;
   }
+
+  .page-frame-standard { max-width: 90rem; }
+  .page-frame-wide { max-width: 105rem; }
+  .page-frame-reading { max-width: 72rem; }
 
   .workspace-header,
   .page-header {
@@ -171,27 +176,26 @@
 
   .workspace-eyebrow,
   .page-eyebrow {
-    color: var(--color-accent);
-    font-size: 0.6875rem;
-    font-weight: 650;
-    letter-spacing: 0.12em;
-    line-height: 1.25;
-    text-transform: uppercase;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.005em;
+    line-height: 1.3;
   }
 
   .workspace-title,
   .page-title {
     color: var(--color-text-primary);
-    font-size: 1.375rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    line-height: 1.2;
+    font-size: 1.5rem;
+    font-weight: 650;
+    letter-spacing: -0.035em;
+    line-height: 1.18;
   }
 
   .workspace-description,
   .page-description {
     margin-top: var(--space-1);
-    max-width: 48rem;
+    max-width: 46rem;
     color: var(--color-text-muted);
     font-size: 0.875rem;
     line-height: 1.55;
@@ -206,9 +210,9 @@
 
   .section-heading {
     color: var(--color-text-primary);
-    font-size: 0.8125rem;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: -0.012em;
   }
 
   .section-description {
@@ -220,12 +224,7 @@
 
   /* Surfaces */
   .panel,
-  .surface {
-    border: 1px solid var(--color-border);
-    border-radius: var(--panel-radius);
-    background: var(--color-surface);
-  }
-
+  .surface,
   .surface-flat {
     border: 1px solid var(--color-border);
     border-radius: var(--panel-radius);
@@ -310,7 +309,7 @@
   .field:hover,
   .select-field:hover,
   .textarea-field:hover {
-    border-color: var(--zinc-400);
+    border-color: #b9bec8;
   }
 
   .field:focus,
@@ -339,23 +338,25 @@
     border-radius: var(--control-radius);
     padding: 0.5rem 0.875rem;
     font-size: 0.8125rem;
-    font-weight: 600;
+    font-weight: 550;
     line-height: 1;
     white-space: nowrap;
-    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
   }
 
   .button-primary {
-    border: 1px solid var(--zinc-950);
-    background: var(--zinc-950);
+    border: 1px solid var(--color-accent);
+    background: var(--color-accent);
     color: var(--zinc-0);
-    box-shadow: var(--shadow-2xs);
+    box-shadow: 0 1px 2px rgba(49, 87, 246, 0.18);
   }
 
   .button-primary:hover {
-    background: var(--zinc-800);
-    border-color: var(--zinc-800);
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
   }
+
+  .button-primary:active { transform: translateY(1px); }
 
   .button-secondary {
     border: 1px solid var(--color-border-strong);
@@ -365,7 +366,7 @@
   }
 
   .button-secondary:hover {
-    border-color: var(--zinc-400);
+    border-color: #b9bec8;
     background: var(--color-surface-hover);
     color: var(--color-text-primary);
   }
@@ -394,7 +395,7 @@
 
   .button-sm {
     min-height: var(--control-sm);
-    padding: 0.375rem 0.625rem;
+    padding: 0.4rem 0.7rem;
     font-size: 0.75rem;
   }
 
@@ -415,25 +416,25 @@
 
   .metric-label {
     color: var(--color-text-muted);
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0;
   }
 
   .metric-value {
     margin-top: var(--space-1);
     color: var(--color-text-primary);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 1.375rem;
-    font-weight: 600;
-    letter-spacing: -0.035em;
+    font-size: 1.625rem;
+    font-weight: 620;
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
   }
 
   .metric-hint {
     margin-top: var(--space-1);
     color: var(--color-text-muted);
     font-size: 0.75rem;
+    line-height: 1.45;
   }
 
   .status-line {
@@ -442,7 +443,7 @@
     gap: 0.375rem;
     color: var(--color-text-secondary);
     font-size: 0.75rem;
-    font-weight: 550;
+    font-weight: 500;
   }
 
   .status-dot {
@@ -470,8 +471,8 @@
 
   .empty-state-title {
     color: var(--color-text-primary);
-    font-size: 0.8125rem;
-    font-weight: 650;
+    font-size: 0.875rem;
+    font-weight: 600;
   }
 
   .empty-state-description {
@@ -521,19 +522,19 @@ header.sticky a {
 }
 
 #main-content table th {
-  padding: 0.625rem 0.75rem;
+  padding: 0.6875rem 0.75rem;
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-size: 0.6875rem;
-  font-weight: 650;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
   text-align: left;
 }
 
 #main-content table td {
-  padding: 0.625rem 0.75rem;
-  border-bottom: 1px solid rgba(228, 228, 231, 0.75);
+  padding: 0.6875rem 0.75rem;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.78);
   color: var(--color-text-secondary);
   vertical-align: middle;
 }
@@ -629,7 +630,7 @@ textarea:focus-visible {
     --page-gutter-x: 1rem;
     --page-gutter-y: 1rem;
     --page-section-gap: 1rem;
-    --header-height: 3rem;
+    --header-height: 3.25rem;
   }
 
   .app-main {
