@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { sendChannelText } from '@/lib/integrations/channel-sender';
+import { attributionFromConversationMetadata, resolveAdKnowledge } from './ad-context';
 import { decideWithAiProvider, type AiAgentDecision } from './llm-provider';
 
 type AiJob = {
@@ -49,6 +50,7 @@ type ConversationRow = {
   assigned_to: string | null;
   workflow_state: string;
   team_key: string | null;
+  metadata: Record<string, unknown> | null;
 };
 
 type MessageRow = {
@@ -335,7 +337,7 @@ export async function processAiAgentJob(job: AiJob) {
   try {
     const [{ data: agentData }, { data: conversationData }, { data: workspace }] = await Promise.all([
       admin.from('ai_agents').select('*').eq('workspace_id', job.workspace_id).eq('id', job.agent_id).maybeSingle(),
-      admin.from('lead_conversations').select('id,workspace_id,lead_id,contact_id,connection_id,provider,external_thread_id,external_contact_id,customer_name,customer_phone,customer_email,assigned_to,workflow_state,team_key').eq('workspace_id', job.workspace_id).eq('id', job.conversation_id).maybeSingle(),
+      admin.from('lead_conversations').select('id,workspace_id,lead_id,contact_id,connection_id,provider,external_thread_id,external_contact_id,customer_name,customer_phone,customer_email,assigned_to,workflow_state,team_key,metadata').eq('workspace_id', job.workspace_id).eq('id', job.conversation_id).maybeSingle(),
       admin.from('workspaces').select('id,name').eq('id', job.workspace_id).maybeSingle(),
     ]);
 
@@ -404,6 +406,14 @@ export async function processAiAgentJob(job: AiJob) {
         : Promise.resolve({ data: null }),
     ]);
 
+    const adAttribution = attributionFromConversationMetadata(conversation.metadata);
+    let adKnowledge = null;
+    try {
+      adKnowledge = await resolveAdKnowledge(job.workspace_id, adAttribution);
+    } catch (error) {
+      console.warn('AI ad knowledge lookup failed:', error instanceof Error ? error.message : error);
+    }
+
     const decision = await decideWithAiProvider(job.workspace_id, {
       name: agent.name,
       model: agent.model,
@@ -419,6 +429,8 @@ export async function processAiAgentJob(job: AiJob) {
       customerEmail: conversation.customer_email,
       lifecycle: contact?.lifecycle_key || null,
       opportunity: lead ? record(lead) : null,
+      adAttribution,
+      adKnowledge,
       conversation: messages.map((message) => ({
         direction: message.direction,
         body: message.body,
