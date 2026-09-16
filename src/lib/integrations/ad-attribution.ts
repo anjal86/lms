@@ -31,6 +31,12 @@ function firstText(...values: unknown[]) {
   return null;
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export function mergeReferralObjects(...values: unknown[]): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
   for (const value of values) {
@@ -46,11 +52,12 @@ export function normalizeMetaAdAttribution(
 ): NormalizedAdAttribution | null {
   if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return null;
   const raw = rawInput as Record<string, unknown>;
+  const adsContext = record(raw.ads_context_data);
 
   const source = firstText(raw.source, raw.referral_source);
   const sourceType = firstText(raw.source_type, raw.type);
-  const adId = firstText(raw.ad_id);
-  const sourceId = firstText(raw.source_id, raw.ad_id, raw.id);
+  const adId = firstText(raw.ad_id, adsContext.ad_id);
+  const sourceId = firstText(raw.source_id, adId, raw.id);
   const ctwaClid = firstText(raw.ctwa_clid);
   const normalizedSource = source?.toLowerCase() || '';
   const normalizedType = sourceType?.toLowerCase().replace(/[\s-]+/g, '_') || '';
@@ -69,8 +76,12 @@ export function normalizeMetaAdAttribution(
   );
   if (!looksPaid) return null;
 
-  const platform = firstText(raw.platform)
+  const platform = firstText(raw.platform, raw.source_app)
     || (provider === 'instagram' ? 'instagram' : provider === 'facebook' ? 'facebook' : 'meta');
+
+  const imageUrl = firstText(raw.image_url, raw.original_image_url, adsContext.photo_url);
+  const videoUrl = firstText(raw.video_url, adsContext.video_url);
+  const thumbnailUrl = firstText(raw.thumbnail_url, adsContext.thumbnail_url);
 
   return {
     origin: 'paid_ad',
@@ -82,13 +93,13 @@ export function normalizeMetaAdAttribution(
     adset_id: firstText(raw.adset_id),
     adset_name: firstText(raw.adset_name),
     ad_id: adId,
-    ad_name: firstText(raw.ad_name),
+    ad_name: firstText(raw.ad_name, adsContext.ad_title),
     source_id: sourceId,
-    source_url: firstText(raw.source_url, raw.url),
-    headline: firstText(raw.headline, raw.title),
-    body: firstText(raw.body, raw.description, raw.text),
+    source_url: firstText(raw.source_url, raw.referer_uri, raw.url),
+    headline: firstText(raw.headline, raw.title, raw.ad_title, adsContext.ad_title),
+    body: firstText(raw.body, raw.description, raw.text, raw.ad_body, adsContext.ad_body),
     media_type: firstText(raw.media_type),
-    media_url: firstText(raw.image_url, raw.video_url, raw.thumbnail_url, raw.media_url),
+    media_url: firstText(raw.media_url, imageUrl, videoUrl, thumbnailUrl),
     ctwa_clid: ctwaClid,
     raw,
   };
