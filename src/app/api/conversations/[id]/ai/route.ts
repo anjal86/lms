@@ -41,7 +41,7 @@ async function requeueLatestUnansweredInbound(input: {
   const admin = createSupabaseAdminClient();
   const { data: rows, error } = await admin
     .from('lead_messages')
-    .select('id,direction,sent_at')
+    .select('id,direction,sent_at,delivery_status')
     .eq('workspace_id', input.workspaceId)
     .eq('conversation_id', input.conversationId)
     .in('direction', ['inbound','outbound'])
@@ -54,14 +54,18 @@ async function requeueLatestUnansweredInbound(input: {
   if (!latestInbound) return false;
 
   const inboundAt = new Date(latestInbound.sent_at).getTime();
-  const hasLaterOutbound = messages.some((message) => (
-    message.direction === 'outbound' && new Date(message.sent_at).getTime() > inboundAt
+  const hasLaterDeliveredOutbound = messages.some((message) => (
+    message.direction === 'outbound'
+    && message.delivery_status !== 'failed'
+    && new Date(message.sent_at).getTime() > inboundAt
   ));
-  if (hasLaterOutbound) return false;
+  if (hasLaterDeliveredOutbound) return false;
 
   const { data: existingJob, error: jobReadError } = await admin
     .from('ai_agent_jobs')
     .select('id')
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId)
     .eq('source_message_id', latestInbound.id)
     .maybeSingle();
   if (jobReadError) throw jobReadError;
