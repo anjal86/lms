@@ -87,6 +87,10 @@ const migrations = [
     file: '202609160078_ai_assist_human_ownership.sql',
     marker: "select exists(select 1 from pg_trigger where tgname='trg_normalize_ai_agent_mode_settings' and not tgisinternal)",
   },
+  {
+    file: '202609160079_ai_state_access_integrity.sql',
+    marker: "select exists(select 1 from pg_policies where schemaname='public' and tablename='conversation_ai_states' and policyname='conversation_ai_states_update' and position('can_access_conversation' in coalesce(qual,'')) > 0)",
+  },
 ];
 
 for (const migration of migrations) {
