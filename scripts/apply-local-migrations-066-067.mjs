@@ -72,6 +72,10 @@ const migrations = [
     file: '202609160084_pending_ad_referrals.sql',
     marker: "select to_regclass('public.pending_ad_referrals') is not null",
   },
+  {
+    file: '202609160085_automatic_meta_ad_registry.sql',
+    marker: "select to_regclass('public.meta_ad_registry') is not null and to_regclass('public.meta_ad_enrichment_jobs') is not null and to_regprocedure('public.claim_meta_ad_enrichment_job()') is not null and position('meta_ad_registry' in pg_get_functiondef(to_regprocedure('public.capture_message_ad_attribution()'))) > 0",
+  },
 ];
 
 for (const migration of migrations) {
