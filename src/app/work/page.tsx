@@ -36,6 +36,8 @@ type DisplayWorkItem = ApiWorkItem & {
   surface: 'follow_up' | 'conversation';
 };
 
+const WORK_RUNTIME_CACHE = new Map<string, ApiWorkItem[]>();
+
 function sameDay(value: string, now: Date) {
   const date = new Date(value);
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
@@ -67,8 +69,12 @@ export default function DueWorkPage() {
   const params = useSearchParams();
   const { currentUser, allLeads, allProfiles, showToast } = useApp();
   const { config, term } = useWorkspace();
-  const [items, setItems] = useState<ApiWorkItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const leadLabel = term('lead', 'Opportunity');
+  const isManagement = currentUser.role === 'admin' || currentUser.role === 'manager';
+  const runtimeCacheKey = `${currentUser.id}::${config.workspace.id}::${isManagement ? 'all' : 'me'}`;
+  const initialItems = WORK_RUNTIME_CACHE.get(runtimeCacheKey);
+  const [items, setItems] = useState<ApiWorkItem[]>(() => initialItems || []);
+  const [loading, setLoading] = useState(() => !initialItems);
   const [query, setQuery] = useState('');
   const [view, setView] = useState<ViewKey>('today');
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() => sourceFromParam(params.get('type')));
@@ -76,33 +82,43 @@ export default function DueWorkPage() {
   const [ownerFilter, setOwnerFilter] = useState(() => params.get('owner') === 'me' ? 'me' : 'all');
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const leadLabel = term('lead', 'Opportunity');
-  const isManagement = currentUser.role === 'admin' || currentUser.role === 'manager';
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const force = options?.force === true;
+    const quiet = options?.quiet === true;
+    const cached = WORK_RUNTIME_CACHE.get(runtimeCacheKey);
+    if (cached) {
+      setItems(cached);
+      setLoading(false);
+    } else if (!quiet) {
+      setLoading(true);
+    }
     try {
       const requestParams = new URLSearchParams({ status: 'all', owner: isManagement ? 'all' : 'me', limit: '500' });
+      if (force) requestParams.set('refresh', '1');
       const response = await fetch(`/api/work-items?${requestParams.toString()}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to load due work.');
-      setItems(payload.items || []);
+      const nextItems = Array.isArray(payload.items) ? payload.items as ApiWorkItem[] : [];
+      setItems(nextItems);
+      WORK_RUNTIME_CACHE.set(runtimeCacheKey, nextItems);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Unable to load due work.', 'error');
+      if (!quiet || !cached) showToast(error instanceof Error ? error.message : 'Unable to load due work.', 'error');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
-  }, [isManagement, showToast]);
+  }, [isManagement, runtimeCacheKey, showToast]);
 
   useEffect(() => {
     document.title = `Due Work — ${config.workspace.name}`;
-    const initial = window.setTimeout(() => void load(), 0);
+    const hasSnapshot = WORK_RUNTIME_CACHE.has(runtimeCacheKey);
+    const initial = window.setTimeout(() => void load({ quiet: hasSnapshot }), 0);
     const clock = window.setInterval(() => setNow(Date.now()), 60000);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(clock);
     };
-  }, [config.workspace.name, load]);
+  }, [config.workspace.name, load, runtimeCacheKey]);
 
   const displayItems = useMemo<DisplayWorkItem[]>(() => items.map((item) => {
     const lead = item.lead_id ? allLeads.find((row) => row.id === item.lead_id) : null;
@@ -181,7 +197,11 @@ export default function DueWorkPage() {
       showToast(payload.error || 'Unable to complete action.', 'error');
       return;
     }
-    setItems((rows) => rows.map((row) => row.id === item.id ? payload.item : row));
+    setItems((rows) => {
+      const next = rows.map((row) => row.id === item.id ? payload.item as ApiWorkItem : row);
+      WORK_RUNTIME_CACHE.set(runtimeCacheKey, next);
+      return next;
+    });
     showToast('Action completed.', 'success');
   };
 
@@ -222,7 +242,7 @@ export default function DueWorkPage() {
         <button type="button" onClick={() => setScheduleOpen(true)} className="button-primary">
           <Plus className="h-4 w-4" /> Add action
         </button>
-        <button type="button" onClick={() => void load()} disabled={loading} className="button-secondary px-3" aria-label="Refresh due work">
+        <button type="button" onClick={() => void load({ force: true })} disabled={loading} className="button-secondary px-3" aria-label="Refresh due work">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
@@ -289,6 +309,6 @@ export default function DueWorkPage() {
       )}
     </section>
 
-    {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => { setScheduleOpen(false); window.setTimeout(() => void load(), 150); }} />}
+    {scheduleOpen && <ScheduleFollowUpModal isOpen onClose={() => { setScheduleOpen(false); window.setTimeout(() => void load({ force: true, quiet: true }), 150); }} />}
   </div>;
 }
