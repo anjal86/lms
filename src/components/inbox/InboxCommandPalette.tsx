@@ -9,12 +9,14 @@ import {
   Inbox,
   MessageSquareReply,
   PlugZap,
+  Route,
   Search,
   Settings2,
   UserCheck,
   UsersRound,
   X,
 } from 'lucide-react';
+import { useApp } from '@/lib/store';
 
 type Command = {
   id: string;
@@ -22,8 +24,10 @@ type Command = {
   hint: string;
   keywords: string;
   icon: typeof Inbox;
-  href: string;
+  href?: string;
+  teamKey?: string;
 };
+type RoutingTeam = { id: string; team_key: string; name: string; is_active: boolean };
 
 const COMMANDS: Command[] = [
   { id: 'needs-reply', label: 'Needs reply', hint: 'Customers waiting on your team', keywords: 'reply waiting customer inbox', icon: MessageSquareReply, href: '/inbox?view=needs_reply' },
@@ -35,22 +39,75 @@ const COMMANDS: Command[] = [
   { id: 'resolved', label: 'Resolved conversations', hint: 'Closed conversation history', keywords: 'closed resolved done', icon: Inbox, href: '/inbox?view=closed' },
   { id: 'saved-views', label: 'Custom inboxes', hint: 'Create and manage reusable operational views', keywords: 'saved custom views filters queues', icon: BookOpen, href: '/inbox/views' },
   { id: 'team', label: 'Team workload', hint: 'Availability, capacity and routing health', keywords: 'team agents capacity workload routing', icon: UsersRound, href: '/team' },
+  { id: 'routing-teams', label: 'Routing teams', hint: 'Configure Sales, Support and other shared queues', keywords: 'routing teams sales support operations queue members', icon: Route, href: '/settings/routing-teams' },
   { id: 'connections', label: 'Connections', hint: 'WhatsApp, Meta and channel accounts', keywords: 'whatsapp facebook instagram channels accounts', icon: PlugZap, href: '/connections' },
   { id: 'service-levels', label: 'Service levels & routing', hint: 'Response targets and assignment strategy', keywords: 'sla service routing round robin balanced assignment', icon: Settings2, href: '/settings/service-levels' },
 ];
 
 export default function InboxCommandPalette() {
   const router = useRouter();
+  const { currentUser, showToast } = useApp();
+  const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [teams, setTeams] = useState<RoutingTeam[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const commands = useMemo(() => {
+    if (!canManage || !conversationId) return COMMANDS;
+    const routeCommands: Command[] = teams.filter((team) => team.is_active).map((team) => ({
+      id: `route-team-${team.id}`,
+      label: `Route to ${team.name}`,
+      hint: 'Set team queue and assign an eligible agent',
+      keywords: `route team queue ${team.name} ${team.team_key}`,
+      icon: Route,
+      teamKey: team.team_key,
+    }));
+    return routeCommands.length ? [...routeCommands, ...COMMANDS] : COMMANDS;
+  }, [canManage, conversationId, teams]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return COMMANDS;
-    return COMMANDS.filter((command) => `${command.label} ${command.hint} ${command.keywords}`.toLowerCase().includes(normalized));
-  }, [query]);
+    if (!normalized) return commands;
+    return commands.filter((command) => `${command.label} ${command.hint} ${command.keywords}`.toLowerCase().includes(normalized));
+  }, [commands, query]);
+
+  const runCommand = async (command: Command) => {
+    if (running) return;
+    if (command.teamKey) {
+      if (!conversationId) {
+        showToast('Select a conversation before routing it to a team.', 'error');
+        return;
+      }
+      setRunning(true);
+      try {
+        const response = await fetch(`/api/conversations/${conversationId}/team`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ team_key: command.teamKey, route: true, strategy: 'workload_balanced' }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'Unable to route conversation.');
+        showToast(`${command.label.replace('Route to ', '')} queue assigned.`, 'success');
+        window.dispatchEvent(new CustomEvent('crm:data-mutated'));
+        setOpen(false);
+        setQuery('');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Unable to route conversation.', 'error');
+      } finally {
+        setRunning(false);
+      }
+      return;
+    }
+    if (command.href) {
+      setOpen(false);
+      setQuery('');
+      router.push(command.href);
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -77,22 +134,27 @@ export default function InboxCommandPalette() {
       }
       if (event.key === 'Enter' && filtered[activeIndex]) {
         event.preventDefault();
-        const command = filtered[activeIndex];
-        setOpen(false);
-        setQuery('');
-        router.push(command.href);
+        void runCommand(filtered[activeIndex]);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeIndex, filtered, open, router]);
+  });
 
   useEffect(() => {
     if (!open) return;
     setActiveIndex(0);
+    const params = new URLSearchParams(window.location.search);
+    setConversationId(params.get('conversationId') || params.get('id') || params.get('conversation'));
+    if (canManage) {
+      void fetch('/api/routing/teams', { cache: 'no-store' })
+        .then(async (response) => response.ok ? response.json() : { teams: [] })
+        .then((payload) => setTeams(Array.isArray(payload.teams) ? payload.teams : []))
+        .catch(() => setTeams([]));
+    }
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
-  }, [open]);
+  }, [canManage, open]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -112,14 +174,14 @@ export default function InboxCommandPalette() {
       <div className="max-h-[56vh] overflow-y-auto p-1.5">
         {filtered.map((command, index) => {
           const Icon = command.icon;
-          return <button key={command.id} type="button" onMouseEnter={() => setActiveIndex(index)} onClick={() => { setOpen(false); setQuery(''); router.push(command.href); }} className={`flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-left transition ${index === activeIndex ? 'bg-blue-50' : 'hover:bg-zinc-50'}`}>
+          return <button key={command.id} type="button" disabled={running} onMouseEnter={() => setActiveIndex(index)} onClick={() => void runCommand(command)} className={`flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-left transition disabled:opacity-50 ${index === activeIndex ? 'bg-blue-50' : 'hover:bg-zinc-50'}`}>
             <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${index === activeIndex ? 'bg-blue-100 text-blue-700' : 'bg-zinc-100 text-zinc-500'}`}><Icon className="h-4 w-4" /></span>
             <span className="min-w-0 flex-1"><span className="block text-[13px] font-semibold text-zinc-900">{command.label}</span><span className="mt-0.5 block truncate text-[11px] text-zinc-500">{command.hint}</span></span>
           </button>;
         })}
         {filtered.length === 0 && <div className="px-4 py-10 text-center text-sm text-zinc-400">No matching command.</div>}
       </div>
-      <div className="flex items-center justify-between border-t border-zinc-100 bg-zinc-50/70 px-3 py-2 text-[10px] text-zinc-400"><span>↑↓ navigate · Enter open · Esc close</span><span>Inbox operations</span></div>
+      <div className="flex items-center justify-between border-t border-zinc-100 bg-zinc-50/70 px-3 py-2 text-[10px] text-zinc-400"><span>↑↓ navigate · Enter open · Esc close</span><span>{conversationId ? 'Conversation selected' : 'Inbox operations'}</span></div>
     </div>
   </div>;
 }
