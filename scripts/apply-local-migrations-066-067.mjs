@@ -76,6 +76,10 @@ const migrations = [
     file: '202609160085_automatic_meta_ad_registry.sql',
     marker: "select to_regclass('public.meta_ad_registry') is not null and to_regclass('public.meta_ad_enrichment_jobs') is not null and to_regprocedure('public.claim_meta_ad_enrichment_job()') is not null and position('meta_ad_registry' in pg_get_functiondef(to_regprocedure('public.capture_message_ad_attribution()'))) > 0",
   },
+  {
+    file: '202609160086_meta_ad_registry_cross_channel.sql',
+    marker: "select to_regprocedure('public.capture_meta_ad_registry_from_message()') is not null and exists(select 1 from pg_trigger where tgname='trg_capture_meta_ad_registry' and not tgisinternal)",
+  },
 ];
 
 for (const migration of migrations) {
