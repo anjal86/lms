@@ -59,6 +59,10 @@ const migrations = [
     file: '202609150071_live_conversation_auto_routing.sql',
     marker: "select to_regprocedure('public.route_live_inbound_conversation()') is not null and exists(select 1 from pg_trigger where tgname='trg_route_live_inbound_conversation' and not tgisinternal)",
   },
+  {
+    file: '202609150072_conversation_team_queues.sql',
+    marker: "select to_regclass('public.conversation_teams') is not null and to_regclass('public.conversation_team_members') is not null and to_regprocedure('public.set_conversation_team(uuid,text,boolean,text)') is not null",
+  },
 ];
 
 for (const migration of migrations) {
