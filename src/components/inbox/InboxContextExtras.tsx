@@ -16,6 +16,7 @@ import {
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
+import InboxAdAttribution from '@/components/inbox/InboxAdAttribution';
 
 type WorkItem = {
   id: string;
@@ -274,8 +275,11 @@ export default function InboxContextExtras({ conversationId, tags, nextActionAt,
   const status = decisionStatus(decision);
   const sla = slaStatus(decision);
   const canRoute = (currentUser.role === 'admin' || currentUser.role === 'manager') && can('inbox.assign');
+  const canManageAds = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   return <div className="space-y-5 border-t border-zinc-100 pt-4">
+    <InboxAdAttribution conversationId={conversationId} canManage={canManageAds} />
+
     <section>
       <div className="flex items-center justify-between gap-2">
         <div className="text-[11px] font-semibold text-zinc-700">Decision</div>
