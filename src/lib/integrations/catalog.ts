@@ -26,7 +26,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     shortName: 'Facebook',
     description: 'Connect Facebook Pages for Instant Form leads and Messenger conversations in the unified Inbox.',
     group: 'Meta',
-    capabilities: ['Lead Ads', 'Messenger', 'Replies', 'Campaign source', 'Automatic routing'],
+    capabilities: ['Lead Ads', 'Messenger', 'Replies', 'Campaign source', 'Automatic routing', 'Automatic ad context'],
     envKeys: ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN', 'INTEGRATION_TOKEN_ENCRYPTION_KEY'],
     connectMode: 'meta_oauth',
     color: 'blue',
@@ -37,7 +37,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     shortName: 'Instagram',
     description: 'Connect each Instagram Business account as its own messaging account in the unified Inbox.',
     group: 'Meta',
-    capabilities: ['DMs', 'Replies', 'Conversation history', 'Contact matching'],
+    capabilities: ['DMs', 'Replies', 'Conversation history', 'Contact matching', 'Automatic ad context'],
     envKeys: ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN', 'INTEGRATION_TOKEN_ENCRYPTION_KEY'],
     connectMode: 'meta_oauth',
     color: 'pink',
@@ -48,7 +48,7 @@ export const PROVIDERS: ProviderDefinition[] = [
     shortName: 'WhatsApp',
     description: 'Connect official WhatsApp phone numbers or self-hosted linked devices as separate Inbox accounts.',
     group: 'Messaging',
-    capabilities: ['Messages', 'Replies', 'Delivery status', 'Conversation history'],
+    capabilities: ['Messages', 'Replies', 'Delivery status', 'Conversation history', 'Click-to-WhatsApp ad context'],
     envKeys: ['META_APP_ID', 'META_APP_SECRET', 'META_WEBHOOK_VERIFY_TOKEN', 'INTEGRATION_TOKEN_ENCRYPTION_KEY'],
     connectMode: 'meta_oauth',
     color: 'emerald',
@@ -115,14 +115,18 @@ export function metaScopes(provider: IntegrationProvider) {
   const configured = process.env[`META_${provider.toUpperCase()}_SCOPES`]?.trim();
   if (configured) return configured;
 
+  // ads_read lets the CRM enrich an ad ID already supplied by Meta's messaging
+  // webhook with campaign/ad-set/creative/status metadata. Existing connections
+  // continue working without it; they simply show permission_required until the
+  // manager reconnects the Meta authorization.
   if (provider === 'facebook') {
-    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging,leads_retrieval,business_management';
+    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging,leads_retrieval,business_management,ads_read';
   }
   if (provider === 'instagram') {
-    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management';
+    return 'pages_show_list,pages_read_engagement,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management,ads_read';
   }
   if (provider === 'whatsapp') {
-    return 'business_management,whatsapp_business_management,whatsapp_business_messaging';
+    return 'business_management,whatsapp_business_management,whatsapp_business_messaging,ads_read';
   }
   return 'business_management';
 }
