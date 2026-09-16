@@ -78,11 +78,14 @@ export async function POST(request: Request) {
   let hasExistingKey = false;
   if (input.id) {
     const { data: existing } = await admin.from('ai_provider_configs')
-      .select('id')
+      .select('id,provider')
       .eq('workspace_id', actor.profile.workspace_id)
       .eq('id', input.id)
       .maybeSingle();
     if (!existing) return NextResponse.json({ error: 'AI provider connection not found.' }, { status: 404 });
+    if (existing.provider !== input.provider) {
+      return NextResponse.json({ error: 'Provider type cannot be changed after creation. Add a new provider connection instead so credentials are never reused across vendors.' }, { status: 400 });
+    }
     const { data: secret } = await admin.from('ai_provider_secrets')
       .select('provider_config_id')
       .eq('workspace_id', actor.profile.workspace_id)
