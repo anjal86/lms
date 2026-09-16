@@ -119,24 +119,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     .eq('conversation_id', id)
     .maybeSingle();
 
-  let agentId = existing?.agent_id;
-  if (!agentId) {
-    const { data: defaultAgent } = await actor.supabase
-      .from('ai_agents')
-      .select('id,is_active,mode')
+  let agentId = existing?.agent_id || null;
+  if (!agentId && conversation.connection_id) {
+    const { data: binding, error: bindingError } = await actor.supabase
+      .from('ai_agent_connections')
+      .select('agent_id')
       .eq('workspace_id', actor.profile.workspace_id)
-      .eq('is_active', true)
-      .neq('mode', 'off')
-      .order('created_at', { ascending: true })
+      .eq('connection_id', conversation.connection_id)
+      .eq('is_enabled', true)
       .limit(1)
       .maybeSingle();
-    agentId = defaultAgent?.id || null;
+    if (bindingError) return NextResponse.json({ error: 'Unable to resolve the channel AI agent.' }, { status: 500 });
+    agentId = binding?.agent_id || null;
   }
 
   if (parsed.data.action === 'resume') {
-    if (!agentId) {
-      return NextResponse.json({ error: 'No active AI agent found for this workspace. Please configure an AI agent first.' }, { status: 409 });
-    }
+    if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required to return a conversation to AI.' }, { status: 403 });
+    if (!agentId) return NextResponse.json({ error: 'No AI agent is attached or bound to this conversation channel.' }, { status: 409 });
 
     const { data: agent } = await actor.supabase
       .from('ai_agents')
@@ -148,8 +147,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: 'The attached AI agent is not active.' }, { status: 409 });
     }
 
-    // Autonomous modes reclaim the conversation. Assist mode intentionally stays
-    // alongside the human owner because it only creates drafts for staff to send.
     if (agent.mode !== 'assist') {
       const { error: unassignError } = await actor.supabase
         .from('lead_conversations')
@@ -183,6 +180,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: 'AI was resumed, but the latest customer message could not be queued.' }, { status: 500 });
     }
   } else {
+    if (!agentId) return NextResponse.json({ error: 'No AI agent is attached or bound to this conversation.' }, { status: 409 });
+
     const patch: Record<string, unknown> = {
       conversation_id: id,
       workspace_id: actor.profile.workspace_id,
