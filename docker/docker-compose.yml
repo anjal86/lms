@@ -290,12 +290,12 @@ services:
       - -c
       - >-
         while true; do
-          curl -fsS -X POST -H "Authorization: Bearer $$INTEGRATION_SYNC_SECRET" http://app:3000/api/cron/integration-sync || true;
+          curl -fsS -X POST -H "Authorization: Bearer $$INTEGRATION_SYNC_SECRET" http://host.docker.internal:3000/api/cron/integration-sync || true;
           sleep "$$INTEGRATION_SYNC_INTERVAL_SECONDS";
         done
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      app:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -306,17 +306,18 @@ services:
     environment:
       SLA_CRON_SECRET: ${SLA_CRON_SECRET:?SLA_CRON_SECRET is required}
       SLA_INTERVAL_SECONDS: ${SLA_INTERVAL_SECONDS:-60}
+      SLA_CRON_INTERVAL_SECONDS: ${SLA_CRON_INTERVAL_SECONDS:-60}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command:
       - /bin/sh
       - -c
       - >-
         while true; do
-          curl -fsS -X POST -H "Authorization: Bearer $$SLA_CRON_SECRET" http://app:3000/api/cron/sla || true;
-          sleep "$$SLA_INTERVAL_SECONDS";
+          curl -fsS -X POST -H "Authorization: Bearer $$SLA_CRON_SECRET" http://host.docker.internal:3000/api/cron/sla || true;
+          sleep "$$SLA_CRON_INTERVAL_SECONDS";
         done
-    depends_on:
-      app:
-        condition: service_healthy
+
 
 volumes:
   db-data:

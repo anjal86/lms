@@ -9,6 +9,22 @@ export const isSupabaseConfigured = () => Boolean(supabaseUrl && supabaseAnonKey
 
 let browserClient: SupabaseClient | null = null;
 
+export async function syncRealtimeAuth(client: SupabaseClient = getSupabaseBrowserClient()): Promise<string | null> {
+  try {
+    const { data: { session } } = await client.auth.getSession();
+    const token = session?.access_token || null;
+    if (token) {
+      await client.realtime.setAuth(token);
+    }
+    return token;
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('Unable to sync realtime auth:', err);
+    }
+    return null;
+  }
+}
+
 export function getSupabaseBrowserClient(): SupabaseClient {
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
@@ -22,6 +38,15 @@ export function getSupabaseBrowserClient(): SupabaseClient {
         name: authCookieName(),
       },
     });
+
+    if (typeof window !== 'undefined') {
+      void syncRealtimeAuth(browserClient);
+      browserClient.auth.onAuthStateChange((_event, session) => {
+        if (session?.access_token && browserClient) {
+          void browserClient.realtime.setAuth(session.access_token);
+        }
+      });
+    }
   }
 
   return browserClient;

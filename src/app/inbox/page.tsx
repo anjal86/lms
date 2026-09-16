@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import StableInbox from '@/components/inbox/StableInbox';
 import InboxChannelScopeBar from '@/components/inbox/InboxChannelScopeBar';
@@ -23,7 +23,7 @@ type SyncPayload = {
   };
 };
 
-function ScopedInbox({ refreshRevision }: { refreshRevision: number }) {
+function ScopedInbox() {
   const params = useSearchParams();
   const accountId = params.get('accountId') || 'all';
   const accountProvider = params.get('accountProvider') || 'all';
@@ -33,7 +33,7 @@ function ScopedInbox({ refreshRevision }: { refreshRevision: number }) {
     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
       <InboxChannelScopeBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <StableInbox key={`${provider}:${accountProvider}:${accountId}:${refreshRevision}`} />
+        <StableInbox key={`${provider}:${accountProvider}:${accountId}`} />
       </div>
       <InboxCommandPalette />
     </div>
@@ -53,7 +53,6 @@ function syncPayloadChanged(payload: SyncPayload) {
 export default function InboxPage() {
   const syncingRef = useRef(false);
   const lastSyncStartedAtRef = useRef(0);
-  const [refreshRevision, setRefreshRevision] = useState(0);
 
   useEffect(() => {
     let disposed = false;
@@ -77,7 +76,6 @@ export default function InboxPage() {
       lastSyncStartedAtRef.current = now;
       const controller = new AbortController();
       activeController = controller;
-      let changed = false;
 
       try {
         // One Meta conversations page used to be discovered per poll, which meant an
@@ -98,16 +96,12 @@ export default function InboxPage() {
             break;
           }
 
-          changed = changed || syncPayloadChanged(payload);
+          // Show each discovered message immediately while older history keeps syncing.
+          if (syncPayloadChanged(payload) && !disposed) {
+            window.dispatchEvent(new Event('inbox:provider-sync'));
+          }
           if (payload.maintenanceContinues !== true) break;
           await waitForMaintenancePass();
-        }
-
-        // Supabase Realtime is helpful but must not be required for history discovery
-        // to become visible. Remount the Inbox data view only when the sync actually
-        // inserted messages or discovered/repaired conversations.
-        if (changed && !disposed) {
-          setRefreshRevision((revision) => revision + 1);
         }
       } catch (error) {
         if ((error as { name?: string })?.name !== 'AbortError' && process.env.NODE_ENV !== 'production') {
@@ -143,7 +137,7 @@ export default function InboxPage() {
 
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center p-8 text-xs text-zinc-400">Loading inbox…</div>}>
-      <ScopedInbox refreshRevision={refreshRevision} />
+      <ScopedInbox />
     </Suspense>
   );
 }

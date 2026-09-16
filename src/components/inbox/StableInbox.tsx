@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   AtSign,
+  Bot,
   CheckCircle2,
   Clock3,
   History,
@@ -16,6 +17,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   PanelRight,
+  Pause,
   PauseCircle,
   Plus,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
   Sparkles,
   UserCheck,
   UserPlus,
+  UserRound,
   Users,
   WandSparkles,
   X,
@@ -31,7 +34,7 @@ import {
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
-import { getSupabaseBrowserClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import { getSupabaseBrowserClient, isSupabaseConfigured, syncRealtimeAuth } from '@/lib/supabase/client';
 import ConvertToLeadDrawer, { type ConversationForConversion } from '@/components/inbox/ConvertToLeadDrawer';
 import MetaConversationTimeline from '@/components/inbox/MetaConversationTimeline';
 import InboxComposer, { type InboxComposerAttachment } from '@/components/inbox/InboxComposer';
@@ -105,6 +108,7 @@ type Message = {
   failure_message?: string | null;
   sent_at: string;
   author_profile?: { full_name?: string | null } | null;
+  client_request_id?: string | null;
 };
 
 type TimelineEvent = { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; actor_id?: string | null; actor: { full_name: string | null } | null };
@@ -117,6 +121,23 @@ type ThreadSnapshot = { conversation: Conversation; messages: Message[]; message
 type SecondarySnapshot = { events: TimelineEvent[]; collaborators: Collaborator[]; fetchedAt: number };
 type ListSnapshot = { conversations: Conversation[]; metrics: Metrics; selectedId: string | null; fetchedAt: number };
 type SavedViewsSnapshot = { views: SavedView[]; fetchedAt: number };
+type AiAgentInfo = { id: string; name: string; model: string; mode: string; is_active: boolean };
+type AiState = {
+  conversation_id: string;
+  agent_id: string | null;
+  state: 'active' | 'paused' | 'handed_off' | 'failed' | 'disabled';
+  draft_reply?: string | null;
+  last_ai_at?: string | null;
+  handoff_reason?: string | null;
+  last_error?: string | null;
+  agent?: AiAgentInfo | AiAgentInfo[] | null;
+};
+
+function agentName(state: AiState | null): string {
+  if (!state?.agent) return 'AI Agent';
+  const a = Array.isArray(state.agent) ? state.agent[0] : state.agent;
+  return a?.name || 'AI Agent';
+}
 
 const EMPTY_METRICS: Metrics = { totalOpen: 0, unassigned: 0, collaborations: 0, waiting: 0, snoozed: 0, unread: 0, needsReply: 0, slaOverdue: 0, highPriority: 0, hasPhone: 0 };
 const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed', 'collaborator_added', 'collaborator_removed']);
@@ -229,6 +250,10 @@ export default function StableInbox() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [resolution, setResolution] = useState('resolved');
   const [closingNote, setClosingNote] = useState('');
+  const [aiState, setAiState] = useState<AiState | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [isAiReplying, setIsAiReplying] = useState(false);
+  const aiReplyingTimer = useRef<number | null>(null);
 
   const cacheScopeRef = useRef(cacheScope);
   cacheScopeRef.current = cacheScope;
@@ -496,7 +521,7 @@ export default function StableInbox() {
     const messageLimit = options?.messageLimit || cached?.messageLimit || INITIAL_MESSAGE_LIMIT;
     const fresh = cached && Date.now() - cached.fetchedAt < THREAD_TTL_MS && cached.messageLimit >= messageLimit;
 
-    if (cached) applyThreadSnapshot(cached);
+    if (cached && !force) applyThreadSnapshot(cached);
     if (fresh && !force) {
       setLoadingThread(false);
       return cached;
@@ -591,6 +616,41 @@ export default function StableInbox() {
     } finally { setContextBusy(false); }
   }, []);
 
+  const loadAiState = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/conversations/${id}/ai`, { cache: 'no-store' });
+      if (!response.ok || selectedIdRef.current !== id) return;
+      const payload = await response.json().catch(() => ({}));
+      setAiState(payload.ai || null);
+    } catch {}
+  }, []);
+
+  const handleAiAction = useCallback(async (action: 'takeover' | 'resume' | 'pause') => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    setAiBusy(true);
+    if (action === 'takeover' || action === 'pause') {
+      setIsAiReplying(false);
+      if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+    }
+    try {
+      const response = await fetch(`/api/conversations/${id}/ai`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to update AI state.');
+      setAiState(payload.ai || null);
+      showToast(action === 'resume' ? 'Assigned to AI Agent.' : action === 'takeover' ? 'You took over this conversation.' : 'AI Agent paused.', 'success');
+      window.dispatchEvent(new CustomEvent('crm:data-mutated'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to update AI state.', 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  }, [showToast]);
+
   const selectConversation = useCallback((conversation: Conversation) => {
     if (selectedIdRef.current === conversation.id) return;
     selectedIdRef.current = conversation.id;
@@ -615,7 +675,8 @@ export default function StableInbox() {
     const secondary = secondaryCache.current.get(conversation.id);
     if (secondary) { setEvents(secondary.events); setCollaborators(secondary.collaborators); }
     syncUrl({ conversationId: conversation.id });
-  }, [applyThreadSnapshot, setContextOpen, syncUrl]);
+    void loadAiState(conversation.id);
+  }, [applyThreadSnapshot, loadAiState, setContextOpen, syncUrl]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void Promise.all([loadViews(), loadList()]); }, 0);
@@ -626,13 +687,36 @@ export default function StableInbox() {
     if (!selectedId) {
       coreAbort.current?.abort();
       setSelected(null); setMessages([]); setEvents([]); setCollaborators([]); setSessions([]);
+      setAiState(null); setIsAiReplying(false);
       return;
     }
-    const row = conversations.find((item) => item.id === selectedId);
-    if (!selected && row) setSelected(row);
     void loadCoreThread(selectedId);
     void loadSecondary(selectedId);
-  }, [conversations, loadCoreThread, loadSecondary, selected, selectedId]);
+    void loadAiState(selectedId);
+  }, [loadAiState, loadCoreThread, loadSecondary, selectedId]);
+
+  useEffect(() => {
+    const reconcile = () => {
+      void loadList(true);
+      const id = selectedIdRef.current;
+      if (id) void loadCoreThread(id, { force: true, quiet: true });
+    };
+    window.addEventListener('inbox:provider-sync', reconcile);
+    return () => window.removeEventListener('inbox:provider-sync', reconcile);
+  }, [loadCoreThread, loadList]);
+
+  // Active thread polling fallback: ensures real-time updates even if WebSockets are throttled or reconnecting
+  useEffect(() => {
+    if (!selectedId) return;
+    const intervalMs = isAiReplying ? 2500 : 6000;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && selectedIdRef.current === selectedId) {
+        void loadCoreThread(selectedId, { force: true, quiet: true });
+        void loadAiState(selectedId);
+      }
+    }, intervalMs);
+    return () => window.clearInterval(interval);
+  }, [isAiReplying, loadAiState, loadCoreThread, selectedId]);
 
   useEffect(() => {
     if (contextTab === 'history' && selectedId) void loadSessions(selectedId);
@@ -652,52 +736,115 @@ export default function StableInbox() {
 
   useEffect(() => {
     if (!isSupabaseConfigured() || !config.workspace.id) return;
-    const supabase = getSupabaseBrowserClient();
-    const channel = supabase.channel(`stable-inbox:${config.workspace.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_conversations', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const id = typeof changed.id === 'string' ? changed.id : null;
-        if (id && selectedIdRef.current === id) {
-          setSelected((current) => current ? { ...current, ...changed } as Conversation : current);
-        }
-        scheduleListRefresh();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_messages', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const conversationId = typeof changed.conversation_id === 'string' ? changed.conversation_id : null;
-        if (conversationId && payload.eventType === 'INSERT') {
-          setConversations((rows) => {
-            const current = rows.find((row) => row.id === conversationId);
-            if (!current) return rows;
-            const inbound = changed.direction === 'inbound';
-            const selectedNow = selectedIdRef.current === conversationId;
-            const body = typeof changed.body === 'string' && changed.body.trim() ? changed.body : current.last_message_preview;
-            const updated = {
-              ...current,
-              last_message_at: typeof changed.sent_at === 'string' ? changed.sent_at : new Date().toISOString(),
-              last_message_preview: body || current.last_message_preview,
-              needs_reply: inbound ? true : current.needs_reply,
-              unread_count: inbound && !selectedNow ? current.unread_count + 1 : current.unread_count,
-            };
-            if (sort === 'newest') return [updated, ...rows.filter((row) => row.id !== conversationId)];
-            return rows.map((row) => row.id === conversationId ? updated : row);
-          });
-        }
-        scheduleListRefresh();
-        if (conversationId && conversationId === selectedIdRef.current) scheduleThreadRefresh(conversationId);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_events', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const conversationId = typeof changed.conversation_id === 'string' ? changed.conversation_id : null;
-        if (conversationId && conversationId === selectedIdRef.current) void loadSecondary(conversationId, true);
-      })
-      .subscribe();
+    let channel: ReturnType<ReturnType<typeof getSupabaseBrowserClient>['channel']> | null = null;
+    let active = true;
+
+    async function setupRealtime() {
+      const supabase = getSupabaseBrowserClient();
+      await syncRealtimeAuth(supabase);
+      if (!active) return;
+
+      channel = supabase.channel(`stable-inbox:${config.workspace.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_conversations', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const id = typeof changed?.id === 'string' ? changed.id : null;
+          if (id && selectedIdRef.current === id) {
+            setSelected((current) => current ? { ...current, ...changed } as Conversation : current);
+          }
+          scheduleListRefresh();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_messages', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && payload.eventType === 'INSERT') {
+            setConversations((rows) => {
+              const current = rows.find((row) => row.id === conversationId);
+              if (!current) return rows;
+              const inbound = changed.direction === 'inbound';
+              const selectedNow = selectedIdRef.current === conversationId;
+              const body = typeof changed.body === 'string' && changed.body.trim() ? changed.body : current.last_message_preview;
+              const updated = {
+                ...current,
+                last_message_at: typeof changed.sent_at === 'string' ? changed.sent_at : new Date().toISOString(),
+                last_message_preview: body || current.last_message_preview,
+                needs_reply: inbound ? true : current.needs_reply,
+                unread_count: inbound && !selectedNow ? current.unread_count + 1 : current.unread_count,
+              };
+              if (sort === 'newest') return [updated, ...rows.filter((row) => row.id !== conversationId)];
+              return rows.map((row) => row.id === conversationId ? updated : row);
+            });
+          }
+          scheduleListRefresh();
+          if (conversationId && conversationId === selectedIdRef.current) {
+            if (payload.eventType === 'INSERT') {
+              const incoming = changed as unknown as Message;
+              if (incoming.direction === 'inbound') {
+                setIsAiReplying(true);
+                if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+                aiReplyingTimer.current = window.setTimeout(() => setIsAiReplying(false), 30_000);
+              } else if (incoming.direction === 'outbound') {
+                setIsAiReplying(false);
+                if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+              }
+
+              const cached = threadCache.current.get(conversationId);
+              if (cached) {
+                const exists = cached.messages.some(
+                  (m) => m.id === incoming.id || (incoming.client_request_id && m.client_request_id === incoming.client_request_id)
+                );
+                if (!exists) {
+                  cached.messages = [...cached.messages, incoming];
+                  cached.messageTotal += 1;
+                }
+              }
+
+              setMessages((rows) => {
+                if (rows.some((row) => row.id === incoming.id || (incoming.client_request_id && (row as unknown as { client_request_id?: string }).client_request_id === incoming.client_request_id))) {
+                  return rows.map((row) => (row.id === incoming.id || (incoming.client_request_id && (row as unknown as { client_request_id?: string }).client_request_id === incoming.client_request_id)) ? { ...row, ...incoming } : row);
+                }
+                return [...rows, incoming];
+              });
+              scrollToBottom();
+            } else if (payload.eventType === 'UPDATE') {
+              const updated = changed as unknown as Message;
+              setMessages((rows) => rows.map((row) => row.id === updated.id ? { ...row, ...updated } : row));
+            }
+            scheduleThreadRefresh(conversationId);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_events', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && conversationId === selectedIdRef.current) void loadSecondary(conversationId, true);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_ai_states', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && conversationId === selectedIdRef.current) {
+            void loadAiState(conversationId);
+            if (changed?.state !== 'active' || changed?.draft_reply) {
+              setIsAiReplying(false);
+              if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+            }
+          }
+          window.dispatchEvent(new CustomEvent('crm:data-mutated'));
+        })
+        .subscribe();
+    }
+
+    void setupRealtime();
+
     return () => {
-      void supabase.removeChannel(channel);
+      active = false;
+      if (channel) {
+        const supabase = getSupabaseBrowserClient();
+        void supabase.removeChannel(channel);
+      }
       if (listRefreshTimer.current) window.clearTimeout(listRefreshTimer.current);
       if (threadRefreshTimer.current) window.clearTimeout(threadRefreshTimer.current);
+      if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
     };
-  }, [config.workspace.id, loadSecondary, scheduleListRefresh, scheduleThreadRefresh, sort]);
+  }, [config.workspace.id, loadAiState, loadSecondary, scheduleListRefresh, scheduleThreadRefresh, scrollToBottom, sort]);
 
   useEffect(() => {
     const reconcile = window.setInterval(() => { if (document.visibilityState === 'visible') void loadList(true); }, 120_000);
@@ -1015,18 +1162,117 @@ export default function StableInbox() {
         {!selected ? <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a conversation to start working.</div> : <>
           <header className="relative flex min-h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3">
             {refreshingThread && <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-zinc-100"><div className="h-full w-1/3 animate-pulse bg-blue-500" /></div>}
-            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); syncUrl({ conversationId: null }); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div></div></div>
-            <div className="flex min-w-0 items-center gap-2"><ConversationPresenceIndicator members={presence.members} typingMembers={presence.typingMembers} /><div className="flex shrink-0 items-center gap-1.5">{!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}<button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>{selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}<div className="relative"><button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>{moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}</div></div></div>
+            <div className="flex min-w-0 items-center gap-2">
+              <button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); syncUrl({ conversationId: null }); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>
+              {selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div>
+                  {aiState?.state === 'active' ? (
+                    <span className="inline-flex items-center gap-1 rounded border border-emerald-200/80 bg-emerald-50/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800" title={`AI Agent ${agentName(aiState)} is active on this chat`}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>AI Active</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-zinc-100/70 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600" title="Human control (AI is paused/inactive)">
+                      <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                      <span>Human</span>
+                    </span>
+                  )}
+                </div>
+                <div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div>
+              </div>
+            </div>
+            <div className="flex min-w-0 items-center gap-2">
+              <ConversationPresenceIndicator members={presence.members} typingMembers={presence.typingMembers} />
+              <div className="flex shrink-0 items-center gap-1.5">
+                {aiState?.state === 'active' ? (
+                  <button
+                    type="button"
+                    disabled={aiBusy}
+                    onClick={() => void handleAiAction('takeover')}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/80 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 hover:border-amber-400 transition-colors shadow-2xs"
+                    title="Pause AI agent and take over this conversation"
+                  >
+                    {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-700" /> : <Pause className="h-3.5 w-3.5 text-amber-700" />}
+                    <span>Take over</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={aiBusy}
+                    onClick={() => void handleAiAction('resume')}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 transition-colors shadow-2xs"
+                    title="Assign conversation to AI Agent"
+                  >
+                    {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" /> : <Bot className="h-3.5 w-3.5 text-blue-600" />}
+                    <span>Assign to AI</span>
+                  </button>
+                )}
+                {!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}
+                <button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>
+                {selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}
+                <div className="relative">
+                  <button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>
+                  {moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}
+                </div>
+              </div>
+            </div>
           </header>
 
           <div ref={messagePaneRef} aria-label="Message history" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
             <div className="mx-auto max-w-3xl">
               {hasOlderMessages && <div className="mb-5 flex justify-center"><button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="button-secondary button-sm">{loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />} Load older messages <span className="font-mono text-[10px] text-zinc-400">{messages.length}/{messageTotal}</span></button></div>}
-              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} onQuote={quoteMessage} onAddNote={noteFromMessage} onCreateTask={(message) => void createTaskFromMessage(message)} onRetry={(message) => void retryMessage(message)} />}
+              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} onQuote={quoteMessage} onAddNote={noteFromMessage} onCreateTask={(message) => void createTaskFromMessage(message)} onRetry={(message) => void retryMessage(message)} isAiReplying={isAiReplying} aiAgentName={agentName(aiState)} onTakeover={() => void handleAiAction('takeover')} />}
             </div>
           </div>
 
           <footer className="shrink-0 border-t border-zinc-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            {isAiReplying && (
+              <div className="mb-2 flex items-center justify-between rounded-md border border-blue-200/80 bg-blue-50/60 px-3 py-1.5 text-xs text-blue-900 animate-in fade-in duration-150">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
+                  <span><strong>{agentName(aiState)}</strong> is replying to the customer…</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={aiBusy}
+                  onClick={() => void handleAiAction('takeover')}
+                  className="rounded border border-blue-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-blue-800 hover:bg-blue-50 transition-colors shadow-2xs"
+                >
+                  Take over now
+                </button>
+              </div>
+            )}
+            {aiState?.draft_reply && (
+              <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2.5 text-xs">
+                <div className="flex items-center justify-between font-semibold text-zinc-800 mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-blue-600" /> AI Suggested Draft
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyBody(aiState.draft_reply || '');
+                        composerRef.current?.focus();
+                      }}
+                      className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-700 hover:bg-zinc-100"
+                    >
+                      Use draft
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAiAction('takeover')}
+                      className="rounded border border-zinc-200 bg-white px-2 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-100"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+                <p className="line-clamp-2 text-zinc-600 italic">&ldquo;{aiState.draft_reply}&rdquo;</p>
+              </div>
+            )}
             <InboxComposer
               workspaceId={config.workspace.id}
               conversationId={selected.id}

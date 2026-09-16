@@ -143,17 +143,18 @@ async function sendFacebookOrInstagram(
     ? `https://graph.facebook.com/${version}/me/messages`
     : `https://graph.facebook.com/${version}/${accountId}/messages`;
 
-  const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      recipient: { id: input.externalContactId },
-      message: { text: input.body },
-    }),
-  });
+    const safeText = input.body.length > 1980 ? `${input.body.slice(0, 1970)}…` : input.body;
+    const { response, data } = await metaFetchJson<Record<string, unknown>>(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        recipient: { id: input.externalContactId },
+        message: { text: safeText },
+      }),
+    });
 
   if (!response.ok) {
     const providerError = data.error as Record<string, unknown> | undefined;

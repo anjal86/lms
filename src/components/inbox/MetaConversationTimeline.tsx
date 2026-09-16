@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Clipboard, ListTodo, Reply, RotateCcw, StickyNote, X } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, Clipboard, ListTodo, Reply, RotateCcw, StickyNote, X } from 'lucide-react';
 import InboxMessageContent from '@/components/inbox/InboxMessageContent';
 import { isMediaPlaceholder, messageMedia } from '@/lib/inbox/message-media';
 
@@ -38,6 +38,9 @@ type Props = {
   onAddNote?: (message: ChatMessage) => void;
   onCreateTask?: (message: ChatMessage) => void;
   onRetry?: (message: ChatMessage) => void;
+  isAiReplying?: boolean;
+  aiAgentName?: string;
+  onTakeover?: () => void;
 };
 
 function initials(value?: string | null) {
@@ -86,7 +89,18 @@ function deliveryText(status?: string | null) {
   return status === 'sent' ? 'Sent' : '';
 }
 
-export default function MetaConversationTimeline({ timeline, customerName, customerAvatarUrl, onQuote, onAddNote, onCreateTask, onRetry }: Props) {
+export default function MetaConversationTimeline({
+  timeline,
+  customerName,
+  customerAvatarUrl,
+  onQuote,
+  onAddNote,
+  onCreateTask,
+  onRetry,
+  isAiReplying,
+  aiAgentName,
+  onTakeover,
+}: Props) {
   const mediaItems = useMemo(() => timeline.flatMap((item) => {
     if (item.kind !== 'message') return [];
     const media = messageMedia(item.message.message_type, item.message.metadata);
@@ -227,6 +241,34 @@ export default function MetaConversationTimeline({ timeline, customerName, custo
           </div>
         </Fragment>;
       })}
+      {isAiReplying && (
+        <div className="mt-3 flex items-end gap-1.5 justify-end">
+          <div className="flex max-w-[80%] flex-col items-end">
+            <div className="flex items-center gap-2 rounded-xl rounded-br-xs border border-zinc-200 bg-zinc-100/90 px-3.5 py-2.5 text-xs text-zinc-700 shadow-2xs">
+              <Bot className="h-3.5 w-3.5 text-blue-600 animate-pulse shrink-0" />
+              <span className="font-medium text-zinc-800">{aiAgentName || 'AI Agent'}</span>
+              <span className="text-zinc-500">is typing</span>
+              <span className="inline-flex items-center gap-1 ml-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-bounce" />
+              </span>
+              {onTakeover && (
+                <button
+                  type="button"
+                  onClick={onTakeover}
+                  className="ml-2 rounded border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 transition-colors shadow-2xs"
+                >
+                  Take over
+                </button>
+              )}
+            </div>
+            <div className="mt-1 px-1 font-mono text-[10px] text-zinc-400">
+              Formulating automated reply…
+            </div>
+          </div>
+        </div>
+      )}
     </div>
 
     {lightbox && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/90 p-4" onClick={() => setLightboxIndex(null)}>

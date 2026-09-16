@@ -8,12 +8,17 @@ import { decryptIntegrationSecret } from '@/lib/integrations/secrets';
 import { aiProviderPreset, type AiApiStyle, type AiProviderKind } from './provider-catalog';
 
 const DecisionSchema = z.object({
-  action: z.enum(['reply', 'handoff', 'noop']),
-  reply: z.string().trim().max(4000).nullable().default(null),
-  confidence: z.number().min(0).max(1),
-  intent: z.string().trim().max(120).default('unknown'),
-  handoff_reason: z.string().trim().max(500).nullable().default(null),
-  suggested_lifecycle: z.string().trim().max(80).nullable().default(null),
+  action: z.string().nullish().transform((v) => {
+    const s = (v || '').toLowerCase().trim();
+    if (s === 'handoff' || s.includes('handoff') || s.includes('escalat') || s.includes('human')) return 'handoff';
+    if (s === 'noop' || s.includes('noop') || s.includes('ignore') || s.includes('nothing')) return 'noop';
+    return 'reply';
+  }),
+  reply: z.string().trim().max(4000).nullish().transform((v) => v || null),
+  confidence: z.coerce.number().min(0).max(1).default(0.7),
+  intent: z.string().trim().max(120).nullish().transform((v) => v || 'unknown'),
+  handoff_reason: z.string().trim().max(500).nullish().transform((v) => v || null),
+  suggested_lifecycle: z.string().trim().max(80).nullish().transform((v) => v || null),
 });
 
 export type AiAgentDecision = z.infer<typeof DecisionSchema>;
@@ -316,9 +321,56 @@ export async function decideWithAiProvider(
 
   if (!raw) throw new Error(`${runtime.label} returned an empty response.`);
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim());
-  } catch {
+  const trimmed = raw.trim();
+
+  function sanitizeJson(str: string): string {
+    let inString = false;
+    let escaped = false;
+    let result = '';
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (char === '"' && !escaped) {
+        inString = !inString;
+        result += char;
+      } else if (inString) {
+        if (char === '\\') {
+          escaped = !escaped;
+          result += char;
+        } else {
+          escaped = false;
+          if (char === '\n') result += '\\n';
+          else if (char === '\r') result += '\\r';
+          else if (char === '\t') result += '\\t';
+          else result += char;
+        }
+      } else {
+        result += char;
+      }
+    }
+    return result;
+  }
+
+  const tryParse = (str: string) => {
+    try { return JSON.parse(str); } catch {}
+    try { return JSON.parse(sanitizeJson(str)); } catch {}
+    return null;
+  };
+
+  parsed = tryParse(trimmed);
+  if (!parsed) {
+    const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenceMatch && fenceMatch[1]) {
+      parsed = tryParse(fenceMatch[1].trim());
+    }
+  }
+  if (!parsed) {
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      parsed = tryParse(trimmed.slice(start, end + 1));
+    }
+  }
+  if (!parsed) {
     throw new Error(`${runtime.label} returned invalid JSON.`);
   }
 

@@ -119,15 +119,30 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     .eq('conversation_id', id)
     .maybeSingle();
 
+  let agentId = existing?.agent_id;
+  if (!agentId) {
+    const { data: defaultAgent } = await actor.supabase
+      .from('ai_agents')
+      .select('id,is_active,mode')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('is_active', true)
+      .neq('mode', 'off')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    agentId = defaultAgent?.id || null;
+  }
+
   if (parsed.data.action === 'resume') {
-    if (!isManagement(actor.profile)) return NextResponse.json({ error: 'Manager access required to return a conversation to AI.' }, { status: 403 });
-    if (!existing?.agent_id) return NextResponse.json({ error: 'No AI agent is attached to this conversation.' }, { status: 409 });
+    if (!agentId) {
+      return NextResponse.json({ error: 'No active AI agent found for this workspace. Please configure an AI agent first.' }, { status: 409 });
+    }
 
     const { data: agent } = await actor.supabase
       .from('ai_agents')
       .select('id,is_active,mode')
       .eq('workspace_id', actor.profile.workspace_id)
-      .eq('id', existing.agent_id)
+      .eq('id', agentId)
       .maybeSingle();
     if (!agent?.is_active || agent.mode === 'off') {
       return NextResponse.json({ error: 'The attached AI agent is not active.' }, { status: 409 });
@@ -144,29 +159,34 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (unassignError) return NextResponse.json({ error: 'Unable to release human ownership.' }, { status: 500 });
     }
 
-    const { error } = await actor.supabase.from('conversation_ai_states').update({
+    const { error } = await actor.supabase.from('conversation_ai_states').upsert({
+      conversation_id: id,
+      workspace_id: actor.profile.workspace_id,
+      agent_id: agent.id,
       state: 'active',
       handoff_reason: null,
       handed_off_at: null,
       handed_off_to: null,
       last_error: null,
       updated_at: new Date().toISOString(),
-    }).eq('workspace_id', actor.profile.workspace_id).eq('conversation_id', id);
+    }, { onConflict: 'conversation_id' });
     if (error) return NextResponse.json({ error: 'Unable to resume AI.' }, { status: 500 });
 
     try {
       await requeueLatestUnansweredInbound({
         workspaceId: actor.profile.workspace_id,
         conversationId: id,
-        agentId: existing.agent_id,
+        agentId: agent.id,
       });
     } catch (queueError) {
       console.error('Unable to requeue conversation for AI after resume:', queueError);
       return NextResponse.json({ error: 'AI was resumed, but the latest customer message could not be queued.' }, { status: 500 });
     }
   } else {
-    if (!existing?.agent_id) return NextResponse.json({ error: 'No AI agent is attached to this conversation.' }, { status: 409 });
     const patch: Record<string, unknown> = {
+      conversation_id: id,
+      workspace_id: actor.profile.workspace_id,
+      agent_id: agentId,
       state: 'paused',
       last_human_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -176,9 +196,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       patch.handed_off_at = new Date().toISOString();
       patch.handed_off_to = actor.user.id;
     }
-    const { error } = await actor.supabase.from('conversation_ai_states').update(patch)
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('conversation_id', id);
+    const { error } = await actor.supabase.from('conversation_ai_states').upsert(patch, { onConflict: 'conversation_id' });
     if (error) return NextResponse.json({ error: 'Unable to pause AI.' }, { status: 500 });
 
     if (parsed.data.action === 'takeover') {

@@ -51,16 +51,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 
-  const ai = await processOneAiJob();
+  const aiResults = [];
+  for (let i = 0; i < 4; i++) {
+    const aiJob = await processOneAiJob();
+    if (!aiJob) break;
+    aiResults.push(aiJob);
+  }
+  const ai = aiResults[0] || null;
 
   if (!isRedisConfigured()) {
-    return NextResponse.json({ success: Boolean(ai), processed: ai ? 1 : 0, ai, warning: 'Redis is not configured; integration history sync is unavailable.' }, { status: ai ? 200 : 503 });
+    return NextResponse.json({ success: true, processed: aiResults.length, ai: aiResults[0] || null, aiResults, warning: 'Redis is not configured; integration history sync is unavailable.' }, { status: 200 });
   }
 
   const recovered = await recoverStaleIntegrationSyncJobs(20);
   const claimed = await claimIntegrationSyncJob();
   if (!claimed) {
-    return NextResponse.json({ success: true, processed: ai ? 1 : 0, ai, recovered });
+    return NextResponse.json({ success: true, processed: aiResults.length, ai: aiResults[0] || null, aiResults, recovered });
   }
 
   try {
