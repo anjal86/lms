@@ -127,16 +127,16 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
 
   const disabled = loading || (mode === 'outbound' && !canReply);
 
-  return <div data-chat-composer="true" className={mode === 'internal' ? 'border-amber-200 bg-amber-50/60' : ''}>
+  return <div data-chat-composer="true" className={mode === 'internal' ? 'border-amber-200 bg-amber-50/60' : 'bg-white'}>
     <div data-composer-tabs="true">
-      <button type="button" aria-pressed={mode === 'outbound'} onClick={() => onModeChange('outbound')} className={mode === 'outbound' ? 'bg-white text-zinc-950 shadow-sm ring-1 ring-zinc-200' : 'text-zinc-500 hover:text-zinc-900'}>Reply</button>
+      <button type="button" aria-pressed={mode === 'outbound'} onClick={() => onModeChange('outbound')} className={mode === 'outbound' ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-100' : 'text-zinc-500 hover:text-zinc-900'}>Reply</button>
       <button type="button" aria-pressed={mode === 'internal'} onClick={() => onModeChange('internal')} className={mode === 'internal' ? 'bg-amber-100 text-amber-950' : 'text-zinc-500 hover:text-zinc-900'}>Internal note</button>
-      {mode === 'outbound' && !canReply && <span className="ml-auto text-[10px] font-semibold text-amber-700">Reply unavailable for this channel</span>}
+      {mode === 'outbound' && !canReply && <span className="ml-auto text-[10px] font-medium text-amber-700">Reply unavailable for this channel</span>}
     </div>
 
-    {attachment && <div className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs">
+    {attachment && <div className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50/70 px-3 py-2 text-xs">
       {attachment.kind === 'image' ? <ImageIcon className="h-4 w-4 text-blue-600" /> : <FileText className="h-4 w-4 text-zinc-500" />}
-      <div className="min-w-0 flex-1"><div className="truncate font-semibold text-zinc-800">{attachment.fileName}</div><div className="text-[10px] text-zinc-400">{sizeLabel(attachment.size)}</div></div>
+      <div className="min-w-0 flex-1"><div className="truncate font-medium text-zinc-800">{attachment.fileName}</div><div className="text-[10px] text-zinc-400">{sizeLabel(attachment.size)}</div></div>
       <button type="button" aria-label="Remove attachment" onClick={() => setAttachment(null)} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800"><X className="h-3.5 w-3.5" /></button>
     </div>}
 
@@ -150,26 +150,26 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
       rows={3}
       disabled={disabled}
       placeholder={mode === 'internal' ? 'Leave context for your team…' : !canReply ? 'Replies are unavailable for this source. Use an internal note or open a supported messaging channel.' : 'Write a reply…'}
-      className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none disabled:bg-zinc-50"
+      className="w-full resize-none bg-transparent px-3.5 py-3 text-sm leading-6 outline-none placeholder:text-zinc-400 disabled:bg-zinc-50"
     />
 
-    <div data-composer-actions="true" className="relative flex items-center justify-between gap-2 px-3 py-1.5">
+    <div data-composer-actions="true" className="relative flex items-center justify-between gap-2 px-3 py-2">
       <div className="flex items-center gap-1">
         {mode === 'outbound' && <>
           <input ref={fileRef} type="file" className="hidden" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,audio/mpeg,audio/mp4,audio/ogg,audio/webm,application/pdf,text/plain,.doc,.docx,.xls,.xlsx" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); }} />
-          <button type="button" aria-label="Attach file" title="Attach file" onClick={() => fileRef.current?.click()} disabled={uploading || disabled} className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}</button>
-          <button type="button" aria-label="Emoji" title="Emoji" onClick={() => { setEmojiOpen((open) => !open); setQuickOpen(false); }} disabled={disabled} className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"><Smile className="h-4 w-4" /></button>
-          <button type="button" aria-label="Saved replies" title="Saved replies" onClick={() => { setQuickOpen((open) => !open); setEmojiOpen(false); }} disabled={disabled} className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"><BookOpen className="h-4 w-4" /></button>
+          <button type="button" aria-label="Attach file" title="Attach file" onClick={() => fileRef.current?.click()} disabled={uploading || disabled} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}</button>
+          <button type="button" aria-label="Emoji" title="Emoji" onClick={() => { setEmojiOpen((open) => !open); setQuickOpen(false); }} disabled={disabled} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"><Smile className="h-4 w-4" /></button>
+          <button type="button" aria-label="Saved replies" title="Saved replies" onClick={() => { setQuickOpen((open) => !open); setEmojiOpen(false); }} disabled={disabled} className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"><BookOpen className="h-4 w-4" /></button>
         </>}
-        <span className="ml-1 hidden text-[10px] text-zinc-400 sm:inline">Enter to send · Shift+Enter new line</span>
+        <span className="ml-1 hidden text-[10px] text-zinc-400 sm:inline">Enter to send · Shift+Enter for a new line</span>
       </div>
-      <button type="button" onClick={() => void send()} disabled={Boolean(sending || loading || uploading || (!value.trim() && !attachment) || (mode === 'outbound' && !canReply))} className={`inline-flex min-h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 ${mode === 'internal' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-zinc-950 hover:bg-zinc-800'}`}>{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{mode === 'internal' ? 'Add note' : 'Send'}</button>
+      <button type="button" onClick={() => void send()} disabled={Boolean(sending || loading || uploading || (!value.trim() && !attachment) || (mode === 'outbound' && !canReply))} className={`inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40 ${mode === 'internal' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'}`}>{sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{mode === 'internal' ? 'Add note' : 'Send'}</button>
 
-      {emojiOpen && <div className="absolute bottom-11 left-10 z-40 grid w-52 grid-cols-4 gap-1 rounded-lg border border-zinc-200 bg-white p-2 shadow-xl">{EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => { onChange(`${value}${emoji}`); setEmojiOpen(false); composerRef?.current?.focus(); }} className="rounded-lg p-2 text-lg hover:bg-zinc-100">{emoji}</button>)}</div>}
+      {emojiOpen && <div className="absolute bottom-12 left-10 z-40 grid w-52 grid-cols-4 gap-1 rounded-xl border border-zinc-200 bg-white p-2 shadow-xl">{EMOJIS.map((emoji) => <button key={emoji} type="button" onClick={() => { onChange(`${value}${emoji}`); setEmojiOpen(false); composerRef?.current?.focus(); }} className="rounded-lg p-2 text-lg hover:bg-zinc-100">{emoji}</button>)}</div>}
 
-      {quickOpen && <div className="absolute bottom-11 left-16 z-40 w-72 overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2"><div className="text-xs font-semibold">Saved replies</div>{value.trim() && <button type="button" onClick={addQuickReply} className="inline-flex items-center gap-1 text-[10px] font-semibold text-blue-600 hover:underline"><Plus className="h-3 w-3" /> Save current</button>}</div>
-        <div className="max-h-60 overflow-y-auto p-1.5">{quickReplies.map((reply) => <button key={reply.id} type="button" onClick={() => { onChange(reply.body); setQuickOpen(false); composerRef?.current?.focus(); }} className="w-full rounded-lg px-2.5 py-2 text-left hover:bg-zinc-50"><div className="text-xs font-semibold text-zinc-800">{reply.title}</div><div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-zinc-500">{reply.body}</div></button>)}</div>
+      {quickOpen && <div className="absolute bottom-12 left-16 z-40 w-72 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2.5"><div className="text-xs font-semibold">Saved replies</div>{value.trim() && <button type="button" onClick={addQuickReply} className="inline-flex items-center gap-1 text-[10px] font-medium text-blue-600 hover:text-blue-700"><Plus className="h-3 w-3" /> Save current</button>}</div>
+        <div className="max-h-60 overflow-y-auto p-1.5">{quickReplies.map((reply) => <button key={reply.id} type="button" onClick={() => { onChange(reply.body); setQuickOpen(false); composerRef?.current?.focus(); }} className="w-full rounded-lg px-2.5 py-2 text-left hover:bg-zinc-50"><div className="text-xs font-medium text-zinc-800">{reply.title}</div><div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-zinc-500">{reply.body}</div></button>)}</div>
       </div>}
     </div>
   </div>;
