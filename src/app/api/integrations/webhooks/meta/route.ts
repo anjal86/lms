@@ -4,6 +4,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedLead } from '@/lib/integrations/ingest';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { mergeReferralObjects, normalizeMetaAdAttribution } from '@/lib/integrations/ad-attribution';
 import {
   extractLeadFormDemographics,
   detectLocationFromText,
@@ -283,6 +284,13 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
   const customerId = isEcho ? String(recipient.id || '') : String(sender.id || '');
   if (!customerId) return;
 
+  const postback = record(messaging.postback);
+  const referralPayload = mergeReferralObjects(
+    messaging.referral,
+    postback.referral,
+    message.referral,
+  );
+  const adAttribution = isEcho ? null : normalizeMetaAdAttribution(referralPayload, provider);
   const sentAt = safeTimestamp(messaging.timestamp);
   const text = typeof message.text === 'string' ? message.text : null;
   const threadId = `${accountId}:${customerId}`;
@@ -350,6 +358,10 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     else if (attachType === 'file') messageType = 'file';
   }
 
+  const sourceLabel = adAttribution
+    ? provider === 'instagram' ? 'Instagram Ad → DM' : 'Facebook Ad → Messenger'
+    : provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger';
+
   await ingestNormalizedLead({
     provider,
     connectionId: connection.id,
@@ -362,8 +374,8 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     customerCity: demographics?.city || null,
     customerCountry: demographics?.country || null,
     destination: 'Not specified',
-    sourceLabel: provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger',
-    notes: isEcho ? 'Outbound message sent through Meta.' : 'Conversation started from an inbound social message.',
+    sourceLabel,
+    notes: isEcho ? 'Outbound message sent through Meta.' : adAttribution ? 'Conversation started from a paid Meta ad.' : 'Conversation started from an inbound social message.',
     message: {
       externalMessageId: String(message.mid),
       direction: isEcho ? 'outbound' : 'inbound',
@@ -380,6 +392,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
         file_name: fileName,
         is_echo: isEcho,
         sent_via: isEcho ? 'meta_business_suite' : 'customer',
+        ...(adAttribution ? { ad_attribution: adAttribution } : {}),
       },
     },
     metadata: {
@@ -388,6 +401,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
       customer_id: customerId,
       is_echo: isEcho,
       customer_avatar_url: customerAvatarUrl,
+      ...(adAttribution ? { ad_attribution: adAttribution } : {}),
       ...(demographics ? { customer_profile: demographics } : {}),
     },
   });
@@ -450,6 +464,7 @@ async function processWhatsApp(entry: Record<string, unknown>) {
           ? buttonObject.text
           : Object.keys(interactive).length > 0 ? JSON.stringify(interactive) : null;
       const sentAt = safeTimestamp(message.timestamp, 1000);
+      const adAttribution = normalizeMetaAdAttribution(message.referral, 'whatsapp');
 
       await ingestNormalizedLead({
         provider: 'whatsapp',
@@ -461,19 +476,25 @@ async function processWhatsApp(entry: Record<string, unknown>) {
         customerName: typeof profile.name === 'string' ? profile.name : 'WhatsApp inquiry',
         customerPhone: from.startsWith('+') ? from : `+${from}`,
         destination: 'Not specified',
-        sourceLabel: 'WhatsApp Business',
-        notes: 'Conversation started automatically from WhatsApp Business.',
+        sourceLabel: adAttribution ? 'WhatsApp Ad' : 'WhatsApp Business',
+        notes: adAttribution ? 'Conversation started from a Click-to-WhatsApp ad.' : 'Conversation started automatically from WhatsApp Business.',
         message: {
           externalMessageId: id,
           type: String(message.type || 'text'),
           body,
           sentAt,
-          metadata: { message, contact, metadata: value.metadata || null },
+          metadata: {
+            message,
+            contact,
+            metadata: value.metadata || null,
+            ...(adAttribution ? { ad_attribution: adAttribution } : {}),
+          },
         },
         metadata: {
           waba_id: wabaId,
           phone_number_id: phoneNumberId,
           connection_id: connection.id,
+          ...(adAttribution ? { ad_attribution: adAttribution } : {}),
         },
       });
     }
