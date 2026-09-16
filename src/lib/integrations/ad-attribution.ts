@@ -56,12 +56,16 @@ export function normalizeMetaAdAttribution(
 
   const source = firstText(raw.source, raw.referral_source);
   const sourceType = firstText(raw.source_type, raw.type);
-  const adId = firstText(raw.ad_id, adsContext.ad_id);
-  const sourceId = firstText(raw.source_id, adId, raw.id);
-  const ctwaClid = firstText(raw.ctwa_clid);
   const normalizedSource = source?.toLowerCase() || '';
   const normalizedType = sourceType?.toLowerCase().replace(/[\s-]+/g, '_') || '';
   const paidTypes = new Set(['ad', 'ads', 'paid_ad', 'advertisement', 'click_to_whatsapp', 'ctwa']);
+  const explicitAdId = firstText(raw.ad_id, adsContext.ad_id);
+  const sourceId = firstText(raw.source_id, explicitAdId, raw.id);
+  // WhatsApp's referral object documents source_id as the Meta ad ID when
+  // source_type is "ad". Promote it to ad_id so the registry can key the ad
+  // without any manual mapping while still leaving organic post IDs alone.
+  const adId = explicitAdId || (normalizedType === 'ad' ? sourceId : null);
+  const ctwaClid = firstText(raw.ctwa_clid);
 
   // Meta referral payloads also exist for organic posts, short links and other
   // entry points. A source_id by itself is therefore not proof of paid traffic.
