@@ -72,6 +72,10 @@ export async function POST(request: Request) {
   }
 
   const input = parsed.data;
+  if (input.is_active && input.mode !== 'off' && !process.env.MISTRAL_API_KEY?.trim()) {
+    return NextResponse.json({ error: 'Configure MISTRAL_API_KEY before activating this AI agent.' }, { status: 409 });
+  }
+
   const { data: agentId, error } = await actor.supabase.rpc('save_workspace_ai_agent', {
     p_agent_id: input.id ?? null,
     p_name: input.name,
