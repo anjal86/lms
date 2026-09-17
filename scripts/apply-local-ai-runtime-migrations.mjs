@@ -55,6 +55,10 @@ const migrations = [
     file: '202609170092_inbox_query_performance.sql',
     marker: "select to_regclass('public.lead_conversations_workspace_open_message_idx') is not null and to_regclass('public.lead_conversations_workspace_snooze_due_idx') is not null",
   },
+  {
+    file: '202609170093_inbox_queue_metrics.sql',
+    marker: "select to_regprocedure('public.inbox_queue_metrics(uuid,uuid,text)') is not null",
+  },
 ];
 
 for (const migration of migrations) {
