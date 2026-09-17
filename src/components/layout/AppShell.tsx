@@ -33,6 +33,11 @@ function legacyLeadTarget(pathname: string, role: string) {
 
 function frameMode(pathname: string) {
   if (
+    pathname === '/admin' || pathname.startsWith('/admin/')
+    || pathname === '/ai' || pathname.startsWith('/ai/')
+  ) return 'page-frame-wide';
+
+  if (
     pathname === '/leads' || pathname.startsWith('/leads/')
     || pathname === '/my-work' || pathname.startsWith('/my-work/')
     || pathname === '/work' || pathname.startsWith('/work/')
