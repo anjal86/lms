@@ -53,11 +53,10 @@ export default function InboxAssignmentEnhancements() {
   const refreshTimer = useRef<number | null>(null);
   const seenKey = `inbox:assignment-seen:${config.workspace.id}:${currentUser.id}`;
 
-  const scopeKey = useMemo(() => JSON.stringify([
-    params.get('provider') || 'all',
-    params.get('accountProvider') || 'all',
-    params.get('accountId') || 'all',
-  ]), [params]);
+  const provider = params.get('provider') || 'all';
+  const accountId = params.get('accountId') || 'all';
+  const accountProvider = params.get('accountProvider') || 'all';
+  const scopeKey = useMemo(() => JSON.stringify([provider, accountProvider, accountId]), [accountId, accountProvider, provider]);
 
   const syncTargets = useCallback(() => {
     const next = mineButtons();
@@ -66,12 +65,9 @@ export default function InboxAssignmentEnhancements() {
 
   const refreshMineCount = useCallback(async () => {
     const query = new URLSearchParams({ filter: 'mine', limit: '1', sort: 'newest' });
-    const provider = params.get('provider');
-    const accountId = params.get('accountId');
-    const accountProvider = params.get('accountProvider');
-    if (provider && provider !== 'all') query.set('provider', provider);
-    if (accountId && accountId !== 'all') query.set('accountId', accountId);
-    if (accountProvider && accountProvider !== 'all') query.set('accountProvider', accountProvider);
+    if (provider !== 'all') query.set('provider', provider);
+    if (accountId !== 'all') query.set('accountId', accountId);
+    if (accountProvider !== 'all') query.set('accountProvider', accountProvider);
 
     try {
       const response = await fetch(`/api/conversations?${query.toString()}`, { cache: 'no-store' });
@@ -81,7 +77,7 @@ export default function InboxAssignmentEnhancements() {
     } catch {
       // Keep the last known count during a transient network failure.
     }
-  }, [params, scopeKey]);
+  }, [accountId, accountProvider, provider]);
 
   const refreshAssignmentHighlights = useCallback(async () => {
     const items = Array.from(document.querySelectorAll<HTMLElement>('[data-conversation-id]'));
@@ -92,41 +88,26 @@ export default function InboxAssignmentEnhancements() {
       delete item.dataset.assignmentAt;
     }
 
-    if (!isSupabaseConfigured() || !currentUser.id || !config.workspace.id) return;
-
-    const ids = Array.from(new Set(items.map((item) => item.dataset.conversationId).filter((id): id is string => Boolean(id))));
-    if (ids.length === 0) return;
+    if (!isSupabaseConfigured() || !currentUser.id) return;
 
     const supabase = getSupabaseBrowserClient();
     const since = new Date(Date.now() - ASSIGNMENT_LOOKBACK_MS).toISOString();
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('link,created_at')
+      .eq('user_id', currentUser.id)
+      .eq('type', 'reassignment')
+      .like('link', '/inbox?conversationId=%')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(100);
 
-    const [notificationResult, ownershipResult] = await Promise.all([
-      supabase
-        .from('notifications')
-        .select('link,created_at')
-        .eq('user_id', currentUser.id)
-        .eq('type', 'reassignment')
-        .like('link', '/inbox?conversationId=%')
-        .gte('created_at', since)
-        .order('created_at', { ascending: false })
-        .limit(500),
-      supabase
-        .from('lead_conversations')
-        .select('id')
-        .eq('workspace_id', config.workspace.id)
-        .eq('assigned_to', currentUser.id)
-        .neq('workflow_state', 'closed')
-        .in('id', ids),
-    ]);
+    if (error) return;
 
-    if (notificationResult.error || ownershipResult.error) return;
-
-    const currentlyMine = new Set((ownershipResult.data || []).map((row) => row.id));
     const latestAssignment = new Map<string, number>();
-
-    for (const row of (notificationResult.data || []) as AssignmentNotification[]) {
+    for (const row of (data || []) as AssignmentNotification[]) {
       const id = conversationIdFromLink(row.link);
-      if (!id || !currentlyMine.has(id)) continue;
+      if (!id) continue;
       const timestamp = new Date(row.created_at).getTime();
       if (!Number.isFinite(timestamp)) continue;
       const current = latestAssignment.get(id) || 0;
@@ -136,7 +117,7 @@ export default function InboxAssignmentEnhancements() {
     const seen = readSeenAssignments(seenKey);
     for (const item of items) {
       const id = item.dataset.conversationId;
-      if (!id) continue;
+      if (!id || item.dataset.assignedTo !== currentUser.id) continue;
       const assignedAt = latestAssignment.get(id) || 0;
       const seenAt = Number(seen[id] || 0);
       if (assignedAt > seenAt) {
@@ -144,7 +125,7 @@ export default function InboxAssignmentEnhancements() {
         item.dataset.assignmentAt = String(assignedAt);
       }
     }
-  }, [config.workspace.id, currentUser.id, seenKey]);
+  }, [currentUser.id, seenKey]);
 
   const refresh = useCallback(() => {
     syncTargets();
@@ -161,11 +142,7 @@ export default function InboxAssignmentEnhancements() {
   }, [refresh]);
 
   useEffect(() => {
-    refresh();
-
-    const observer = new MutationObserver(scheduleRefresh);
-    observer.observe(document.body, { childList: true, subtree: true });
-
+    const initialFrame = window.requestAnimationFrame(refresh);
     const onDataChange = () => scheduleRefresh();
     const onFocus = () => scheduleRefresh();
     const interval = window.setInterval(() => {
@@ -195,7 +172,7 @@ export default function InboxAssignmentEnhancements() {
     document.addEventListener('click', onConversationClick, true);
 
     return () => {
-      observer.disconnect();
+      window.cancelAnimationFrame(initialFrame);
       document.removeEventListener('click', onConversationClick, true);
       window.removeEventListener('crm:data-mutated', onDataChange);
       window.removeEventListener('inbox:provider-sync', onDataChange);
