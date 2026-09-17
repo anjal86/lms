@@ -51,6 +51,10 @@ const migrations = [
     file: '202609170091_inbox_assignment_activity.sql',
     marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='inbox_activity_at') and to_regprocedure('public.maintain_conversation_inbox_activity()') is not null",
   },
+  {
+    file: '202609170092_inbox_query_performance.sql',
+    marker: "select to_regclass('public.lead_conversations_workspace_open_message_idx') is not null and to_regclass('public.lead_conversations_workspace_snooze_due_idx') is not null",
+  },
 ];
 
 for (const migration of migrations) {
