@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   BarChart3,
+  Bot,
   CalendarClock,
   Inbox,
   Kanban,
   LayoutDashboard,
   LogOut,
-  Settings,
   Settings2,
+  ShieldCheck,
   UserCog,
   UserRound,
   Users,
@@ -29,16 +30,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
   const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
   const Icon = item.icon;
   return (
-    <Link
-      href={item.href}
-      aria-label={item.label}
-      aria-current={active ? 'page' : undefined}
-      className={`group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors ${
-        active
-          ? 'bg-blue-50 text-blue-700'
-          : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'
-      }`}
-    >
+    <Link href={item.href} aria-label={item.label} aria-current={active ? 'page' : undefined} className={`group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'}`}>
       {active && <span className="absolute inset-y-2 left-0 w-0.5 rounded-r bg-blue-600" />}
       <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-blue-600' : 'text-zinc-400 group-hover:text-zinc-600'}`} />
       <span className="truncate">{item.label}</span>
@@ -48,14 +40,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
 
 function NavGroup({ label, items, pathname }: { label: string; items: NavItem[]; pathname: string }) {
   if (!items.length) return null;
-  return (
-    <div>
-      <p className="mb-1.5 px-2.5 text-[11px] font-medium text-zinc-400">{label}</p>
-      <div className="space-y-1">
-        {items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)}
-      </div>
-    </div>
-  );
+  return <div><p className="mb-1.5 px-2.5 text-[11px] font-medium text-zinc-400">{label}</p><div className="space-y-1">{items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)}</div></div>;
 }
 
 const STATUS_CONFIG: Record<AgentStatus, { label: string; dot: string }> = {
@@ -65,19 +50,7 @@ const STATUS_CONFIG: Record<AgentStatus, { label: string; dot: string }> = {
   offline: { label: 'Offline', dot: 'bg-zinc-400' },
 };
 
-function UserMenu({
-  fullName,
-  role,
-  status,
-  onStatusChange,
-  onSignOut,
-}: {
-  fullName: string;
-  role: string;
-  status: AgentStatus;
-  onStatusChange: (s: AgentStatus) => void;
-  onSignOut: () => void;
-}) {
+function UserMenu({ fullName, role, status, onStatusChange, onSignOut }: { fullName: string; role: string; status: AgentStatus; onStatusChange: (s: AgentStatus) => void; onSignOut: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const initials = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
@@ -85,79 +58,30 @@ function UserMenu({
 
   useEffect(() => {
     if (!open) return;
-    const onMouse = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
+    const onMouse = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onMouse);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onMouse); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="User menu"
-        className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20"
-      >
-        <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">
-          {initials}
-          <span className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-white ${currentStatus.dot}`} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-medium text-zinc-900">{fullName}</div>
-          <div className="mt-0.5 text-[11px] text-zinc-400">{currentStatus.label}</div>
-        </div>
-        <Settings2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-      </button>
+  return <div ref={ref} className="relative">
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} aria-label="User menu" className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20">
+      <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">{initials}<span className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-white ${currentStatus.dot}`} /></span>
+      <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium text-zinc-900">{fullName}</div><div className="mt-0.5 text-[11px] text-zinc-400">{currentStatus.label}</div></div>
+      <Settings2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+    </button>
 
-      {open && (
-        <div role="menu" className="absolute bottom-[calc(100%+6px)] left-0 z-50 w-60 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl animate-in fade-in-0 zoom-in-95 duration-100">
-          <div className="border-b border-zinc-100 px-3 py-3">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">{initials}</span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold text-zinc-900">{fullName}</div>
-                <div className="mt-0.5 text-[11px] capitalize text-zinc-500">{role}</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="border-b border-zinc-100 p-1.5">
-            <p className="mb-1 px-2 py-1 text-[11px] font-medium text-zinc-400">Availability</p>
-            {(Object.entries(STATUS_CONFIG) as [AgentStatus, { label: string; dot: string }][]).map(([key, cfg]) => (
-              <button
-                key={key}
-                type="button"
-                role="menuitem"
-                onClick={() => { onStatusChange(key); setOpen(false); }}
-                className={`flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors ${status === key ? 'bg-blue-50 font-medium text-blue-700' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-950'}`}
-              >
-                <span className={`h-2 w-2 shrink-0 rounded-full ${cfg.dot}`} />
-                {cfg.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="p-1.5">
-            <Link href="/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950">
-              <UserRound className="h-3.5 w-3.5 text-zinc-400" /> Work profile
-            </Link>
-            <Link href="/settings/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950">
-              <Settings className="h-3.5 w-3.5 text-zinc-400" /> Personal settings
-            </Link>
-            <button type="button" role="menuitem" onClick={() => { setOpen(false); onSignOut(); }} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-rose-50 hover:text-rose-700">
-              <LogOut className="h-3.5 w-3.5 text-zinc-400" /> Sign out
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    {open && <div role="menu" className="absolute bottom-[calc(100%+6px)] left-0 z-50 w-60 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl animate-in fade-in-0 zoom-in-95 duration-100">
+      <div className="border-b border-zinc-100 px-3 py-3"><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">{initials}</span><div className="min-w-0 flex-1"><div className="truncate text-[13px] font-semibold text-zinc-900">{fullName}</div><div className="mt-0.5 text-[11px] capitalize text-zinc-500">{role}</div></div></div></div>
+      <div className="border-b border-zinc-100 p-1.5"><p className="mb-1 px-2 py-1 text-[11px] font-medium text-zinc-400">Availability</p>{(Object.entries(STATUS_CONFIG) as [AgentStatus, { label: string; dot: string }][]).map(([key, cfg]) => <button key={key} type="button" role="menuitem" onClick={() => { onStatusChange(key); setOpen(false); }} className={`flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors ${status === key ? 'bg-blue-50 font-medium text-blue-700' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-950'}`}><span className={`h-2 w-2 shrink-0 rounded-full ${cfg.dot}`} />{cfg.label}</button>)}</div>
+      <div className="p-1.5">
+        <Link href="/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"><UserRound className="h-3.5 w-3.5 text-zinc-400" /> Work profile</Link>
+        <Link href="/account/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"><Settings2 className="h-3.5 w-3.5 text-zinc-400" /> Account settings</Link>
+        <button type="button" role="menuitem" onClick={() => { setOpen(false); onSignOut(); }} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-rose-50 hover:text-rose-700"><LogOut className="h-3.5 w-3.5 text-zinc-400" /> Sign out</button>
+      </div>
+    </div>}
+  </div>;
 }
 
 export default function Sidebar() {
@@ -166,7 +90,6 @@ export default function Sidebar() {
   const { currentUser, logout, updateAgentStatus, showToast } = useApp();
   const { term, moduleEnabled } = useWorkspace();
   const { can } = useWorkspacePermissions();
-
   const inboxEnabled = moduleEnabled('inbox', true);
   const leadsEnabled = moduleEnabled('leads', true);
   const tasksEnabled = moduleEnabled('tasks', true);
@@ -181,45 +104,28 @@ export default function Sidebar() {
     ...(tasksEnabled ? [{ label: 'Due Work', href: '/work', icon: CalendarClock }] : []),
     ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users }] : []),
   ];
-
-  const manage: NavItem[] = isAgent ? [] : [
-    { label: 'Team', href: '/team', icon: UserCog },
+  const intelligence: NavItem[] = isAgent ? [] : [{ label: 'AI', href: '/ai', icon: Bot }];
+  const operate: NavItem[] = isAgent ? [] : [
+    ...(can('automations.view') ? [{ label: 'Automations', href: '/automations', icon: Zap }] : []),
     ...(can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3 }] : []),
-    ...(can('automations.view') ? [{ label: 'Automations', href: '/settings/automations', icon: Zap }] : []),
   ];
-
   const admin: NavItem[] = isAgent ? [] : [
-    { label: 'Settings', href: '/settings', icon: Settings },
+    { label: 'Workspace', href: '/admin', icon: ShieldCheck },
+    { label: 'People', href: '/admin/people', icon: UserCog },
+    ...(can('permissions.view') ? [{ label: 'Permissions', href: '/admin/permissions', icon: ShieldCheck }] : []),
   ];
 
-  const handleStatusChange = (status: AgentStatus) => {
-    updateAgentStatus(status);
-    showToast(`Status: ${STATUS_CONFIG[status].label}`, 'info');
-  };
-
+  const handleStatusChange = (status: AgentStatus) => { updateAgentStatus(status); showToast(`Status: ${STATUS_CONFIG[status].label}`, 'info'); };
   const signOut = async () => { await logout(); router.push('/login'); };
 
-  return (
-    <aside className="hidden w-[232px] shrink-0 flex-col border-r border-zinc-200 bg-white md:flex">
-      <div className="border-b border-zinc-200 px-2.5 py-2.5">
-        <WorkspaceSwitcher />
-      </div>
-
-      <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 py-4">
-        <NavGroup label="Work" items={work} pathname={pathname} />
-        {manage.length > 0 && <NavGroup label="Manage" items={manage} pathname={pathname} />}
-        {admin.length > 0 && <NavGroup label="Workspace" items={admin} pathname={pathname} />}
-      </nav>
-
-      <div className="border-t border-zinc-200 px-2.5 py-2.5">
-        <UserMenu
-          fullName={currentUser.full_name}
-          role={currentUser.role}
-          status={(currentUser.status as AgentStatus) ?? 'offline'}
-          onStatusChange={handleStatusChange}
-          onSignOut={() => void signOut()}
-        />
-      </div>
-    </aside>
-  );
+  return <aside className="hidden w-[232px] shrink-0 flex-col border-r border-zinc-200 bg-white md:flex">
+    <div className="border-b border-zinc-200 px-2.5 py-2.5"><WorkspaceSwitcher /></div>
+    <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 py-4">
+      <NavGroup label="Work" items={work} pathname={pathname} />
+      <NavGroup label="Intelligence" items={intelligence} pathname={pathname} />
+      <NavGroup label="Operate" items={operate} pathname={pathname} />
+      <NavGroup label="Admin" items={admin} pathname={pathname} />
+    </nav>
+    <div className="border-t border-zinc-200 px-2.5 py-2.5"><UserMenu fullName={currentUser.full_name} role={currentUser.role} status={(currentUser.status as AgentStatus) ?? 'offline'} onStatusChange={handleStatusChange} onSignOut={() => void signOut()} /></div>
+  </aside>;
 }
