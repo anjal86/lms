@@ -12,6 +12,7 @@ export type InboxListConversation = {
   last_message_preview?: string | null;
   needs_reply: boolean;
   priority: string;
+  assigned_to?: string | null;
   connection?: {
     id?: string | null;
     provider?: string | null;
@@ -130,6 +131,7 @@ export default function InboxConversationListItem({ conversation, selected, cont
     type="button"
     data-conversation-item="true"
     data-conversation-id={conversation.id}
+    data-assigned-to={conversation.assigned_to || ''}
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, ${actionState}, via ${account}`}
     onClick={() => {
