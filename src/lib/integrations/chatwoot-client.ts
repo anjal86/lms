@@ -15,7 +15,6 @@ export class ChatwootApiError extends Error {
 export type ChatwootServerConfig = {
   baseUrl: string;
   accessToken: string;
-  webhookSecret: string;
   webhookMaxAgeSeconds: number;
 };
 
@@ -25,14 +24,16 @@ function required(name: string) {
   return value;
 }
 
+export function chatwootWebhookMaxAgeSeconds() {
+  const parsed = Number(process.env.CHATWOOT_WEBHOOK_MAX_AGE_SECONDS || '300');
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 300;
+}
+
 export function chatwootServerConfig(): ChatwootServerConfig {
-  const baseUrl = required('CHATWOOT_BASE_URL').replace(/\/$/, '');
-  const parsedMaxAge = Number(process.env.CHATWOOT_WEBHOOK_MAX_AGE_SECONDS || '300');
   return {
-    baseUrl,
+    baseUrl: required('CHATWOOT_BASE_URL').replace(/\/$/, ''),
     accessToken: required('CHATWOOT_API_ACCESS_TOKEN'),
-    webhookSecret: required('CHATWOOT_WEBHOOK_SECRET'),
-    webhookMaxAgeSeconds: Number.isFinite(parsedMaxAge) && parsedMaxAge > 0 ? Math.floor(parsedMaxAge) : 300,
+    webhookMaxAgeSeconds: chatwootWebhookMaxAgeSeconds(),
   };
 }
 
@@ -40,7 +41,6 @@ export function chatwootConfigured() {
   return Boolean(
     process.env.CHATWOOT_BASE_URL?.trim()
     && process.env.CHATWOOT_API_ACCESS_TOKEN?.trim()
-    && process.env.CHATWOOT_WEBHOOK_SECRET?.trim()
   );
 }
 
@@ -55,7 +55,7 @@ export async function chatwootRequest<T>(
     signal: init.signal ?? AbortSignal.timeout(15_000),
     headers: {
       Accept: 'application/json',
-      'api_access_token': config.accessToken,
+      api_access_token: config.accessToken,
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },
@@ -79,6 +79,10 @@ export async function listChatwootAgents(accountId: number) {
 
 export async function listChatwootTeams(accountId: number) {
   return chatwootRequest<Array<Record<string, unknown>>>(chatwootAccountPath(accountId, 'teams'));
+}
+
+export async function listChatwootInboxes(accountId: number) {
+  return chatwootRequest<Array<Record<string, unknown>>>(chatwootAccountPath(accountId, 'inboxes'));
 }
 
 export async function filterChatwootConversations(
