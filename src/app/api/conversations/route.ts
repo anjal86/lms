@@ -5,6 +5,21 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const PROVIDERS = new Set(['facebook', 'instagram', 'whatsapp', 'tiktok', 'email', 'website', 'api']);
+const EMPTY_METRICS = {
+  unconvertedOpen: 0,
+  totalOpen: 0,
+  mine: 0,
+  hasPhone: 0,
+  unassigned: 0,
+  collaborations: 0,
+  waiting: 0,
+  snoozed: 0,
+  unread: 0,
+  needsReply: 0,
+  slaOverdue: 0,
+  highPriority: 0,
+  resolved: 0,
+};
 
 type AuthenticatedActor = Exclude<Awaited<ReturnType<typeof getApiActor>>, { error: unknown }>;
 
@@ -123,19 +138,8 @@ export async function GET(request: Request) {
         externalAccountId: accountScope.connection.external_account_id,
         legacyCookieResolved: false,
       } : null,
-      metrics: {
-        unconvertedOpen: 0,
-        totalOpen: 0,
-        hasPhone: 0,
-        unassigned: 0,
-        collaborations: 0,
-        waiting: 0,
-        snoozed: 0,
-        unread: 0,
-        needsReply: 0,
-        slaOverdue: 0,
-        highPriority: 0,
-      },
+      metrics: EMPTY_METRICS,
+      metricsVerified: true,
     }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
@@ -173,19 +177,8 @@ export async function GET(request: Request) {
           externalAccountId: selectedConnection.external_account_id,
           legacyCookieResolved: accountScope.legacy,
         },
-        metrics: {
-          unconvertedOpen: 0,
-          totalOpen: 0,
-          hasPhone: 0,
-          unassigned: 0,
-          collaborations: 0,
-          waiting: 0,
-          snoozed: 0,
-          unread: 0,
-          needsReply: 0,
-          slaOverdue: 0,
-          highPriority: 0,
-        },
+        metrics: EMPTY_METRICS,
+        metricsVerified: true,
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     scopedConnectionIds = [selectedConnection.id];
@@ -204,19 +197,8 @@ export async function GET(request: Request) {
         total: 0,
         hasMore: false,
         scope: null,
-        metrics: {
-          unconvertedOpen: 0,
-          totalOpen: 0,
-          hasPhone: 0,
-          unassigned: 0,
-          collaborations: 0,
-          waiting: 0,
-          snoozed: 0,
-          unread: 0,
-          needsReply: 0,
-          slaOverdue: 0,
-          highPriority: 0,
-        },
+        metrics: EMPTY_METRICS,
+        metricsVerified: true,
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     connectionScopeFilter = `connection_id.in.(${scopedConnectionIds.join(',')}),and(connection_id.is.null,provider.eq.${provider})`;
@@ -228,19 +210,8 @@ export async function GET(request: Request) {
         total: 0,
         hasMore: false,
         scope: null,
-        metrics: {
-          unconvertedOpen: 0,
-          totalOpen: 0,
-          hasPhone: 0,
-          unassigned: 0,
-          collaborations: 0,
-          waiting: 0,
-          snoozed: 0,
-          unread: 0,
-          needsReply: 0,
-          slaOverdue: 0,
-          highPriority: 0,
-        },
+        metrics: EMPTY_METRICS,
+        metricsVerified: true,
       }, { headers: { 'Cache-Control': 'no-store' } });
     }
     const legacyScope = activeProviders.length > 0
@@ -338,61 +309,23 @@ export async function GET(request: Request) {
   }
   query = query.range(offset, offset + limit - 1);
 
-  const { data, error, count } = await query;
+  const [listResult, metricsResult] = await Promise.all([
+    query,
+    actor.supabase.rpc('inbox_queue_metrics', {
+      p_workspace_id: actor.profile.workspace_id,
+      p_account_id: selectedConnection?.id || null,
+      p_provider: provider === 'all' ? null : provider,
+    }),
+  ]);
+
+  const { data, error, count } = listResult;
   if (error) {
     console.error('Conversation list failed:', error.message);
     return NextResponse.json({ error: 'Unable to load conversations.' }, { status: 500 });
   }
 
-  let unconvertedCountQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('lead_id', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let allOpenQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let hasPhoneQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).not('metadata->detected_phone', 'is', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let unassignedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('assigned_to', null).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let waitingQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'waiting').or(connectionScopeFilter);
-  let snoozedQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('workflow_state', 'snoozed').or(connectionScopeFilter);
-  let unreadQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).gt('unread_count', 0).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let needsReplyQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).eq('needs_reply', true).neq('workflow_state', 'closed').or(connectionScopeFilter);
-  let overdueQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).is('first_responded_at', null).neq('workflow_state', 'closed').lt('first_response_due_at', new Date().toISOString()).or(connectionScopeFilter);
-  let highPriorityQuery = actor.supabase.from('lead_conversations').select('id', { count: 'exact', head: true }).eq('workspace_id', actor.profile.workspace_id).in('priority', ['high', 'urgent']).neq('workflow_state', 'closed').or(connectionScopeFilter);
-
-  if (provider !== 'all') {
-    unconvertedCountQuery = unconvertedCountQuery.eq('provider', provider);
-    allOpenQuery = allOpenQuery.eq('provider', provider);
-    hasPhoneQuery = hasPhoneQuery.eq('provider', provider);
-    unassignedQuery = unassignedQuery.eq('provider', provider);
-    waitingQuery = waitingQuery.eq('provider', provider);
-    snoozedQuery = snoozedQuery.eq('provider', provider);
-    unreadQuery = unreadQuery.eq('provider', provider);
-    needsReplyQuery = needsReplyQuery.eq('provider', provider);
-    overdueQuery = overdueQuery.eq('provider', provider);
-    highPriorityQuery = highPriorityQuery.eq('provider', provider);
-  }
-
-  const [unconvertedCountRes, allOpenRes, hasPhoneRes, unassignedRes, waitingRes, snoozedRes, unreadRes, needsReplyRes, overdueRes, highPriorityRes] = await Promise.all([
-    unconvertedCountQuery,
-    allOpenQuery,
-    hasPhoneQuery,
-    unassignedQuery,
-    waitingQuery,
-    snoozedQuery,
-    unreadQuery,
-    needsReplyQuery,
-    overdueQuery,
-    highPriorityQuery,
-  ]);
-
-  let collaborations = 0;
-  if (collaboratorIds.length) {
-    let collaborationCountQuery = actor.supabase
-      .from('lead_conversations')
-      .select('id', { count: 'exact', head: true })
-      .eq('workspace_id', actor.profile.workspace_id)
-      .in('id', collaboratorIds)
-      .neq('workflow_state', 'closed')
-      .or(connectionScopeFilter);
-    if (provider !== 'all') collaborationCountQuery = collaborationCountQuery.eq('provider', provider);
-    const collaborationRes = await collaborationCountQuery;
-    collaborations = collaborationRes.count || 0;
+  if (metricsResult.error) {
+    console.warn('Conversation metrics failed:', metricsResult.error.message);
   }
 
   return NextResponse.json({
@@ -406,18 +339,7 @@ export async function GET(request: Request) {
       externalAccountId: selectedConnection.external_account_id,
       legacyCookieResolved: accountScope.legacy,
     } : null,
-    metrics: {
-      unconvertedOpen: unconvertedCountRes.count || 0,
-      totalOpen: allOpenRes.count || 0,
-      hasPhone: hasPhoneRes.count || 0,
-      unassigned: unassignedRes.count || 0,
-      collaborations,
-      waiting: waitingRes.count || 0,
-      snoozed: snoozedRes.count || 0,
-      unread: unreadRes.count || 0,
-      needsReply: needsReplyRes.count || 0,
-      slaOverdue: overdueRes.count || 0,
-      highPriority: highPriorityRes.count || 0,
-    },
+    metrics: metricsResult.error ? null : metricsResult.data,
+    metricsVerified: !metricsResult.error,
   }, { headers: { 'Cache-Control': 'no-store' } });
 }
