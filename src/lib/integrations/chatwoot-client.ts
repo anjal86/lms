@@ -101,7 +101,10 @@ export async function listChatwootTeams(accountId: number) {
 
 export async function listChatwootInboxes(accountId: number) {
   const response = await chatwootRequest<ChatwootInboxListResponse>(chatwootAccountPath(accountId, 'inboxes'));
-  return Array.isArray(response?.payload) ? response.payload : [];
+  if (!response || !Array.isArray(response.payload)) {
+    throw new Error('Chatwoot inbox response did not contain a payload array.');
+  }
+  return response.payload;
 }
 
 export async function filterChatwootConversations(
