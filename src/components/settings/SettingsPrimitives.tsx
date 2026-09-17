@@ -4,7 +4,6 @@ import {
   useEffect,
   useId,
   useRef,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -301,7 +300,7 @@ export function ToggleRow({
         <span
           aria-hidden="true"
           className={cx(
-            'absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform',
+            'absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform',
             checked ? 'translate-x-[1.3rem]' : 'translate-x-0.5',
           )}
         />
@@ -319,15 +318,17 @@ export function SectionAnchorNav({
 }) {
   if (!items.length) return null;
   return (
-    <nav aria-label={label} className="settings-anchor-nav">
-      <span className="settings-anchor-label">{label}</span>
-      <div className="settings-anchor-items">
-        {items.map((item) => (
-          <a key={item.id} href={`#${item.id}`} className="settings-anchor-link">
-            {item.label}
-          </a>
-        ))}
-      </div>
+    <nav aria-label={label} className="flex flex-wrap items-center gap-x-1.5 gap-y-2 border-b border-zinc-100 pb-3 text-[11px]">
+      <span className="mr-1 font-semibold text-zinc-500">{label}</span>
+      {items.map((item) => (
+        <a
+          key={item.id}
+          href={`#${item.id}`}
+          className="rounded-md px-2 py-1 font-medium text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-950 focus-visible:bg-zinc-50 focus-visible:text-zinc-950"
+        >
+          {item.label}
+        </a>
+      ))}
     </nav>
   );
 }
@@ -416,7 +417,6 @@ export function DirtySaveBar({
   label?: string;
   message?: string;
 }) {
-  useUnsavedChangesGuard(dirty);
   if (!dirty) return null;
 
   return (
