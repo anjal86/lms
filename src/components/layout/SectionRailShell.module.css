@@ -187,7 +187,9 @@
 
 .content :global(.page-actions a[href="/settings/workspace"]),
 .content :global(.page-actions a[href="/settings/ai-agents"]),
-.content :global(.page-actions a[href="/settings/ai-providers"]) {
+.content :global(.page-actions a[href="/settings/ai-providers"]),
+.content :global(.app-page > header:first-child a.button-ghost),
+.content :global(.workspace-page > header:first-child a.button-ghost) {
   display: none;
 }
 
