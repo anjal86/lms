@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Layers3, Loader2 } from 'lucide-react';
+import { Layers3, Loader2, MessageSquareText, Settings2 } from 'lucide-react';
+import { useApp } from '@/lib/store';
 
 type Connection = {
   id: string;
@@ -26,9 +28,11 @@ const PROVIDER_LABELS: Record<string, string> = {
 export default function InboxChannelScopeBar() {
   const router = useRouter();
   const params = useSearchParams();
+  const { currentUser } = useApp();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
   const selectedId = params.get('accountId') || '';
+  const canManage = currentUser.role === 'admin' || currentUser.role === 'manager';
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -97,32 +101,23 @@ export default function InboxChannelScopeBar() {
         {loading ? (
           <div className="flex h-8 items-center gap-2 rounded-md border border-zinc-200 px-2.5 text-xs text-zinc-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading channel accounts…</div>
         ) : (
-          <select
-            aria-label="Working channel account"
-            value={value}
-            onChange={(event) => changeAccount(event.target.value)}
-            className="select-field h-8 w-full text-xs"
-          >
+          <select aria-label="Working channel account" value={value} onChange={(event) => changeAccount(event.target.value)} className="select-field h-8 w-full text-xs">
             <option value="">All connected accounts</option>
-            {grouped.map(([provider, accounts]) => (
-              <optgroup key={provider} label={PROVIDER_LABELS[provider] || provider}>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.display_name}{account.status === 'paused' ? ' · paused' : ''}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+            {grouped.map(([provider, accounts]) => <optgroup key={provider} label={PROVIDER_LABELS[provider] || provider}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.display_name}{account.status === 'paused' ? ' · paused' : ''}</option>)}</optgroup>)}
           </select>
         )}
       </div>
-      {selected && (
-        <div className="ml-auto hidden min-w-0 items-center gap-2 text-[10px] text-zinc-500 md:flex">
-          <span className="capitalize">{PROVIDER_LABELS[selected.provider] || selected.provider}</span>
-          {selected.external_account_id && <><span className="text-zinc-300">·</span><span className="max-w-48 truncate font-mono">{selected.external_account_id}</span></>}
-          <span className={`h-1.5 w-1.5 rounded-full ${selected.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-        </div>
-      )}
+
+      {canManage && <div className="ml-auto flex items-center gap-1">
+        <Link href="/inbox/replies" className="button-ghost button-sm hidden sm:inline-flex" title="Saved replies"><MessageSquareText className="h-3.5 w-3.5" /> Replies</Link>
+        <Link href="/inbox/channels" className="button-ghost button-sm" title="Manage channels"><Settings2 className="h-3.5 w-3.5" /> Channels</Link>
+      </div>}
+
+      {selected && <div className={`${canManage ? 'hidden xl:flex' : 'ml-auto hidden md:flex'} min-w-0 items-center gap-2 text-[10px] text-zinc-500`}>
+        <span className="capitalize">{PROVIDER_LABELS[selected.provider] || selected.provider}</span>
+        {selected.external_account_id && <><span className="text-zinc-300">·</span><span className="max-w-48 truncate font-mono">{selected.external_account_id}</span></>}
+        <span className={`h-1.5 w-1.5 rounded-full ${selected.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+      </div>}
     </div>
   );
 }
