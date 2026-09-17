@@ -94,7 +94,7 @@ export default function InboxConversationListItem({ conversation, selected, cont
     onClick={onSelect}
     className={`group relative w-full border-b border-zinc-100 px-3 py-2.5 text-left transition-colors duration-100 data-[newly-assigned=true]:bg-blue-50/45 hover:bg-zinc-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/30 ${selected ? 'bg-zinc-100/80' : 'bg-white'}`}
   >
-    <span className={`absolute inset-y-0 left-0 w-0.5 ${selected ? 'bg-blue-600' : 'bg-transparent'} data-[newly-assigned=true]:bg-blue-400`} aria-hidden="true" />
+    <span className={`absolute inset-y-0 left-0 w-0.5 ${selected ? 'bg-blue-600' : 'bg-transparent'} group-data-[newly-assigned=true]:bg-blue-400`} aria-hidden="true" />
 
     <div className="flex min-w-0 items-start gap-2.5">
       <div className="relative mt-0.5 shrink-0">
