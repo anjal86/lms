@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { chatwootServerConfig } from '@/lib/integrations/chatwoot-client';
+import { chatwootWebhookMaxAgeSeconds } from '@/lib/integrations/chatwoot-client';
+import { decryptIntegrationSecret } from '@/lib/integrations/secrets';
 import {
   chatwootAccountId,
   chatwootDeliveryKey,
@@ -18,30 +19,8 @@ function isEnvelope(value: unknown): value is ChatwootWebhookEnvelope {
 export async function POST(request: Request) {
   const rawBody = await request.text();
 
-  let config: ReturnType<typeof chatwootServerConfig>;
-  try {
-    config = chatwootServerConfig();
-  } catch (error) {
-    console.error('Chatwoot webhook configuration error:', error);
-    return NextResponse.json({ error: 'Chatwoot integration is not configured.' }, { status: 503 });
-  }
-
-  const timestamp = request.headers.get('x-chatwoot-timestamp');
-  const verification = verifyChatwootWebhook({
-    rawBody,
-    signature: request.headers.get('x-chatwoot-signature'),
-    timestamp,
-    secret: config.webhookSecret,
-    maxAgeSeconds: config.webhookMaxAgeSeconds,
-  });
-
-  if (!verification.ok) {
-    return NextResponse.json(
-      { error: 'Invalid Chatwoot webhook signature.', reason: verification.reason },
-      { status: 401 }
-    );
-  }
-
+  // Parse only enough untrusted JSON to identify which account secret must be
+  // used. No persistence or business action happens until HMAC verification.
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody);
@@ -62,7 +41,7 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: accountLink, error: accountError } = await admin
     .from('chatwoot_accounts')
-    .select('id,workspace_id,status')
+    .select('id,workspace_id,status,webhook_secret_encrypted')
     .eq('chatwoot_account_id', accountId)
     .maybeSingle();
 
@@ -71,11 +50,38 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to resolve Chatwoot account.' }, { status: 500 });
   }
 
-  // A webhook may be enabled before a CRM workspace is mapped. Acknowledge it
-  // without creating a retry storm; the setup UI/health check will surface it.
+  // An account can be configured in Chatwoot before it is mapped in the CRM.
+  // Acknowledge it without creating an upstream retry storm.
   if (!accountLink || accountLink.status !== 'active') {
     console.warn(`Ignoring Chatwoot webhook for unmapped/disabled account ${accountId}.`);
     return NextResponse.json({ accepted: false, ignored: true, reason: 'unmapped_account' }, { status: 202 });
+  }
+
+  let webhookSecret: string | null;
+  try {
+    webhookSecret = decryptIntegrationSecret(accountLink.webhook_secret_encrypted);
+  } catch (error) {
+    console.error('Unable to decrypt Chatwoot webhook secret:', error);
+    return NextResponse.json({ error: 'Chatwoot webhook verification is not configured.' }, { status: 503 });
+  }
+  if (!webhookSecret) {
+    return NextResponse.json({ error: 'Chatwoot webhook verification is not configured.' }, { status: 503 });
+  }
+
+  const timestamp = request.headers.get('x-chatwoot-timestamp');
+  const verification = verifyChatwootWebhook({
+    rawBody,
+    signature: request.headers.get('x-chatwoot-signature'),
+    timestamp,
+    secret: webhookSecret,
+    maxAgeSeconds: chatwootWebhookMaxAgeSeconds(),
+  });
+
+  if (!verification.ok) {
+    return NextResponse.json(
+      { error: 'Invalid Chatwoot webhook signature.', reason: verification.reason },
+      { status: 401 }
+    );
   }
 
   const deliveryKey = chatwootDeliveryKey(
