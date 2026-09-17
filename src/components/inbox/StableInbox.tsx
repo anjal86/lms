@@ -662,21 +662,29 @@ export default function StableInbox() {
     setEvents([]);
     setCollaborators([]);
     setSessions([]);
+    
+    autoScrollRef.current = true;
     const cached = threadCache.current.get(conversation.id);
-    if (cached) applyThreadSnapshot(cached);
-    else {
+    if (cached) {
+      applyThreadSnapshot(cached);
+      window.setTimeout(() => {
+        if (autoScrollRef.current) {
+          autoScrollRef.current = false;
+          scrollToBottom();
+        }
+      }, 50);
+    } else {
       setSelected(conversation);
       setMessages([]);
       setMessageTotal(0);
       setHasOlderMessages(false);
       setLoadingThread(true);
-      autoScrollRef.current = true;
     }
     const secondary = secondaryCache.current.get(conversation.id);
     if (secondary) { setEvents(secondary.events); setCollaborators(secondary.collaborators); }
     syncUrl({ conversationId: conversation.id });
     void loadAiState(conversation.id);
-  }, [applyThreadSnapshot, loadAiState, setContextOpen, syncUrl]);
+  }, [applyThreadSnapshot, loadAiState, setContextOpen, syncUrl, scrollToBottom]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void Promise.all([loadViews(), loadList()]); }, 0);
