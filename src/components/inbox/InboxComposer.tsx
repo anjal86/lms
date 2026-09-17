@@ -123,8 +123,10 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
     if ((!body && !queuedAttachment) || loading || sending || uploading) return;
     if (mode === 'outbound' && !canReply) return;
 
-    // Clear the composer before awaiting network I/O so the send feels immediate.
-    // The optimistic bubble is rendered by the parent while this request is in flight.
+    // Clear the composer before awaiting network I/O so the interaction feels
+    // immediate. The parent renders the optimistic bubble straight away.
+    valueRef.current = '';
+    attachmentRef.current = null;
     onChange('');
     if (queuedAttachment) setAttachment(null);
     setQuickOpen(false);
@@ -132,19 +134,25 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
     onTyping?.(false);
     try { window.localStorage.removeItem(draftKey); } catch { /* noop */ }
 
-    const sent = await onSend({
-      body,
-      attachment: queuedAttachment,
-      mode,
-    });
+    let bodySent = !body;
+    let attachmentSent = !queuedAttachment;
 
-    if (!sent) {
-      // Never overwrite text or a new attachment the operator entered while the
-      // failed request was in flight. The failed bubble also remains retryable.
-      if (!valueRef.current.trim() && body) onChange(body);
-      if (!attachmentRef.current && queuedAttachment) setAttachment(queuedAttachment);
-      window.requestAnimationFrame(() => composerRef?.current?.focus());
-      return;
+    if (body) {
+      bodySent = await onSend({ body, mode });
+    }
+
+    // The current delivery API deliberately sends text and media as separate
+    // provider messages. Preserve that contract, but keep the UI cleared while
+    // the pair is delivered sequentially.
+    if (bodySent && queuedAttachment) {
+      attachmentSent = await onSend({ body: '', attachment: queuedAttachment, mode: 'outbound' });
+    }
+
+    if (!bodySent || !attachmentSent) {
+      // Do not overwrite anything the operator typed/attached while delivery
+      // was in flight. Failed bubbles remain retryable in the timeline as well.
+      if (!bodySent && !valueRef.current.trim() && body) onChange(body);
+      if (!attachmentSent && !attachmentRef.current && queuedAttachment) setAttachment(queuedAttachment);
     }
 
     window.requestAnimationFrame(() => composerRef?.current?.focus());
