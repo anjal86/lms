@@ -130,7 +130,6 @@ export default function InboxConversationListItem({ conversation, selected, cont
     type="button"
     data-conversation-item="true"
     data-conversation-id={conversation.id}
-    data-newly-assigned="false"
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, ${actionState}, via ${account}`}
     onClick={() => {
