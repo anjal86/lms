@@ -7,6 +7,7 @@ import {
   listChatwootAgents,
 } from '@/lib/integrations/chatwoot-client';
 import { publicAppUrl } from '@/lib/integrations/environment';
+import { encryptIntegrationSecret } from '@/lib/integrations/secrets';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
@@ -15,6 +16,7 @@ export const dynamic = 'force-dynamic';
 const AccountSchema = z.object({
   accountId: z.number().int().positive(),
   name: z.string().trim().min(1).max(160).optional(),
+  webhookSecret: z.string().trim().min(16).max(1000),
 });
 
 export async function GET(request: Request) {
@@ -74,6 +76,17 @@ export async function POST(request: Request) {
     );
   }
 
+  let encryptedWebhookSecret: string | null;
+  try {
+    encryptedWebhookSecret = encryptIntegrationSecret(parsed.data.webhookSecret);
+  } catch (error) {
+    console.error('Chatwoot webhook secret encryption failed:', error);
+    return NextResponse.json({ error: 'Integration secret encryption is not configured.' }, { status: 503 });
+  }
+  if (!encryptedWebhookSecret) {
+    return NextResponse.json({ error: 'Webhook secret is required.' }, { status: 400 });
+  }
+
   const admin = createSupabaseAdminClient();
   const now = new Date().toISOString();
   const { data: existing } = await admin
@@ -87,21 +100,23 @@ export async function POST(request: Request) {
     chatwoot_account_id: parsed.data.accountId,
     name: parsed.data.name || `Chatwoot Account ${parsed.data.accountId}`,
     status: 'active',
+    webhook_secret_encrypted: encryptedWebhookSecret,
     last_verified_at: now,
     updated_at: now,
   };
 
+  const safeSelect = 'id,workspace_id,chatwoot_account_id,name,status,last_verified_at,created_at,updated_at';
   const write = existing
     ? admin
         .from('chatwoot_accounts')
         .update(row)
         .eq('id', existing.id)
-        .select('id,workspace_id,chatwoot_account_id,name,status,last_verified_at,created_at,updated_at')
+        .select(safeSelect)
         .single()
     : admin
         .from('chatwoot_accounts')
         .insert(row)
-        .select('id,workspace_id,chatwoot_account_id,name,status,last_verified_at,created_at,updated_at')
+        .select(safeSelect)
         .single();
 
   const { data: mapping, error: writeError } = await write;
