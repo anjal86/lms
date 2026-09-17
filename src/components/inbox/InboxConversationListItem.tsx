@@ -129,13 +129,15 @@ export default function InboxConversationListItem({ conversation, selected, cont
   return <button
     type="button"
     data-conversation-item="true"
+    data-conversation-id={conversation.id}
+    data-newly-assigned="false"
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, ${actionState}, via ${account}`}
     onClick={() => {
       onSelect();
       keepSelectedThreadAtLatest();
     }}
-    className={`relative min-h-[5.25rem] w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
+    className={`relative min-h-[5.25rem] w-full border-l-2 px-3 py-3 text-left transition-colors data-[newly-assigned=true]:border-l-blue-300 data-[newly-assigned=true]:bg-blue-50/35 hover:bg-zinc-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
   >
     <div className="flex min-w-0 items-start gap-2.5">
       <div className="relative shrink-0">
