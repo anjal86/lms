@@ -32,13 +32,37 @@ export type ChatwootInbox = {
   website_url?: string | null;
 };
 
+export type ChatwootConversationListMeta = {
+  mine_count?: number;
+  assigned_count?: number;
+  unassigned_count?: number;
+  all_count?: number;
+};
+
 type ChatwootInboxListResponse = {
   payload?: ChatwootInbox[];
+};
+
+type ChatwootConversationListResponse = {
+  data?: {
+    meta?: ChatwootConversationListMeta;
+    payload?: Array<Record<string, unknown>>;
+  };
+};
+
+type ChatwootMessageListResponse = {
+  meta?: Record<string, unknown>;
+  payload?: Array<Record<string, unknown>>;
 };
 
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured.`);
+  return value;
+}
+
+function positiveInteger(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`Invalid ${label}.`);
   return value;
 }
 
@@ -86,7 +110,7 @@ export async function chatwootRequest<T>(
 }
 
 export function chatwootAccountPath(accountId: number, suffix = '') {
-  if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new Error('Invalid Chatwoot account ID.');
+  positiveInteger(accountId, 'Chatwoot account ID');
   const normalizedSuffix = suffix ? (suffix.startsWith('/') ? suffix : `/${suffix}`) : '';
   return `/api/v1/accounts/${accountId}${normalizedSuffix}`;
 }
@@ -107,6 +131,35 @@ export async function listChatwootInboxes(accountId: number) {
   return response.payload;
 }
 
+export async function listChatwootConversations(input: {
+  accountId: number;
+  inboxId: number;
+  status?: 'open' | 'resolved' | 'pending' | 'snoozed' | 'all';
+  assigneeType?: 'me' | 'unassigned' | 'assigned' | 'all';
+  page?: number;
+}) {
+  positiveInteger(input.inboxId, 'Chatwoot inbox ID');
+  const page = Math.max(1, Math.floor(input.page || 1));
+  const params = new URLSearchParams({
+    inbox_id: String(input.inboxId),
+    status: input.status || 'all',
+    page: String(page),
+  });
+  if (input.assigneeType && input.assigneeType !== 'all') params.set('assignee_type', input.assigneeType);
+
+  const response = await chatwootRequest<ChatwootConversationListResponse>(
+    `${chatwootAccountPath(input.accountId, 'conversations')}?${params.toString()}`
+  );
+  if (!response?.data || !Array.isArray(response.data.payload)) {
+    throw new Error('Chatwoot conversation response did not contain a data.payload array.');
+  }
+  return {
+    conversations: response.data.payload,
+    meta: response.data.meta || {},
+    page,
+  };
+}
+
 export async function filterChatwootConversations(
   accountId: number,
   payload: Array<Record<string, unknown>>
@@ -118,10 +171,33 @@ export async function filterChatwootConversations(
 }
 
 export async function getChatwootConversation(accountId: number, conversationId: number) {
-  if (!Number.isSafeInteger(conversationId) || conversationId <= 0) throw new Error('Invalid Chatwoot conversation ID.');
+  positiveInteger(conversationId, 'Chatwoot conversation ID');
   return chatwootRequest<Record<string, unknown>>(
     chatwootAccountPath(accountId, `conversations/${conversationId}`)
   );
+}
+
+export async function listChatwootMessages(input: {
+  accountId: number;
+  conversationId: number;
+  before?: number | null;
+  after?: number | null;
+}) {
+  positiveInteger(input.conversationId, 'Chatwoot conversation ID');
+  const params = new URLSearchParams();
+  if (input.before != null) params.set('before', String(positiveInteger(input.before, 'Chatwoot before message ID')));
+  if (input.after != null) params.set('after', String(positiveInteger(input.after, 'Chatwoot after message ID')));
+  const query = params.size ? `?${params.toString()}` : '';
+  const response = await chatwootRequest<ChatwootMessageListResponse>(
+    `${chatwootAccountPath(input.accountId, `conversations/${input.conversationId}/messages`)}${query}`
+  );
+  if (!response || !Array.isArray(response.payload)) {
+    throw new Error('Chatwoot message response did not contain a payload array.');
+  }
+  return {
+    messages: response.payload,
+    meta: response.meta || {},
+  };
 }
 
 export async function createChatwootMessage(input: {
@@ -130,6 +206,7 @@ export async function createChatwootMessage(input: {
   content: string;
   private?: boolean;
 }) {
+  positiveInteger(input.conversationId, 'Chatwoot conversation ID');
   const content = input.content.trim();
   if (!content) throw new Error('Chatwoot message content cannot be empty.');
   return chatwootRequest<Record<string, unknown>>(
