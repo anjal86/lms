@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import StableInbox from '@/components/inbox/StableInbox';
 import InboxChannelScopeBar from '@/components/inbox/InboxChannelScopeBar';
 import InboxCommandPalette from '@/components/inbox/InboxCommandPalette';
+import InboxAssignmentEnhancements from '@/components/inbox/InboxAssignmentEnhancements';
 
 const AUTO_SYNC_INTERVAL_MS = 30_000;
 const AUTO_SYNC_MIN_GAP_MS = 15_000;
@@ -34,6 +35,7 @@ function ScopedInbox() {
       <InboxChannelScopeBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <StableInbox key={`${provider}:${accountProvider}:${accountId}`} />
+        <InboxAssignmentEnhancements />
       </div>
       <InboxCommandPalette />
     </div>
