@@ -162,6 +162,7 @@ export default function InboxAssignmentEnhancements() {
 
   const [metrics, setMetrics] = useState<QueueMetrics | null>(() => RUNTIME_METRICS_CACHE.get(scopeKey)?.metrics || null);
   const [targets, setTargets] = useState<CountTarget[]>([]);
+  const targetsRef = useRef<CountTarget[]>([]);
   const metricsTimer = useRef<number | null>(null);
   const highlightTimer = useRef<number | null>(null);
   const targetTimer = useRef<number | null>(null);
@@ -177,6 +178,7 @@ export default function InboxAssignmentEnhancements() {
         }
       }
       for (const target of next) target.element.dataset.inboxVerifiedCountTarget = 'true';
+      targetsRef.current = next;
       return sameTargets(current, next) ? current : next;
     });
   }, []);
@@ -200,9 +202,10 @@ export default function InboxAssignmentEnhancements() {
     const query = new URLSearchParams();
     if (provider !== 'all') query.set('provider', provider);
     if (accountId !== 'all') query.set('accountId', accountId);
+    const queryString = query.toString();
 
     try {
-      const response = await fetch(`/api/conversations/metrics${query.size ? `?${query.toString()}` : ''}`, {
+      const response = await fetch(`/api/conversations/metrics${queryString ? `?${queryString}` : ''}`, {
         cache: 'no-store',
         signal: controller.signal,
       });
@@ -214,6 +217,11 @@ export default function InboxAssignmentEnhancements() {
       if (!verified) throw new Error('Inbox counts were incomplete.');
 
       RUNTIME_METRICS_CACHE.set(scopeKey, { metrics: verified, fetchedAt: Date.now() });
+      while (RUNTIME_METRICS_CACHE.size > 48) {
+        const oldest = RUNTIME_METRICS_CACHE.keys().next().value as string | undefined;
+        if (!oldest) break;
+        RUNTIME_METRICS_CACHE.delete(oldest);
+      }
       setMetrics(verified);
     } catch (error) {
       if ((error as { name?: string })?.name === 'AbortError') return;
@@ -377,9 +385,10 @@ export default function InboxAssignmentEnhancements() {
       if (metricsTimer.current !== null) window.clearTimeout(metricsTimer.current);
       if (highlightTimer.current !== null) window.clearTimeout(highlightTimer.current);
       if (targetTimer.current !== null) window.clearTimeout(targetTimer.current);
-      for (const target of targets) delete target.element.dataset.inboxVerifiedCountTarget;
+      for (const target of targetsRef.current) delete target.element.dataset.inboxVerifiedCountTarget;
+      targetsRef.current = [];
     };
-  }, [scheduleHighlightRefresh, scheduleMetricsRefresh, seenKey, targets]);
+  }, [scheduleHighlightRefresh, scheduleMetricsRefresh, seenKey]);
 
   return <>
     <style>{`
