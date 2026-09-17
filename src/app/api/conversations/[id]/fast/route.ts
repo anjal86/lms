@@ -9,21 +9,23 @@ const HISTORY_BACKFILL_INTERVAL_MS = 2 * 60 * 1000;
 const historyBackfillAt = new Map<string, number>();
 const historyBackfillPromises = new Map<string, Promise<void>>();
 
-async function maybeBackfillMetaHistory(
+function maybeBackfillMetaHistory(
   conversationId: string,
   provider: string,
   localMessageCount: number,
   expectedMessageCount: number | null
 ) {
-  if (!['facebook', 'instagram'].includes(provider)) return;
-  if (expectedMessageCount !== null && localMessageCount >= expectedMessageCount) return;
+  if (!['facebook', 'instagram'].includes(provider)) return false;
+  if (expectedMessageCount !== null && localMessageCount >= expectedMessageCount) return false;
 
   const lastAttempt = historyBackfillAt.get(conversationId) || 0;
-  if (Date.now() - lastAttempt < HISTORY_BACKFILL_INTERVAL_MS) return;
+  if (Date.now() - lastAttempt < HISTORY_BACKFILL_INTERVAL_MS) return false;
 
   let promise = historyBackfillPromises.get(conversationId);
   if (!promise) {
-    promise = backfillMetaConversationMessages(conversationId, { maxPages: 20 })
+    // History repair is maintenance work. Never make the operator wait for it
+    // before rendering the locally available thread.
+    promise = backfillMetaConversationMessages(conversationId, { maxPages: 4 })
       .then((result) => {
         if (result.errors.length) {
           console.warn(`Meta history backfill for ${conversationId} completed with warnings:`, result.errors[0]);
@@ -39,7 +41,7 @@ async function maybeBackfillMetaHistory(
     historyBackfillPromises.set(conversationId, promise);
   }
 
-  await promise;
+  return true;
 }
 
 const CONVERSATION_SELECT = `
@@ -129,46 +131,19 @@ export async function GET(
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
   }
 
-  let messages = [...(messageResult.data || [])].reverse();
-  let messageTotal = messageResult.count || 0;
+  const messages = [...(messageResult.data || [])].reverse();
+  const messageTotal = messageResult.count || 0;
 
   const conversation = conversationResult.data;
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
   const rawExpectedCount = Number(metadata.message_count);
   const expectedMessageCount = Number.isFinite(rawExpectedCount) && rawExpectedCount > 0 ? rawExpectedCount : null;
 
-  if (
-    ['facebook', 'instagram'].includes(conversation.provider) &&
-    conversation.connection_id &&
-    (messageTotal <= 1 || (expectedMessageCount !== null && messageTotal < expectedMessageCount))
-  ) {
-    await maybeBackfillMetaHistory(id, conversation.provider, messageTotal, expectedMessageCount);
-
-    const refreshed = await actor.supabase
-      .from('lead_messages')
-      .select(`
-        id,
-        conversation_id,
-        direction,
-        message_type,
-        body,
-        metadata,
-        delivery_status,
-        failure_message,
-        sent_at,
-        created_at,
-        author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
-      `, { count: 'exact' })
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('conversation_id', id)
-      .order('sent_at', { ascending: false })
-      .limit(messageLimit);
-
-    if (!refreshed.error && refreshed.data) {
-      messages = [...refreshed.data].reverse();
-      messageTotal = refreshed.count || 0;
-    }
-  }
+  const historyBackfillScheduled = Boolean(
+    conversation.connection_id
+    && (messageTotal <= 1 || (expectedMessageCount !== null && messageTotal < expectedMessageCount))
+    && maybeBackfillMetaHistory(id, conversation.provider, messageTotal, expectedMessageCount)
+  );
 
   return NextResponse.json({
     conversation,
@@ -176,6 +151,7 @@ export async function GET(
     messageTotal,
     hasOlderMessages: messageTotal > messages.length,
     messageLimit,
+    historyBackfillScheduled,
   }, {
     headers: {
       'Cache-Control': 'private, no-store',
