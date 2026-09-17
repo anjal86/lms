@@ -1,10 +1,9 @@
 /** @type {import('next').NextConfig} */
 
-function configuredSupabase() {
-  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!raw) return null;
+function configuredHttpUrl(value) {
+  if (!value) return null;
   try {
-    const url = new URL(raw);
+    const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol)) return null;
     return url;
   } catch {
@@ -12,9 +11,15 @@ function configuredSupabase() {
   }
 }
 
+function configuredSupabase() {
+  return configuredHttpUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+}
+
 const isDev = process.env.NODE_ENV === 'development';
 const supabaseUrl = configuredSupabase();
+const chatwootUrl = configuredHttpUrl(process.env.NEXT_PUBLIC_CHATWOOT_INBOX_URL);
 const supabaseOrigin = supabaseUrl?.origin || '';
+const chatwootOrigin = chatwootUrl?.origin || '';
 const supabaseWsOrigin = supabaseOrigin
   ? supabaseOrigin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
   : '';
@@ -80,8 +85,12 @@ const nextConfig = {
       supabaseWsOrigin,
       ...(isDev ? ['http://localhost:8000', 'ws://localhost:8000'] : []),
     ].filter(Boolean);
+    const frameSources = ["'self'", chatwootOrigin].filter(Boolean);
 
     const scriptSources = ["'self'", "'unsafe-inline'", ...(isDev ? ["'unsafe-eval'"] : [])];
+    const microphonePolicy = chatwootOrigin
+      ? `microphone=(self \"${chatwootOrigin}\")`
+      : 'microphone=()';
 
     const csp = [
       "default-src 'self'",
@@ -89,6 +98,7 @@ const nextConfig = {
       "frame-ancestors 'none'",
       "form-action 'self'",
       "object-src 'none'",
+      `frame-src ${frameSources.join(' ')}`,
       `script-src ${scriptSources.join(' ')}`,
       "script-src-attr 'none'",
       "style-src 'self' 'unsafe-inline'",
@@ -105,7 +115,7 @@ const nextConfig = {
         { key: 'X-Frame-Options', value: 'DENY' },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()' },
+        { key: 'Permissions-Policy', value: `camera=(), ${microphonePolicy}, geolocation=(), payment=(), usb=(), interest-cohort=()` },
         { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
         { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
         { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
