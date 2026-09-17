@@ -1,7 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
+import { normalizeChatwootMessage } from '@/lib/integrations/chatwoot-adapter';
+import { createChatwootMessage } from '@/lib/integrations/chatwoot-client';
+import { resolveActiveChatwootRuntime } from '@/lib/integrations/chatwoot-runtime';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ChannelDeliveryError, sendChannelAttachment, sendChannelText } from '@/lib/integrations/channel-sender';
 
@@ -57,6 +60,17 @@ function messageType(mimeType: string) {
   return 'file';
 }
 
+function chatwootRequestHash(direction: 'outbound' | 'internal', body: string) {
+  return createHash('sha256')
+    .update(JSON.stringify({ direction, body }))
+    .digest('hex');
+}
+
+function positiveInteger(value: unknown) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function findExistingRequest(conversationId: string, clientRequestId: string) {
   const admin = createSupabaseAdminClient();
   const { data } = await admin
@@ -83,8 +97,10 @@ async function updateConversationAndLead(input: {
     .from('lead_conversations')
     .update({
       last_message_at: input.now,
+      inbox_activity_at: input.now,
       last_message_preview: input.direction === 'internal' ? `[Note] ${input.body.slice(0, 160)}` : input.body.slice(0, 180),
       status: 'open',
+      ...(input.direction === 'outbound' ? { needs_reply: false, last_outbound_at: input.now } : {}),
     })
     .eq('id', input.conversationId);
 
@@ -116,6 +132,142 @@ async function updateConversationAndLead(input: {
       last_activity_type: input.provider === 'whatsapp' ? 'whatsapp' : input.provider === 'email' ? 'email' : 'system',
     })
     .eq('id', input.leadId);
+}
+
+async function sendActiveChatwootMessage(input: {
+  workspaceId: string;
+  conversationId: string;
+  leadId: string | null;
+  actorId: string;
+  provider: string;
+  clientRequestId: string;
+  body: string;
+  direction: 'outbound' | 'internal';
+  accountId: number;
+  chatwootConversationId: number;
+}) {
+  const admin = createSupabaseAdminClient();
+  const requestHash = chatwootRequestHash(input.direction, input.body);
+  const { data: claimData, error: claimError } = await admin.rpc('claim_chatwoot_outbound_request', {
+    p_workspace_id: input.workspaceId,
+    p_conversation_id: input.conversationId,
+    p_client_request_id: input.clientRequestId,
+    p_request_hash: requestHash,
+    p_direction: input.direction,
+  });
+
+  if (claimError) {
+    const status = claimError.code === '22023' ? 409 : 500;
+    console.error('Chatwoot outbound idempotency claim failed:', claimError.message);
+    return NextResponse.json({
+      error: status === 409
+        ? 'This idempotency key was already used for a different message.'
+        : 'Unable to claim Chatwoot outbound request.',
+    }, { status });
+  }
+
+  const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as {
+    request_id?: string;
+    should_process?: boolean;
+    request_status?: string;
+    existing_message_id?: number | string | null;
+    existing_sent_at?: string | null;
+  } | null;
+
+  if (!claim?.request_id) {
+    return NextResponse.json({ error: 'Unable to claim Chatwoot outbound request.' }, { status: 500 });
+  }
+
+  if (!claim.should_process) {
+    const existingMessageId = positiveInteger(claim.existing_message_id);
+    if (claim.request_status === 'sent' && existingMessageId) {
+      const sentAt = claim.existing_sent_at || new Date().toISOString();
+      return NextResponse.json({
+        message: {
+          id: `chatwoot-message:${existingMessageId}`,
+          conversation_id: input.conversationId,
+          direction: input.direction,
+          message_type: input.direction === 'internal' ? 'internal_note' : 'text',
+          body: input.body,
+          metadata: {
+            chatwoot_message_id: existingMessageId,
+            chatwoot_private: input.direction === 'internal',
+          },
+          delivery_status: 'sent',
+          failure_message: null,
+          sent_at: sentAt,
+          created_at: sentAt,
+          author_profile: null,
+        },
+        duplicate: true,
+        source: 'chatwoot',
+      }, { status: 200 });
+    }
+
+    return NextResponse.json({
+      pending: true,
+      duplicate: true,
+      source: 'chatwoot',
+    }, { status: 202 });
+  }
+
+  try {
+    const rawMessage = await createChatwootMessage({
+      accountId: input.accountId,
+      conversationId: input.chatwootConversationId,
+      content: input.body,
+      private: input.direction === 'internal',
+    });
+    const chatwootMessageId = positiveInteger(rawMessage.id);
+    if (!chatwootMessageId) throw new Error('Chatwoot send response did not contain a message ID.');
+
+    const message = normalizeChatwootMessage(rawMessage, input.conversationId);
+    const sentAt = message.sent_at || new Date().toISOString();
+    const { error: finalizeError } = await admin
+      .from('chatwoot_outbound_requests')
+      .update({
+        status: 'sent',
+        chatwoot_message_id: chatwootMessageId,
+        sent_at: sentAt,
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', claim.request_id)
+      .eq('workspace_id', input.workspaceId)
+      .eq('conversation_id', input.conversationId);
+    if (finalizeError) throw finalizeError;
+
+    await updateConversationAndLead({
+      conversationId: input.conversationId,
+      leadId: input.leadId,
+      actorId: input.actorId,
+      provider: input.provider,
+      body: input.body,
+      direction: input.direction,
+      externalMessageId: String(chatwootMessageId),
+      now: sentAt,
+    });
+
+    return NextResponse.json({
+      message,
+      source: 'chatwoot',
+    }, { status: 201 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Chatwoot delivery failed.';
+    await admin
+      .from('chatwoot_outbound_requests')
+      .update({
+        status: 'failed',
+        last_error: message.slice(0, 2000),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', claim.request_id)
+      .eq('workspace_id', input.workspaceId)
+      .eq('conversation_id', input.conversationId);
+
+    console.error('Active Chatwoot send failed:', error);
+    return NextResponse.json({ error: 'Unable to send through Chatwoot.' }, { status: 502 });
+  }
 }
 
 export async function POST(
@@ -153,6 +305,36 @@ export async function POST(
   const clientRequestId = parsed.data.clientRequestId || request.headers.get('idempotency-key')?.trim() || randomUUID();
   if (clientRequestId.length > 160) {
     return NextResponse.json({ error: 'Idempotency key is too long.' }, { status: 400 });
+  }
+
+  let chatwootRuntime = null;
+  try {
+    chatwootRuntime = await resolveActiveChatwootRuntime(actor.profile.workspace_id, conversation.id);
+  } catch (error) {
+    console.error('Active Chatwoot send runtime resolution failed:', error);
+    return NextResponse.json({ error: 'Unable to resolve Chatwoot delivery path.' }, { status: 502 });
+  }
+
+  if (chatwootRuntime) {
+    if (parsed.data.attachment) {
+      return NextResponse.json({
+        error: 'Attachments are not enabled on the active Chatwoot path yet. Text replies and internal notes are available.',
+        code: 'CHATWOOT_ATTACHMENT_NOT_READY',
+      }, { status: 409 });
+    }
+
+    return sendActiveChatwootMessage({
+      workspaceId: actor.profile.workspace_id,
+      conversationId: conversation.id,
+      leadId: conversation.lead_id || null,
+      actorId: actor.user.id,
+      provider: conversation.provider,
+      clientRequestId,
+      body: parsed.data.body,
+      direction: parsed.data.direction,
+      accountId: chatwootRuntime.accountId,
+      chatwootConversationId: chatwootRuntime.conversationId,
+    });
   }
 
   const existing = await findExistingRequest(conversationId, clientRequestId);
