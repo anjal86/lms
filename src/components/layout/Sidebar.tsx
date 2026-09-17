@@ -13,7 +13,6 @@ import {
   LogOut,
   Settings2,
   ShieldCheck,
-  UserCog,
   UserRound,
   Users,
   Zap,
@@ -110,9 +109,7 @@ export default function Sidebar() {
     ...(can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3 }] : []),
   ];
   const admin: NavItem[] = isAgent ? [] : [
-    { label: 'Workspace', href: '/admin', icon: ShieldCheck },
-    { label: 'People', href: '/admin/people', icon: UserCog },
-    ...(can('permissions.view') ? [{ label: 'Permissions', href: '/admin/permissions', icon: ShieldCheck }] : []),
+    { label: 'Workspace admin', href: '/admin', icon: ShieldCheck },
   ];
 
   const handleStatusChange = (status: AgentStatus) => { updateAgentStatus(status); showToast(`Status: ${STATUS_CONFIG[status].label}`, 'info'); };
