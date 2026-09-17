@@ -75,6 +75,10 @@ const migrations = [
     file: '202609170097_chatwoot_inbox_activation.sql',
     marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_inboxes' and column_name='traffic_mode') and to_regclass('public.chatwoot_inboxes_connection_uidx') is not null",
   },
+  {
+    file: '202609170098_chatwoot_outbound_idempotency.sql',
+    marker: "select to_regclass('public.chatwoot_outbound_requests') is not null and to_regprocedure('public.claim_chatwoot_outbound_request(uuid,uuid,text,text,text)') is not null",
+  },
 ];
 
 for (const migration of migrations) {
