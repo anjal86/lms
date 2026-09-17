@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import { useApp } from '@/lib/store';
@@ -296,13 +296,13 @@ export default function InboxAssignmentEnhancements() {
     }, HIGHLIGHT_REFRESH_DEBOUNCE_MS);
   }, [refreshAssignmentHighlights]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const cached = RUNTIME_METRICS_CACHE.get(scopeKey);
     setMetrics(cached?.metrics || null);
-    scheduleTargetSync();
+    syncTargets();
     scheduleMetricsRefresh();
     scheduleHighlightRefresh();
-  }, [scheduleHighlightRefresh, scheduleMetricsRefresh, scheduleTargetSync, scopeKey]);
+  }, [scheduleHighlightRefresh, scheduleMetricsRefresh, scopeKey, syncTargets]);
 
   useEffect(() => {
     const observer = new MutationObserver(scheduleTargetSync);
