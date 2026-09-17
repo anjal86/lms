@@ -7,8 +7,8 @@ type UnknownRecord = Record<string, unknown>;
 type MatchResult = {
   linked: boolean;
   leadConversationId: string | null;
-  matchedBy: 'source_id' | 'phone' | 'email' | null;
-  reason: 'linked' | 'unmapped_inbox' | 'contact_unavailable' | 'no_match' | 'ambiguous' | 'link_conflict';
+  matchedBy: 'source_id' | 'phone' | 'email' | 'created' | null;
+  reason: 'linked' | 'created' | 'unmapped_inbox' | 'contact_unavailable' | 'no_match' | 'ambiguous' | 'link_conflict';
 };
 
 function record(value: unknown): UnknownRecord {
@@ -59,16 +59,16 @@ async function uniqueConversationMatch(input: {
   caseInsensitive?: boolean;
 }) {
   const admin = createSupabaseAdminClient();
-  let query = admin
+  const base = admin
     .from('lead_conversations')
     .select('id')
     .eq('workspace_id', input.workspaceId)
     .eq('connection_id', input.connectionId)
     .limit(2);
 
-  query = input.caseInsensitive
-    ? query.ilike(input.column, input.value)
-    : query.eq(input.column, input.value);
+  const query = input.caseInsensitive
+    ? base.ilike(input.column, input.value)
+    : base.eq(input.column, input.value);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -105,6 +105,89 @@ async function saveLink(input: {
   return true;
 }
 
+async function createActiveConversationShell(input: {
+  workspaceId: string;
+  connectionId: string;
+  provider: string;
+  accountId: number;
+  accountLinkId: string;
+  chatwootInboxId: number;
+  chatwootConversationId: number;
+  chatwootContactId: number;
+  contact: UnknownRecord;
+  sourceId: string | null;
+}) {
+  const admin = createSupabaseAdminClient();
+  const externalThreadId = `chatwoot:${input.accountId}:${input.chatwootInboxId}:${input.chatwootConversationId}`;
+  const now = new Date().toISOString();
+  const customerName = text(input.contact.name)
+    ?? text(input.contact.available_name)
+    ?? text(input.contact.email)
+    ?? text(input.contact.phone_number)
+    ?? `Chatwoot contact ${input.chatwootContactId}`;
+
+  const row = {
+    workspace_id: input.workspaceId,
+    lead_id: null,
+    connection_id: input.connectionId,
+    provider: input.provider,
+    external_thread_id: externalThreadId,
+    external_contact_id: input.sourceId,
+    customer_name: customerName,
+    customer_phone: text(input.contact.phone_number),
+    customer_email: text(input.contact.email),
+    customer_avatar_url: text(input.contact.thumbnail) ?? text(input.contact.avatar_url),
+    last_message_preview: null,
+    status: 'open',
+    workflow_state: 'open',
+    priority: 'normal',
+    unread_count: 0,
+    needs_reply: false,
+    last_message_at: now,
+    metadata: {
+      source: 'chatwoot',
+      chatwoot_account_id: input.accountId,
+      chatwoot_inbox_id: input.chatwootInboxId,
+      chatwoot_conversation_id: input.chatwootConversationId,
+      chatwoot_contact_id: input.chatwootContactId,
+      chatwoot_managed: true,
+    },
+  };
+
+  const { data: created, error: insertError } = await admin
+    .from('lead_conversations')
+    .insert(row)
+    .select('id')
+    .single();
+
+  let leadConversationId = created?.id ? String(created.id) : null;
+  if (insertError?.code === '23505') {
+    const { data: existing, error: existingError } = await admin
+      .from('lead_conversations')
+      .select('id')
+      .eq('workspace_id', input.workspaceId)
+      .eq('connection_id', input.connectionId)
+      .eq('provider', input.provider)
+      .eq('external_thread_id', externalThreadId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    leadConversationId = existing?.id ? String(existing.id) : null;
+  } else if (insertError) {
+    throw insertError;
+  }
+
+  if (!leadConversationId) return null;
+  const linked = await saveLink({
+    workspaceId: input.workspaceId,
+    accountLinkId: input.accountLinkId,
+    chatwootConversationId: input.chatwootConversationId,
+    chatwootInboxId: input.chatwootInboxId,
+    chatwootContactId: input.chatwootContactId,
+    leadConversationId,
+  });
+  return linked ? leadConversationId : null;
+}
+
 export async function linkChatwootConversationToCrm(input: {
   workspaceId: string;
   accountLinkId: string;
@@ -116,7 +199,7 @@ export async function linkChatwootConversationToCrm(input: {
   const admin = createSupabaseAdminClient();
   const { data: inbox, error: inboxError } = await admin
     .from('chatwoot_inboxes')
-    .select('id,integration_connection_id,status')
+    .select('id,integration_connection_id,status,traffic_mode')
     .eq('workspace_id', input.workspaceId)
     .eq('chatwoot_account_link_id', input.accountLinkId)
     .eq('chatwoot_inbox_id', input.chatwootInboxId)
@@ -126,17 +209,31 @@ export async function linkChatwootConversationToCrm(input: {
     return { linked: false, leadConversationId: null, matchedBy: null, reason: 'unmapped_inbox' };
   }
 
+  const { data: connection, error: connectionError } = await admin
+    .from('integration_connections')
+    .select('id,provider,status')
+    .eq('workspace_id', input.workspaceId)
+    .eq('id', inbox.integration_connection_id)
+    .maybeSingle();
+  if (connectionError) throw connectionError;
+  if (!connection || !['connected', 'paused'].includes(connection.status)) {
+    return { linked: false, leadConversationId: null, matchedBy: null, reason: 'unmapped_inbox' };
+  }
+
   let contact: UnknownRecord;
   try {
     contact = await getChatwootContact(input.accountId, input.chatwootContactId);
   } catch (error) {
     console.warn(`Unable to load Chatwoot contact ${input.chatwootContactId} for CRM linking:`, error);
+    if (inbox.traffic_mode === 'active') throw error;
     return { linked: false, leadConversationId: null, matchedBy: null, reason: 'contact_unavailable' };
   }
   if (!Object.keys(contact).length) {
+    if (inbox.traffic_mode === 'active') throw new Error(`Chatwoot contact ${input.chatwootContactId} returned no data.`);
     return { linked: false, leadConversationId: null, matchedBy: null, reason: 'contact_unavailable' };
   }
 
+  const sourceId = contactSourceId(contact, input.chatwootInboxId);
   const candidates: Array<{
     matchedBy: 'source_id' | 'phone' | 'email';
     column: 'external_contact_id' | 'customer_phone' | 'customer_email';
@@ -146,7 +243,7 @@ export async function linkChatwootConversationToCrm(input: {
     {
       matchedBy: 'source_id',
       column: 'external_contact_id',
-      value: contactSourceId(contact, input.chatwootInboxId),
+      value: sourceId,
     },
     {
       matchedBy: 'phone',
@@ -186,6 +283,25 @@ export async function linkChatwootConversationToCrm(input: {
     return linked
       ? { linked: true, leadConversationId: match.id, matchedBy: candidate.matchedBy, reason: 'linked' }
       : { linked: false, leadConversationId: null, matchedBy: candidate.matchedBy, reason: 'link_conflict' };
+  }
+
+  if (inbox.traffic_mode === 'active') {
+    const createdId = await createActiveConversationShell({
+      workspaceId: input.workspaceId,
+      connectionId: inbox.integration_connection_id,
+      provider: connection.provider,
+      accountId: input.accountId,
+      accountLinkId: input.accountLinkId,
+      chatwootInboxId: input.chatwootInboxId,
+      chatwootConversationId: input.chatwootConversationId,
+      chatwootContactId: input.chatwootContactId,
+      contact,
+      sourceId,
+    });
+    if (createdId) {
+      return { linked: true, leadConversationId: createdId, matchedBy: 'created', reason: 'created' };
+    }
+    return { linked: false, leadConversationId: null, matchedBy: 'created', reason: 'link_conflict' };
   }
 
   return { linked: false, leadConversationId: null, matchedBy: null, reason: 'no_match' };
