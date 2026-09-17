@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 
@@ -13,6 +13,18 @@ const STATUS_CLASS: Record<StatusTone, string> = {
   danger: 'border-red-200 bg-red-50 text-red-700',
   info: 'border-blue-200 bg-blue-50 text-blue-700',
 };
+
+export function useUnsavedChangesGuard(dirty: boolean) {
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+}
 
 export function StatusBadge({ children, tone = 'neutral' }: { children: ReactNode; tone?: StatusTone }) {
   return <span className={`inline-flex min-h-6 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_CLASS[tone]}`}>{children}</span>;
@@ -52,6 +64,26 @@ export function SettingsSection({
   );
 }
 
+export function SettingsRow({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 border-b border-zinc-100 py-4 last:border-b-0 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0 sm:max-w-[58%]">
+        <div className="text-sm font-semibold text-zinc-900">{title}</div>
+        {description && <p className="mt-1 text-xs leading-5 text-zinc-500">{description}</p>}
+      </div>
+      <div className="min-w-0 sm:w-[38%] sm:max-w-md">{children}</div>
+    </div>
+  );
+}
+
 export function FieldLabel({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block text-xs font-semibold text-zinc-700">
@@ -73,6 +105,19 @@ export function EmptyBlock({ icon: Icon, title, description, action }: { icon: L
   );
 }
 
+export function SkeletonBlock({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="space-y-3 p-5" role="status" aria-label="Loading">
+      {Array.from({ length: rows }).map((_, index) => (
+        <div key={index} className="animate-pulse rounded-lg border border-zinc-100 bg-white p-4">
+          <div className="h-3 w-1/3 rounded bg-zinc-200" />
+          <div className="mt-3 h-2.5 w-4/5 rounded bg-zinc-100" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   return (
     <div className="flex min-h-52 items-center justify-center gap-2 text-xs text-zinc-500" role="status">
@@ -86,17 +131,34 @@ export function InlineNotice({ children, tone = 'info' }: { children: ReactNode;
   return <div className={`flex items-start gap-2.5 rounded-lg border px-4 py-3 text-xs leading-5 ${STATUS_CLASS[tone]}`}><Icon className="mt-0.5 h-4 w-4 shrink-0" /><div>{children}</div></div>;
 }
 
-export function DirtySaveBar({ dirty, saving, onSave, label = 'Save changes' }: { dirty: boolean; saving: boolean; onSave: () => void; label?: string }) {
+export function DirtySaveBar({
+  dirty,
+  saving,
+  onSave,
+  onDiscard,
+  label = 'Save changes',
+  message = 'Save before leaving this page.',
+}: {
+  dirty: boolean;
+  saving: boolean;
+  onSave: () => void;
+  onDiscard?: () => void;
+  label?: string;
+  message?: string;
+}) {
   if (!dirty) return null;
   return (
-    <div className="sticky bottom-3 z-20 mt-4 flex items-center justify-between gap-4 rounded-lg border border-zinc-300 bg-white/95 px-4 py-3 shadow-lg shadow-zinc-950/10 backdrop-blur">
+    <div className="sticky bottom-3 z-20 mt-4 flex items-center justify-between gap-4 rounded-lg border border-zinc-300 bg-white/95 px-4 py-3 shadow-lg shadow-zinc-950/10 backdrop-blur" aria-live="polite">
       <div className="min-w-0">
         <div className="text-xs font-semibold text-zinc-900">Unsaved changes</div>
-        <div className="mt-0.5 text-[11px] text-zinc-500">Save before leaving this page.</div>
+        <div className="mt-0.5 text-[11px] text-zinc-500">{message}</div>
       </div>
-      <button type="button" onClick={onSave} disabled={saving} className="button-primary shrink-0">
-        {saving && <Loader2 className="h-4 w-4 animate-spin" />} {label}
-      </button>
+      <div className="flex shrink-0 items-center gap-2">
+        {onDiscard && <button type="button" onClick={onDiscard} disabled={saving} className="button-secondary button-sm">Discard</button>}
+        <button type="button" onClick={onSave} disabled={saving} className="button-primary shrink-0">
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />} {label}
+        </button>
+      </div>
     </div>
   );
 }
@@ -118,9 +180,25 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    cancelRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onCancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      previous?.focus();
+    };
+  }, [open, busy, onCancel]);
+
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-zinc-950/35 p-4 backdrop-blur-[1px]" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) onCancel(); }}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-zinc-950/35 p-4 backdrop-blur-[1px]" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onCancel(); }}>
       <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-5 shadow-2xl">
         <div className="flex items-start gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600"><AlertTriangle className="h-4 w-4" /></span>
@@ -130,7 +208,7 @@ export function ConfirmDialog({
           </div>
         </div>
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" className="button-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button ref={cancelRef} type="button" className="button-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="button" className="button-danger" onClick={onConfirm} disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}{confirmLabel}</button>
         </div>
       </div>
