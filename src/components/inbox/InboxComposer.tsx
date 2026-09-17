@@ -52,8 +52,13 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>(DEFAULT_REPLIES);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const valueRef = useRef(value);
+  const attachmentRef = useRef<InboxComposerAttachment | null>(attachment);
   const draftKey = useMemo(() => `inbox:draft:${workspaceId}:${conversationId}:${mode}`, [conversationId, mode, workspaceId]);
   const quickKey = useMemo(() => `inbox:quick-replies:${workspaceId}`, [workspaceId]);
+
+  useEffect(() => { valueRef.current = value; }, [value]);
+  useEffect(() => { attachmentRef.current = attachment; }, [attachment]);
 
   useEffect(() => {
     try {
@@ -114,20 +119,35 @@ export default function InboxComposer({ workspaceId, conversationId, mode, onMod
 
   const send = async () => {
     const body = value.trim();
-    if ((!body && !attachment) || loading || sending || uploading) return;
+    const queuedAttachment = attachment;
+    if ((!body && !queuedAttachment) || loading || sending || uploading) return;
     if (mode === 'outbound' && !canReply) return;
 
-    if (body) {
-      const sent = await onSend({ body, mode });
-      if (!sent) return;
-      onChange('');
-      try { window.localStorage.removeItem(draftKey); } catch { /* noop */ }
-    }
-    if (attachment) {
-      const sent = await onSend({ body: '', attachment, mode: 'outbound' });
-      if (sent) setAttachment(null);
-    }
+    // Clear the composer before awaiting network I/O so the send feels immediate.
+    // The optimistic bubble is rendered by the parent while this request is in flight.
+    onChange('');
+    if (queuedAttachment) setAttachment(null);
+    setQuickOpen(false);
+    setEmojiOpen(false);
     onTyping?.(false);
+    try { window.localStorage.removeItem(draftKey); } catch { /* noop */ }
+
+    const sent = await onSend({
+      body,
+      attachment: queuedAttachment,
+      mode,
+    });
+
+    if (!sent) {
+      // Never overwrite text or a new attachment the operator entered while the
+      // failed request was in flight. The failed bubble also remains retryable.
+      if (!valueRef.current.trim() && body) onChange(body);
+      if (!attachmentRef.current && queuedAttachment) setAttachment(queuedAttachment);
+      window.requestAnimationFrame(() => composerRef?.current?.focus());
+      return;
+    }
+
+    window.requestAnimationFrame(() => composerRef?.current?.focus());
   };
 
   const addQuickReply = () => {
