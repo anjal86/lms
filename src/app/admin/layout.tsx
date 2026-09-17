@@ -39,6 +39,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       ariaLabel="Workspace administration sections"
       mobileLabel="Admin section"
       groups={groups}
+      variant="admin"
     >
       {children}
     </SectionRailShell>
