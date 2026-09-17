@@ -71,6 +71,53 @@ function exactTime(value?: string | null) {
   return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function keepSelectedThreadAtLatest() {
+  if (typeof window === 'undefined') return;
+
+  let pane: HTMLElement | null = null;
+  let resizeObserver: ResizeObserver | null = null;
+  let mutationObserver: MutationObserver | null = null;
+  let cleanupTimer: number | null = null;
+  const startedAt = Date.now();
+
+  const scrollLatest = () => {
+    if (!pane) return;
+    pane.scrollTop = pane.scrollHeight;
+  };
+
+  const cleanup = () => {
+    resizeObserver?.disconnect();
+    mutationObserver?.disconnect();
+    if (pane) pane.removeEventListener('load', scrollLatest, true);
+    if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
+  };
+
+  const attach = () => {
+    pane = document.querySelector<HTMLElement>('[aria-label="Message history"]');
+    if (!pane) {
+      if (Date.now() - startedAt < 1500) window.requestAnimationFrame(attach);
+      return;
+    }
+
+    scrollLatest();
+
+    mutationObserver = new MutationObserver(scrollLatest);
+    mutationObserver.observe(pane, { childList: true, subtree: true });
+
+    const content = pane.firstElementChild;
+    if (content && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(scrollLatest);
+      resizeObserver.observe(content);
+    }
+
+    // Media can change the thread height after the React commit without mutating the DOM.
+    pane.addEventListener('load', scrollLatest, true);
+    cleanupTimer = window.setTimeout(cleanup, 1800);
+  };
+
+  window.requestAnimationFrame(() => window.requestAnimationFrame(attach));
+}
+
 export default function InboxConversationListItem({ conversation, selected, contactLabel, statusText, statusDanger, onSelect }: Props) {
   const Icon = PROVIDER_ICONS[conversation.provider] || MessageSquare;
   const providerTone = PROVIDER_TONES[conversation.provider] || 'bg-zinc-700 text-white';
@@ -84,7 +131,10 @@ export default function InboxConversationListItem({ conversation, selected, cont
     data-conversation-item="true"
     aria-current={selected ? 'true' : undefined}
     aria-label={`${conversation.customer_name || contactLabel}, ${conversation.unread_count || 0} unread messages, ${actionState}, via ${account}`}
-    onClick={onSelect}
+    onClick={() => {
+      onSelect();
+      keepSelectedThreadAtLatest();
+    }}
     className={`relative min-h-[5.25rem] w-full border-l-2 px-3 py-3 text-left transition-colors hover:bg-zinc-50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${selected ? 'border-l-blue-600 bg-blue-50/55' : 'border-l-transparent bg-white'}`}
   >
     <div className="flex min-w-0 items-start gap-2.5">
