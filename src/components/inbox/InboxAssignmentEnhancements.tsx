@@ -13,7 +13,7 @@ type AssignmentNotification = {
 };
 
 const ASSIGNMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
-const REFRESH_DEBOUNCE_MS = 350;
+const REFRESH_DEBOUNCE_MS = 500;
 
 function sameTargets(a: HTMLElement[], b: HTMLElement[]) {
   return a.length === b.length && a.every((node, index) => node === b[index]);
@@ -64,20 +64,26 @@ export default function InboxAssignmentEnhancements() {
   }, []);
 
   const refreshMineCount = useCallback(async () => {
-    const query = new URLSearchParams({ filter: 'mine', limit: '1', sort: 'newest' });
-    if (provider !== 'all') query.set('provider', provider);
-    if (accountId !== 'all') query.set('accountId', accountId);
-    if (accountProvider !== 'all') query.set('accountProvider', accountProvider);
+    if (!isSupabaseConfigured() || !currentUser.id || !config.workspace.id) return;
 
     try {
-      const response = await fetch(`/api/conversations?${query.toString()}`, { cache: 'no-store' });
-      if (!response.ok) return;
-      const payload = await response.json().catch(() => ({})) as { total?: number };
-      setMineCount(Number.isFinite(Number(payload.total)) ? Number(payload.total) : 0);
+      const supabase = getSupabaseBrowserClient();
+      let query = supabase
+        .from('lead_conversations')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', config.workspace.id)
+        .eq('assigned_to', currentUser.id)
+        .neq('workflow_state', 'closed');
+
+      if (accountId !== 'all') query = query.eq('connection_id', accountId);
+      else if (provider !== 'all') query = query.eq('provider', provider);
+
+      const { count, error } = await query;
+      if (!error) setMineCount(count || 0);
     } catch {
-      // Keep the last known count during a transient network failure.
+      // Badge is optional UI; never let it compete with the Inbox critical path.
     }
-  }, [accountId, accountProvider, provider]);
+  }, [accountId, config.workspace.id, currentUser.id, provider]);
 
   const refreshAssignmentHighlights = useCallback(async () => {
     const items = Array.from(document.querySelectorAll<HTMLElement>('[data-conversation-id]'));
@@ -129,8 +135,12 @@ export default function InboxAssignmentEnhancements() {
 
   const refresh = useCallback(() => {
     syncTargets();
-    void refreshMineCount();
-    void refreshAssignmentHighlights();
+    // Delay decoration work one tick so the list/thread request gets first access
+    // to the local PostgREST connection pool.
+    window.setTimeout(() => {
+      void refreshMineCount();
+      void refreshAssignmentHighlights();
+    }, 750);
   }, [refreshAssignmentHighlights, refreshMineCount, syncTargets]);
 
   const scheduleRefresh = useCallback(() => {
@@ -147,7 +157,7 @@ export default function InboxAssignmentEnhancements() {
     const onFocus = () => scheduleRefresh();
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') scheduleRefresh();
-    }, 30_000);
+    }, 60_000);
 
     window.addEventListener('crm:data-mutated', onDataChange);
     window.addEventListener('inbox:provider-sync', onDataChange);
