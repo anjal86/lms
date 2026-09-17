@@ -1,149 +1,61 @@
-'use client';
+import Link from 'next/link';
+import { ExternalLink, Settings2 } from 'lucide-react';
+import LegacyInboxPage from '@/components/inbox/LegacyInboxPage';
 
-import { Suspense, useEffect, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
-import StableInbox from '@/components/inbox/StableInbox';
-import InboxChannelScopeBar from '@/components/inbox/InboxChannelScopeBar';
-import InboxCommandPalette from '@/components/inbox/InboxCommandPalette';
-import InboxAssignmentEnhancements from '@/components/inbox/InboxAssignmentEnhancements';
-
-const AUTO_SYNC_INTERVAL_MS = 60_000;
-const AUTO_SYNC_MIN_GAP_MS = 30_000;
-const INITIAL_SYNC_DELAY_MS = 8_000;
-const MAX_MAINTENANCE_PASSES = 2;
-const MAINTENANCE_PASS_DELAY_MS = 1_500;
-
-type SyncPayload = {
-  messagesCount?: number;
-  olderConversationsDiscovered?: number;
-  historyPreviewMessagesInserted?: number;
-  maintenanceContinues?: boolean;
-  conversationDiscovery?: {
-    conversationsDiscovered?: number;
-    previewMessagesInserted?: number;
-    historyComplete?: boolean;
-  };
-};
-
-function ScopedInbox() {
-  const params = useSearchParams();
-  const accountId = params.get('accountId') || 'all';
-  const accountProvider = params.get('accountProvider') || 'all';
-  const provider = params.get('provider') || 'all';
-
-  return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
-      <InboxChannelScopeBar />
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <StableInbox key={`${provider}:${accountProvider}:${accountId}`} />
-        <InboxAssignmentEnhancements />
-      </div>
-      <InboxCommandPalette />
-    </div>
-  );
-}
-
-function syncPayloadChanged(payload: SyncPayload) {
-  return [
-    payload.messagesCount,
-    payload.olderConversationsDiscovered,
-    payload.historyPreviewMessagesInserted,
-    payload.conversationDiscovery?.conversationsDiscovered,
-    payload.conversationDiscovery?.previewMessagesInserted,
-  ].some((value) => Number(value || 0) > 0);
+function configuredChatwootUrl() {
+  const value = process.env.NEXT_PUBLIC_CHATWOOT_INBOX_URL?.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
 }
 
 export default function InboxPage() {
-  const syncingRef = useRef(false);
-  const lastSyncStartedAtRef = useRef(0);
+  const chatwootUrl = configuredChatwootUrl();
 
-  useEffect(() => {
-    let disposed = false;
-    let activeController: AbortController | null = null;
-    let maintenanceTimer: number | null = null;
-
-    const waitForMaintenancePass = () => new Promise<void>((resolve) => {
-      maintenanceTimer = window.setTimeout(() => {
-        maintenanceTimer = null;
-        resolve();
-      }, MAINTENANCE_PASS_DELAY_MS);
-    });
-
-    const syncProviders = async () => {
-      if (disposed || document.visibilityState !== 'visible' || syncingRef.current) return;
-
-      const now = Date.now();
-      if (now - lastSyncStartedAtRef.current < AUTO_SYNC_MIN_GAP_MS) return;
-
-      syncingRef.current = true;
-      lastSyncStartedAtRef.current = now;
-      const controller = new AbortController();
-      activeController = controller;
-
-      try {
-        // Provider discovery/history maintenance must stay behind the operator-facing
-        // list/thread path. Keep each visible-session pass bounded so opening Inbox
-        // cannot be starved by long-running history imports.
-        for (let pass = 0; pass < MAX_MAINTENANCE_PASSES && !disposed; pass += 1) {
-          const response = await fetch('/api/conversations/sync?mode=live', {
-            method: 'POST',
-            cache: 'no-store',
-            signal: controller.signal,
-          });
-
-          const payload = await response.json().catch(() => ({})) as SyncPayload;
-          if (!response.ok) {
-            if (process.env.NODE_ENV !== 'production') {
-              console.warn('Automatic Inbox provider sync failed.', response.status);
-            }
-            break;
-          }
-
-          if (syncPayloadChanged(payload) && !disposed) {
-            window.dispatchEvent(new Event('inbox:provider-sync'));
-          }
-          if (payload.maintenanceContinues !== true) break;
-          await waitForMaintenancePass();
-        }
-      } catch (error) {
-        if ((error as { name?: string })?.name !== 'AbortError' && process.env.NODE_ENV !== 'production') {
-          console.warn('Automatic Inbox provider sync failed.', error);
-        }
-      } finally {
-        if (activeController === controller) activeController = null;
-        syncingRef.current = false;
-      }
-    };
-
-    const onVisible = () => {
-      if (document.visibilityState === 'visible' && lastSyncStartedAtRef.current > 0) void syncProviders();
-    };
-    const onFocus = () => {
-      if (lastSyncStartedAtRef.current > 0 && Date.now() - lastSyncStartedAtRef.current >= AUTO_SYNC_MIN_GAP_MS) {
-        void syncProviders();
-      }
-    };
-
-    const initialTimer = window.setTimeout(() => void syncProviders(), INITIAL_SYNC_DELAY_MS);
-    const interval = window.setInterval(() => void syncProviders(), AUTO_SYNC_INTERVAL_MS);
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onFocus);
-
-    return () => {
-      disposed = true;
-      window.clearTimeout(initialTimer);
-      window.clearInterval(interval);
-      if (maintenanceTimer !== null) window.clearTimeout(maintenanceTimer);
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onFocus);
-      activeController?.abort();
-      syncingRef.current = false;
-    };
-  }, []);
+  // Keep the previous Inbox available as a zero-config rollback path while the
+  // Chatwoot migration is staged. Once NEXT_PUBLIC_CHATWOOT_INBOX_URL exists,
+  // Chatwoot becomes the operator-facing Inbox UI.
+  if (!chatwootUrl) return <LegacyInboxPage />;
 
   return (
-    <Suspense fallback={<div className="flex h-full items-center justify-center p-8 text-xs text-zinc-400">Loading inbox…</div>}>
-      <ScopedInbox />
-    </Suspense>
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-white">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+          <span className="truncate text-xs font-medium text-zinc-700">Chatwoot Inbox</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Link
+            href="/inbox/channels/chatwoot"
+            className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-950"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Setup
+          </Link>
+          <a
+            href={chatwootUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-[32px] items-center gap-1.5 rounded-md px-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-950"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open full screen
+          </a>
+        </div>
+      </div>
+
+      <iframe
+        src={chatwootUrl}
+        title="Chatwoot Inbox"
+        className="min-h-0 flex-1 border-0 bg-white"
+        allow="clipboard-read; clipboard-write; microphone"
+        referrerPolicy="strict-origin-when-cross-origin"
+      />
+    </div>
   );
 }

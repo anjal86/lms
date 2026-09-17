@@ -1,7 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
+import { normalizeChatwootMessage } from '@/lib/integrations/chatwoot-adapter';
+import { createChatwootAttachmentMessage, createChatwootMessage } from '@/lib/integrations/chatwoot-client';
+import { resolveActiveChatwootRuntime } from '@/lib/integrations/chatwoot-runtime';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ChannelDeliveryError, sendChannelAttachment, sendChannelText } from '@/lib/integrations/channel-sender';
 
@@ -14,6 +17,8 @@ const AttachmentSchema = z.object({
   mimeType: z.string().trim().min(3).max(160),
   size: z.number().int().positive().max(15 * 1024 * 1024),
 });
+
+type ActiveAttachment = z.infer<typeof AttachmentSchema>;
 
 const OutboundMessageSchema = z.object({
   body: z.string().trim().max(4000).default(''),
@@ -57,6 +62,34 @@ function messageType(mimeType: string) {
   return 'file';
 }
 
+function attachmentLabel(attachment: ActiveAttachment) {
+  const type = messageType(attachment.mimeType);
+  if (type === 'image') return '[Photo]';
+  if (type === 'video') return '[Video]';
+  if (type === 'audio') return '[Voice message]';
+  return `[File:${attachment.fileName}]`;
+}
+
+function chatwootRequestHash(direction: 'outbound' | 'internal', body: string, attachment?: ActiveAttachment) {
+  return createHash('sha256')
+    .update(JSON.stringify({
+      direction,
+      body,
+      attachment: attachment ? {
+        storagePath: attachment.storagePath,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      } : null,
+    }))
+    .digest('hex');
+}
+
+function positiveInteger(value: unknown) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function findExistingRequest(conversationId: string, clientRequestId: string) {
   const admin = createSupabaseAdminClient();
   const { data } = await admin
@@ -83,8 +116,10 @@ async function updateConversationAndLead(input: {
     .from('lead_conversations')
     .update({
       last_message_at: input.now,
+      inbox_activity_at: input.now,
       last_message_preview: input.direction === 'internal' ? `[Note] ${input.body.slice(0, 160)}` : input.body.slice(0, 180),
       status: 'open',
+      ...(input.direction === 'outbound' ? { needs_reply: false, last_outbound_at: input.now } : {}),
     })
     .eq('id', input.conversationId);
 
@@ -116,6 +151,203 @@ async function updateConversationAndLead(input: {
       last_activity_type: input.provider === 'whatsapp' ? 'whatsapp' : input.provider === 'email' ? 'email' : 'system',
     })
     .eq('id', input.leadId);
+}
+
+async function markChatwootRequestFailed(input: {
+  requestId: string;
+  workspaceId: string;
+  conversationId: string;
+  error: string;
+}) {
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin
+    .from('chatwoot_outbound_requests')
+    .update({
+      status: 'failed',
+      last_error: input.error.slice(0, 2000),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', input.requestId)
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId);
+  if (error) console.error('Unable to mark Chatwoot outbound request failed:', error.message);
+}
+
+async function sendActiveChatwootMessage(input: {
+  workspaceId: string;
+  conversationId: string;
+  leadId: string | null;
+  actorId: string;
+  provider: string;
+  clientRequestId: string;
+  body: string;
+  direction: 'outbound' | 'internal';
+  accountId: number;
+  chatwootConversationId: number;
+  attachment?: ActiveAttachment;
+}) {
+  const admin = createSupabaseAdminClient();
+  const requestHash = chatwootRequestHash(input.direction, input.body, input.attachment);
+  const { data: claimData, error: claimError } = await admin.rpc('claim_chatwoot_outbound_request', {
+    p_workspace_id: input.workspaceId,
+    p_conversation_id: input.conversationId,
+    p_client_request_id: input.clientRequestId,
+    p_request_hash: requestHash,
+    p_direction: input.direction,
+  });
+
+  if (claimError) {
+    const status = claimError.code === '22023' ? 409 : 500;
+    console.error('Chatwoot outbound idempotency claim failed:', claimError.message);
+    return NextResponse.json({
+      error: status === 409
+        ? 'This idempotency key was already used for a different message.'
+        : 'Unable to claim Chatwoot outbound request.',
+    }, { status });
+  }
+
+  const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as {
+    request_id?: string;
+    should_process?: boolean;
+    request_status?: string;
+    existing_message_id?: number | string | null;
+    existing_sent_at?: string | null;
+  } | null;
+
+  if (!claim?.request_id) {
+    return NextResponse.json({ error: 'Unable to claim Chatwoot outbound request.' }, { status: 500 });
+  }
+
+  const previewBody = input.attachment ? attachmentLabel(input.attachment) : input.body;
+  const previewType = input.direction === 'internal'
+    ? 'internal_note'
+    : input.attachment
+      ? messageType(input.attachment.mimeType)
+      : 'text';
+
+  if (!claim.should_process) {
+    const existingMessageId = positiveInteger(claim.existing_message_id);
+    if (claim.request_status === 'sent' && existingMessageId) {
+      const sentAt = claim.existing_sent_at || new Date().toISOString();
+      return NextResponse.json({
+        message: {
+          id: `chatwoot-message:${existingMessageId}`,
+          conversation_id: input.conversationId,
+          direction: input.direction,
+          message_type: previewType,
+          body: previewBody,
+          metadata: {
+            chatwoot_message_id: existingMessageId,
+            chatwoot_private: input.direction === 'internal',
+            ...(input.attachment ? {
+              file_name: input.attachment.fileName,
+              mime_type: input.attachment.mimeType,
+              size: input.attachment.size,
+            } : {}),
+          },
+          delivery_status: 'sent',
+          failure_message: null,
+          sent_at: sentAt,
+          created_at: sentAt,
+          author_profile: null,
+        },
+        duplicate: true,
+        source: 'chatwoot',
+      }, { status: 200 });
+    }
+
+    return NextResponse.json({
+      pending: true,
+      duplicate: true,
+      source: 'chatwoot',
+    }, { status: 202 });
+  }
+
+  let rawMessage: Record<string, unknown>;
+  try {
+    if (input.attachment) {
+      const { data: file, error: downloadError } = await admin.storage
+        .from('conversation-media')
+        .download(input.attachment.storagePath);
+      if (downloadError || !file) {
+        throw new Error(downloadError?.message || 'Unable to load staged Chatwoot attachment.');
+      }
+      rawMessage = await createChatwootAttachmentMessage({
+        accountId: input.accountId,
+        conversationId: input.chatwootConversationId,
+        file,
+        fileName: input.attachment.fileName,
+      });
+    } else {
+      rawMessage = await createChatwootMessage({
+        accountId: input.accountId,
+        conversationId: input.chatwootConversationId,
+        content: input.body,
+        private: input.direction === 'internal',
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Chatwoot delivery failed.';
+    await markChatwootRequestFailed({
+      requestId: claim.request_id,
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: message,
+    });
+    console.error('Active Chatwoot send failed:', error);
+    return NextResponse.json({ error: 'Unable to send through Chatwoot.' }, { status: 502 });
+  }
+
+  const chatwootMessageId = positiveInteger(rawMessage.id);
+  if (!chatwootMessageId) {
+    console.error('Chatwoot accepted an outbound request but returned no message ID. Leaving the request in processing state to prevent a duplicate retry.');
+    return NextResponse.json({ error: 'Chatwoot accepted the message but returned an invalid response. Refresh the conversation before retrying.' }, { status: 502 });
+  }
+
+  const message = normalizeChatwootMessage(rawMessage, input.conversationId);
+  const sentAt = message.sent_at || new Date().toISOString();
+  const { error: finalizeError } = await admin
+    .from('chatwoot_outbound_requests')
+    .update({
+      status: 'sent',
+      chatwoot_message_id: chatwootMessageId,
+      sent_at: sentAt,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', claim.request_id)
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId);
+
+  if (finalizeError) {
+    // The provider already accepted the message. Never mark this failed or a retry
+    // could send the same customer message twice. The processing row remains a
+    // temporary duplicate-send guard while the operator refreshes the thread.
+    console.error('Chatwoot message sent but idempotency finalization failed:', finalizeError.message);
+  }
+
+  if (input.attachment) {
+    const { error: releaseError } = await admin.storage
+      .from('conversation-media')
+      .remove([input.attachment.storagePath]);
+    if (releaseError) console.warn('Unable to release staged Chatwoot attachment:', releaseError.message);
+  }
+
+  await updateConversationAndLead({
+    conversationId: input.conversationId,
+    leadId: input.leadId,
+    actorId: input.actorId,
+    provider: input.provider,
+    body: previewBody,
+    direction: input.direction,
+    externalMessageId: String(chatwootMessageId),
+    now: sentAt,
+  });
+
+  return NextResponse.json({
+    message,
+    source: 'chatwoot',
+  }, { status: 201 });
 }
 
 export async function POST(
@@ -153,6 +385,37 @@ export async function POST(
   const clientRequestId = parsed.data.clientRequestId || request.headers.get('idempotency-key')?.trim() || randomUUID();
   if (clientRequestId.length > 160) {
     return NextResponse.json({ error: 'Idempotency key is too long.' }, { status: 400 });
+  }
+
+  let chatwootRuntime = null;
+  try {
+    chatwootRuntime = await resolveActiveChatwootRuntime(actor.profile.workspace_id, conversation.id);
+  } catch (error) {
+    console.error('Active Chatwoot send runtime resolution failed:', error);
+    return NextResponse.json({ error: 'Unable to resolve Chatwoot delivery path.' }, { status: 502 });
+  }
+
+  if (chatwootRuntime) {
+    if (parsed.data.attachment) {
+      const expectedPrefix = `${actor.profile.workspace_id}/${conversation.id}/`;
+      if (!parsed.data.attachment.storagePath.startsWith(expectedPrefix)) {
+        return NextResponse.json({ error: 'Attachment does not belong to this conversation.' }, { status: 400 });
+      }
+    }
+
+    return sendActiveChatwootMessage({
+      workspaceId: actor.profile.workspace_id,
+      conversationId: conversation.id,
+      leadId: conversation.lead_id || null,
+      actorId: actor.user.id,
+      provider: conversation.provider,
+      clientRequestId,
+      body: parsed.data.body,
+      direction: parsed.data.direction,
+      accountId: chatwootRuntime.accountId,
+      chatwootConversationId: chatwootRuntime.conversationId,
+      attachment: parsed.data.attachment,
+    });
   }
 
   const existing = await findExistingRequest(conversationId, clientRequestId);

@@ -43,6 +43,7 @@ describe('buildIntegrationSetup', () => {
       tiktokOauthCallback: 'https://crm.example.com/api/integrations/oauth/tiktok/callback',
       metaWebhook: 'https://crm.example.com/api/integrations/webhooks/meta',
       tiktokWebhook: 'https://crm.example.com/api/integrations/webhooks/tiktok',
+      chatwootWebhook: 'https://crm.example.com/api/integrations/webhooks/chatwoot',
       leadWebhook: 'https://crm.example.com/api/leads/webhook',
     });
   });

@@ -17,6 +17,7 @@ export type IntegrationSetup = {
     tiktokOauthCallback: string;
     metaWebhook: string;
     tiktokWebhook: string;
+    chatwootWebhook: string;
     leadWebhook: string;
   };
 };
@@ -61,6 +62,7 @@ export function buildIntegrationSetup(baseUrlInput?: string): IntegrationSetup {
       tiktokOauthCallback: `${baseUrl}/api/integrations/oauth/tiktok/callback`,
       metaWebhook: `${baseUrl}/api/integrations/webhooks/meta`,
       tiktokWebhook: `${baseUrl}/api/integrations/webhooks/tiktok`,
+      chatwootWebhook: `${baseUrl}/api/integrations/webhooks/chatwoot`,
       leadWebhook: `${baseUrl}/api/leads/webhook`,
     },
   };

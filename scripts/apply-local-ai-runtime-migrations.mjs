@@ -59,6 +59,26 @@ const migrations = [
     file: '202609170093_inbox_queue_metrics.sql',
     marker: "select to_regprocedure('public.inbox_queue_metrics(uuid,uuid,text)') is not null",
   },
+  {
+    file: '202609170094_chatwoot_foundation.sql',
+    marker: "select to_regclass('public.chatwoot_accounts') is not null and to_regclass('public.chatwoot_inboxes') is not null and to_regclass('public.chatwoot_conversation_links') is not null and to_regclass('public.chatwoot_webhook_events') is not null",
+  },
+  {
+    file: '202609170095_chatwoot_per_account_webhook_secret.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_accounts' and column_name='webhook_secret_encrypted')",
+  },
+  {
+    file: '202609170096_chatwoot_webhook_worker.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_webhook_events' and column_name='locked_at') and to_regprocedure('public.claim_chatwoot_webhook_event()') is not null",
+  },
+  {
+    file: '202609170097_chatwoot_inbox_activation.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_inboxes' and column_name='traffic_mode') and to_regclass('public.chatwoot_inboxes_connection_uidx') is not null",
+  },
+  {
+    file: '202609170098_chatwoot_outbound_idempotency.sql',
+    marker: "select to_regclass('public.chatwoot_outbound_requests') is not null and to_regprocedure('public.claim_chatwoot_outbound_request(uuid,uuid,text,text,text)') is not null",
+  },
 ];
 
 for (const migration of migrations) {
