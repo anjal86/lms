@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
+import { normalizeChatwootMessage } from '@/lib/integrations/chatwoot-adapter';
+import { listChatwootMessages } from '@/lib/integrations/chatwoot-client';
+import { resolveActiveChatwootRuntime } from '@/lib/integrations/chatwoot-runtime';
 import { backfillMetaConversationMessages } from '@/lib/integrations/meta-history';
 
 export const runtime = 'nodejs';
@@ -93,39 +96,95 @@ export async function GET(
 
   const { id } = await context.params;
   const url = new URL(request.url);
-  const messageLimit = Math.min(1000, Math.max(40, Number(url.searchParams.get('messageLimit')) || 160));
+  const requestedMessageLimit = Math.min(1000, Math.max(40, Number(url.searchParams.get('messageLimit')) || 160));
 
-  const [conversationResult, messageResult] = await Promise.all([
+  const [conversationResult, chatwootRuntime] = await Promise.all([
     actor.supabase
       .from('lead_conversations')
       .select(CONVERSATION_SELECT)
       .eq('workspace_id', actor.profile.workspace_id)
       .eq('id', id)
       .maybeSingle(),
-    actor.supabase
-      .from('lead_messages')
-      .select(`
-        id,
-        conversation_id,
-        direction,
-        message_type,
-        body,
-        metadata,
-        delivery_status,
-        failure_message,
-        sent_at,
-        created_at,
-        author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
-      `, { count: 'exact' })
-      .eq('workspace_id', actor.profile.workspace_id)
-      .eq('conversation_id', id)
-      .order('sent_at', { ascending: false })
-      .limit(messageLimit),
+    resolveActiveChatwootRuntime(actor.profile.workspace_id, id).catch((error) => {
+      console.error('Active Chatwoot runtime resolution failed:', error);
+      return null;
+    }),
   ]);
 
   if (conversationResult.error || !conversationResult.data) {
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
+
+  const conversation = conversationResult.data;
+
+  if (chatwootRuntime) {
+    try {
+      // Active Chatwoot threads intentionally load only the newest provider page.
+      // This keeps the six-second operator refresh path O(1); older Chatwoot history
+      // is paged separately rather than replaying 160+ messages on every poll.
+      const result = await listChatwootMessages({
+        accountId: chatwootRuntime.accountId,
+        conversationId: chatwootRuntime.conversationId,
+      });
+      const messages = result.messages
+        .map((message) => normalizeChatwootMessage(message, conversation.id))
+        .sort((a, b) => Date.parse(a.sent_at) - Date.parse(b.sent_at));
+      const firstRaw = result.messages[0] as Record<string, unknown> | undefined;
+      const firstId = firstRaw ? Number(firstRaw.id) : 0;
+      const historyCursor = Number.isSafeInteger(firstId) && firstId > 0 ? firstId : null;
+      const metadata = (conversation.metadata || {}) as Record<string, unknown>;
+
+      return NextResponse.json({
+        conversation: {
+          ...conversation,
+          metadata: {
+            ...metadata,
+            chatwoot_active: true,
+            chatwoot_account_id: chatwootRuntime.accountId,
+            chatwoot_inbox_id: chatwootRuntime.inboxId,
+            chatwoot_conversation_id: chatwootRuntime.conversationId,
+          },
+        },
+        messages,
+        messageTotal: messages.length,
+        hasOlderMessages: messages.length >= 20,
+        messageLimit: Math.min(20, Math.max(1, messages.length || 20)),
+        historyCursor,
+        historyBackfillScheduled: false,
+        messageSource: 'chatwoot',
+      }, {
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'X-Inbox-Path': 'fast-chatwoot',
+          'X-Inbox-Source': 'chatwoot',
+        },
+      });
+    } catch (error) {
+      console.error('Active Chatwoot thread load failed:', error);
+      return NextResponse.json({ error: 'Unable to load Chatwoot messages.' }, { status: 502 });
+    }
+  }
+
+  const messageResult = await actor.supabase
+    .from('lead_messages')
+    .select(`
+      id,
+      conversation_id,
+      direction,
+      message_type,
+      body,
+      metadata,
+      delivery_status,
+      failure_message,
+      sent_at,
+      created_at,
+      author_profile:profiles!lead_messages_created_by_fkey(id, full_name, avatar_url, role)
+    `, { count: 'exact' })
+    .eq('workspace_id', actor.profile.workspace_id)
+    .eq('conversation_id', id)
+    .order('sent_at', { ascending: false })
+    .limit(requestedMessageLimit);
+
   if (messageResult.error) {
     console.error('Fast thread load failed:', messageResult.error.message);
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
@@ -133,8 +192,6 @@ export async function GET(
 
   const messages = [...(messageResult.data || [])].reverse();
   const messageTotal = messageResult.count || 0;
-
-  const conversation = conversationResult.data;
   const metadata = (conversation.metadata || {}) as Record<string, unknown>;
   const rawExpectedCount = Number(metadata.message_count);
   const expectedMessageCount = Number.isFinite(rawExpectedCount) && rawExpectedCount > 0 ? rawExpectedCount : null;
@@ -150,8 +207,9 @@ export async function GET(
     messages,
     messageTotal,
     hasOlderMessages: messageTotal > messages.length,
-    messageLimit,
+    messageLimit: requestedMessageLimit,
     historyBackfillScheduled,
+    messageSource: 'database',
   }, {
     headers: {
       'Cache-Control': 'private, no-store',
