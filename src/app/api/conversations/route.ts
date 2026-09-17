@@ -331,6 +331,8 @@ export async function GET(request: Request) {
     query = query.order('needs_reply', { ascending: false }).order('last_inbound_at', { ascending: true, nullsFirst: false });
   } else if (sort === 'sla') {
     query = query.order('first_response_due_at', { ascending: true, nullsFirst: false }).order('last_message_at', { ascending: false, nullsFirst: false });
+  } else if (filter === 'mine') {
+    query = query.order('inbox_activity_at', { ascending: false, nullsFirst: false }).order('last_message_at', { ascending: false, nullsFirst: false });
   } else {
     query = query.order('last_message_at', { ascending: false, nullsFirst: false });
   }
