@@ -25,7 +25,7 @@ type SectionRailShellProps = {
   mobileLabel: string;
   groups: RailGroup[];
   children: React.ReactNode;
-  variant?: 'default' | 'admin';
+  variant?: 'default' | 'admin' | 'ai';
 };
 
 function activeFor(pathname: string, item: RailItem) {
@@ -47,7 +47,12 @@ export default function SectionRailShell({
   const router = useRouter();
   const items = groups.flatMap((group) => group.items);
   const current = items.find((item) => activeFor(pathname, item))?.href || items[0]?.href || '/';
-  const shellClassName = `${styles.shell} ${variant === 'admin' ? styles.adminShell : ''}`;
+  const variantClassName = variant === 'admin'
+    ? styles.adminShell
+    : variant === 'ai'
+      ? styles.aiShell
+      : '';
+  const shellClassName = `${styles.shell} ${variantClassName}`;
 
   return (
     <div className={shellClassName}>
