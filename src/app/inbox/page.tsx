@@ -116,10 +116,12 @@ export default function InboxPage() {
     };
 
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void syncProviders();
+      if (document.visibilityState === 'visible' && lastSyncStartedAtRef.current > 0) void syncProviders();
     };
     const onFocus = () => {
-      if (Date.now() - lastSyncStartedAtRef.current >= AUTO_SYNC_MIN_GAP_MS) void syncProviders();
+      if (lastSyncStartedAtRef.current > 0 && Date.now() - lastSyncStartedAtRef.current >= AUTO_SYNC_MIN_GAP_MS) {
+        void syncProviders();
+      }
     };
 
     const initialTimer = window.setTimeout(() => void syncProviders(), INITIAL_SYNC_DELAY_MS);
