@@ -43,6 +43,10 @@ const migrations = [
     file: '202609160088_workspace_ai_knowledge.sql',
     marker: "select to_regclass('public.knowledge_sources') is not null and to_regclass('public.knowledge_chunks') is not null and to_regprocedure('public.search_ai_agent_knowledge(uuid,uuid,text,integer)') is not null",
   },
+  {
+    file: '202609170090_conversation_ai_state_insert_policy.sql',
+    marker: "select exists(select 1 from pg_policies where schemaname='public' and tablename='conversation_ai_states' and policyname='conversation_ai_states_insert')",
+  },
 ];
 
 for (const migration of migrations) {
