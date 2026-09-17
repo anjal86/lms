@@ -91,6 +91,7 @@ export async function chatwootRequest<T>(
   init: RequestInit = {}
 ): Promise<T> {
   const config = chatwootServerConfig();
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
   const response = await fetch(`${config.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
     ...init,
     cache: 'no-store',
@@ -98,7 +99,7 @@ export async function chatwootRequest<T>(
     headers: {
       Accept: 'application/json',
       api_access_token: config.accessToken,
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },
   });
@@ -214,6 +215,33 @@ export async function createChatwootMessage(input: {
     {
       method: 'POST',
       body: JSON.stringify({ content, message_type: 'outgoing', private: Boolean(input.private) }),
+    }
+  );
+}
+
+export async function createChatwootAttachmentMessage(input: {
+  accountId: number;
+  conversationId: number;
+  file: Blob;
+  fileName: string;
+  content?: string | null;
+}) {
+  positiveInteger(input.conversationId, 'Chatwoot conversation ID');
+  const fileName = input.fileName.trim();
+  if (!fileName) throw new Error('Chatwoot attachment file name cannot be empty.');
+  if (!input.file.size) throw new Error('Chatwoot attachment cannot be empty.');
+
+  const form = new FormData();
+  if (input.content?.trim()) form.append('content', input.content.trim());
+  form.append('message_type', 'outgoing');
+  form.append('private', 'false');
+  form.append('attachments[]', input.file, fileName);
+
+  return chatwootRequest<Record<string, unknown>>(
+    chatwootAccountPath(input.accountId, `conversations/${input.conversationId}/messages`),
+    {
+      method: 'POST',
+      body: form,
     }
   );
 }
