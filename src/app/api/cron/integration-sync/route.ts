@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processMetaHistorySyncJob } from '@/lib/integrations/meta-history-worker';
 import { processMetaAdEnrichmentJob } from '@/lib/integrations/meta-ad-enrichment';
+import { processOneChatwootWebhookEvent } from '@/lib/integrations/chatwoot-event-worker';
 import { processAiAgentJob } from '@/lib/ai/agent-worker';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import {
@@ -78,6 +79,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
 
+  const chatwootResults = [];
+  for (let i = 0; i < 8; i++) {
+    const result = await processOneChatwootWebhookEvent();
+    if (!result) break;
+    chatwootResults.push(result);
+  }
+
   const aiResults = [];
   for (let i = 0; i < 4; i++) {
     const aiJob = await processOneAiJob();
@@ -86,12 +94,13 @@ export async function POST(request: Request) {
   }
   const ai = aiResults[0] || null;
   const metaAd = await processOneMetaAdJob();
-  const backgroundProcessed = aiResults.length + (metaAd ? 1 : 0);
+  const backgroundProcessed = chatwootResults.length + aiResults.length + (metaAd ? 1 : 0);
 
   if (!isRedisConfigured()) {
     return NextResponse.json({
       success: true,
       processed: backgroundProcessed,
+      chatwoot: chatwootResults,
       ai,
       aiResults,
       metaAd,
@@ -105,6 +114,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       processed: backgroundProcessed,
+      chatwoot: chatwootResults,
       ai,
       aiResults,
       metaAd,
@@ -133,6 +143,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       processed: 1 + backgroundProcessed,
+      chatwoot: chatwootResults,
       ai,
       aiResults,
       metaAd,
@@ -152,6 +163,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: false,
       processed: 1 + backgroundProcessed,
+      chatwoot: chatwootResults,
       ai,
       aiResults,
       metaAd,
