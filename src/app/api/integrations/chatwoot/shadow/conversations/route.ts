@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getApiActor } from '@/lib/auth/api-actor';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { normalizeChatwootConversation } from '@/lib/integrations/chatwoot-adapter';
 import { listChatwootConversations } from '@/lib/integrations/chatwoot-client';
 import { uuidSchema } from '@/lib/validation';
@@ -24,6 +24,9 @@ function metadataProvider(value: unknown) {
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
+  if (!isManagement(actor.profile)) {
+    return NextResponse.json({ error: 'Workspace manager access is required for Chatwoot shadow mode.' }, { status: 403 });
+  }
 
   const url = new URL(request.url);
   const parsed = QuerySchema.safeParse({
