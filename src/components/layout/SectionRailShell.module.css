@@ -5,6 +5,10 @@
   padding: 1.75rem 1rem 3rem;
 }
 
+.adminShell {
+  background: transparent;
+}
+
 .grid {
   display: grid;
   min-width: 0;
@@ -187,6 +191,42 @@
   padding: 0 0 1.25rem !important;
   border-bottom: 1px solid var(--color-border) !important;
   background: transparent !important;
+}
+
+/* Admin is an operational surface, not a marketing surface. Remove any legacy
+   hero treatment, glow, tinted panel, accent strip or decorative pseudo-element
+   that older pages may still carry into /admin/*. */
+.adminShell .content :global(.app-page) > header:first-child,
+.adminShell .content :global(.workspace-page) > header:first-child,
+.adminShell .content :global(.page-header),
+.adminShell .content :global(.workspace-header),
+.adminShell .content > div > header:first-child,
+.adminShell .content > main > div:first-child > header:first-child {
+  position: relative !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.adminShell .content :global(.app-page) > header:first-child::before,
+.adminShell .content :global(.app-page) > header:first-child::after,
+.adminShell .content :global(.workspace-page) > header:first-child::before,
+.adminShell .content :global(.workspace-page) > header:first-child::after,
+.adminShell .content :global(.page-header)::before,
+.adminShell .content :global(.page-header)::after,
+.adminShell .content :global(.workspace-header)::before,
+.adminShell .content :global(.workspace-header)::after,
+.adminShell .content > div > header:first-child::before,
+.adminShell .content > div > header:first-child::after,
+.adminShell .content > main > div:first-child > header:first-child::before,
+.adminShell .content > main > div:first-child > header:first-child::after {
+  display: none !important;
+  content: none !important;
 }
 
 .content :global(.page-title),
