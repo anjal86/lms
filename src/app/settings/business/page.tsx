@@ -7,6 +7,7 @@ import type { WorkspaceConfig } from '@/lib/platform/types';
 import BusinessFieldManager from '@/components/platform/BusinessFieldManager';
 import PipelineEditor from '@/components/platform/PipelineEditor';
 import ModuleManager from '@/components/platform/ModuleManager';
+import { FormField, SettingsSection, StickySaveBar } from '@/components/settings/SettingsPrimitives';
 
 function TemplatePicker({ config, refresh }: { config: WorkspaceConfig; refresh: () => Promise<void> }) {
   const [selectedTemplate, setSelectedTemplate] = useState(config.workspace.template_key || 'generic');
@@ -37,23 +38,22 @@ function TemplatePicker({ config, refresh }: { config: WorkspaceConfig; refresh:
   };
 
   return (
-    <section className="space-y-4">
-      <div><h2 className="text-sm font-semibold text-zinc-950">Business model</h2><p className="mt-1 text-xs text-zinc-500">Choose the closest starting point. Templates seed terminology, fields, modules and a default pipeline; your custom fields survive later template changes.</p></div>
-      {(error || notice) && <div role={error ? 'alert' : 'status'} className={`rounded-md border px-3 py-2 text-xs ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{error || notice}</div>}
+    <SettingsSection id="business-model" title="Business model" description="Choose the closest starting point. Templates seed terminology, fields, modules and a default pipeline; your custom fields survive later template changes.">
+      {(error || notice) && <div role={error ? 'alert' : 'status'} className={`rounded-md border px-3 py-2 text-[13px] ${error ? 'border-red-200 text-red-700' : 'border-zinc-200 text-zinc-700'}`}>{error || notice}</div>}
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
         {config.templates.map((template) => {
           const selected = selectedTemplate === template.key;
           const active = config.workspace.template_key === template.key;
           return (
-            <button key={template.key} type="button" onClick={() => setSelectedTemplate(template.key)} className={`group flex min-h-28 items-start gap-3 rounded-lg border p-4 text-left transition ${selected ? 'border-zinc-950 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-950 hover:border-zinc-300 hover:bg-zinc-50'}`}>
+            <button key={template.key} type="button" aria-pressed={selected} onClick={() => setSelectedTemplate(template.key)} className={`group flex min-h-28 items-start gap-3 rounded-lg border p-4 text-left transition ${selected ? 'border-zinc-950 bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-950 hover:border-zinc-300 hover:bg-zinc-50'}`}>
               <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-white/20 bg-white/10' : 'border-zinc-200 bg-zinc-50'}`}>{active ? <Check className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</span>
               <span className="min-w-0"><span className="flex items-center gap-2 text-sm font-semibold">{template.name}{active && <span className={`text-[9px] uppercase tracking-wider ${selected ? 'text-zinc-300' : 'text-zinc-500'}`}>Current</span>}</span><span className={`mt-1.5 block text-xs leading-5 ${selected ? 'text-zinc-300' : 'text-zinc-500'}`}>{template.description}</span></span>
             </button>
           );
         })}
       </div>
-      <div className="flex justify-end"><button type="button" disabled={applying || selectedTemplate === config.workspace.template_key} onClick={() => void applyTemplate()} className="button-primary">{applying && <Loader2 className="h-4 w-4 animate-spin" />} Apply selected model</button></div>
-    </section>
+      {selectedTemplate !== config.workspace.template_key && <div className="mt-4"><StickySaveBar saving={applying} onSave={() => void applyTemplate()} onDiscard={() => setSelectedTemplate(config.workspace.template_key || 'generic')} /></div>}
+    </SettingsSection>
   );
 }
 
@@ -72,6 +72,7 @@ function IdentityForm({ config, refresh }: { config: WorkspaceConfig; refresh: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const dirty = name !== config.workspace.name || timezone !== config.workspace.timezone || currency !== config.workspace.currency || locale !== config.workspace.locale || leadName !== config.workspace.terminology.lead || leadPlural !== config.workspace.terminology.lead_plural || contactName !== config.workspace.terminology.contact || contactPlural !== config.workspace.terminology.contact_plural || dealName !== config.workspace.terminology.deal || dealPlural !== config.workspace.terminology.deal_plural || workspaceLabel !== config.workspace.terminology.workspace_label;
 
   const save = async () => {
     setSaving(true);
@@ -107,24 +108,23 @@ function IdentityForm({ config, refresh }: { config: WorkspaceConfig; refresh: (
   };
 
   return (
-    <section className="space-y-4">
-      <div><h2 className="text-sm font-semibold text-zinc-950">Workspace identity & language</h2><p className="mt-1 text-xs text-zinc-500">These labels replace fixed CRM wording throughout navigation, dashboards and business workspaces.</p></div>
-      {(error || notice) && <div role={error ? 'alert' : 'status'} className={`rounded-md border px-3 py-2 text-xs ${error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{error || notice}</div>}
+    <SettingsSection id="workspace-identity" title="Workspace identity & language" description="These labels replace fixed CRM wording throughout navigation, dashboards and business workspaces.">
+      {(error || notice) && <div role={error ? 'alert' : 'status'} className={`rounded-md border px-3 py-2 text-[13px] ${error ? 'border-red-200 text-red-700' : 'border-zinc-200 text-zinc-700'}`}>{error || notice}</div>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 sm:col-span-2 lg:col-span-3">Company / workspace name<input value={name} onChange={(event) => setName(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal text-zinc-900" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Lead singular<input value={leadName} onChange={(event) => setLeadName(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Lead plural<input value={leadPlural} onChange={(event) => setLeadPlural(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Workspace subtitle<input value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Contact singular<input value={contactName} onChange={(event) => setContactName(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Contact plural<input value={contactPlural} onChange={(event) => setContactPlural(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Deal singular<input value={dealName} onChange={(event) => setDealName(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Deal plural<input value={dealPlural} onChange={(event) => setDealPlural(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Timezone<input value={timezone} onChange={(event) => setTimezone(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Currency<input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase().slice(0, 3))} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 font-mono text-xs font-normal normal-case tracking-normal" /></label>
-        <label className="space-y-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Locale<input value={locale} onChange={(event) => setLocale(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 bg-white px-3 font-mono text-xs font-normal normal-case tracking-normal" /></label>
+        <FormField label="Company / workspace name" className="sm:col-span-2 lg:col-span-3"><input value={name} onChange={(event) => setName(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Lead singular"><input value={leadName} onChange={(event) => setLeadName(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Lead plural"><input value={leadPlural} onChange={(event) => setLeadPlural(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Workspace subtitle"><input value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Contact singular"><input value={contactName} onChange={(event) => setContactName(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Contact plural"><input value={contactPlural} onChange={(event) => setContactPlural(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Deal singular"><input value={dealName} onChange={(event) => setDealName(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Deal plural"><input value={dealPlural} onChange={(event) => setDealPlural(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Timezone"><input value={timezone} onChange={(event) => setTimezone(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Currency"><input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase().slice(0, 3))} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 font-mono text-sm font-medium text-zinc-900" /></FormField>
+        <FormField label="Locale"><input value={locale} onChange={(event) => setLocale(event.target.value)} className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3 font-mono text-sm font-medium text-zinc-900" /></FormField>
       </div>
-      <div className="flex justify-end"><button type="button" onClick={() => void save()} disabled={saving} className="button-primary">{saving && <Loader2 className="h-4 w-4 animate-spin" />} Save workspace</button></div>
-    </section>
+      {dirty && <div className="mt-5"><StickySaveBar saving={saving} onSave={() => void save()} onDiscard={() => { setName(config.workspace.name); setTimezone(config.workspace.timezone); setCurrency(config.workspace.currency); setLocale(config.workspace.locale); setLeadName(config.workspace.terminology.lead); setLeadPlural(config.workspace.terminology.lead_plural); setContactName(config.workspace.terminology.contact); setContactPlural(config.workspace.terminology.contact_plural); setDealName(config.workspace.terminology.deal); setDealPlural(config.workspace.terminology.deal_plural); setWorkspaceLabel(config.workspace.terminology.workspace_label); }} /></div>}
+    </SettingsSection>
   );
 }
 

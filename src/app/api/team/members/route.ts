@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
-import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
+import { cacheResponseHeaders, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
   const workspaceId = actor.profile.workspace_id;
   const requestUrl = new URL(request.url);
   const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
-  const cacheKey = redisCacheKey({
+  const cacheKey = await scopedRedisCacheKey({
     workspaceId,
     namespace: 'team:members',
     userId: actor.user.id,

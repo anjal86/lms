@@ -54,8 +54,8 @@
     --color-border: #e5e7eb;
     --color-border-strong: #d6d9df;
     --color-text-primary: #111318;
-    --color-text-secondary: #505866;
-    --color-text-muted: #6b7280;
+    --color-text-secondary: #3f4754;
+    --color-text-muted: #525b69;
     --color-text-disabled: #9ca3af;
     --color-accent: #3157f6;
     --color-accent-hover: #2748dc;
@@ -100,7 +100,8 @@
     background: var(--color-canvas);
     color: var(--color-text-primary);
     font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    font-weight: 400;
+    font-weight: 450;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -196,8 +197,9 @@
   .page-description {
     margin-top: var(--space-1);
     max-width: 46rem;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     font-size: 0.875rem;
+    font-weight: 450;
     line-height: 1.55;
   }
 
@@ -211,15 +213,16 @@
   .section-heading {
     color: var(--color-text-primary);
     font-size: 0.875rem;
-    font-weight: 600;
+    font-weight: 650;
     letter-spacing: -0.012em;
   }
 
   .section-description {
     margin-top: 0.125rem;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
-    line-height: 1.5;
+    font-size: 0.8125rem;
+    font-weight: 450;
+    line-height: 1.55;
   }
 
   /* Surfaces */
@@ -291,13 +294,15 @@
   .field,
   .select-field {
     padding: 0.5rem 0.75rem;
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
+    font-weight: 500;
   }
 
   .textarea-field {
     padding: 0.625rem 0.75rem;
-    font-size: 0.8125rem;
-    line-height: 1.5;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1.55;
     resize: vertical;
   }
 
@@ -338,7 +343,7 @@
     border-radius: var(--control-radius);
     padding: 0.5rem 0.875rem;
     font-size: 0.8125rem;
-    font-weight: 550;
+    font-weight: 600;
     line-height: 1;
     white-space: nowrap;
     transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
@@ -417,7 +422,7 @@
   .metric-label {
     color: var(--color-text-muted);
     font-size: 0.75rem;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0;
   }
 
@@ -433,8 +438,8 @@
   .metric-hint {
     margin-top: var(--space-1);
     color: var(--color-text-muted);
-    font-size: 0.75rem;
-    line-height: 1.45;
+    font-size: 0.8125rem;
+    line-height: 1.5;
   }
 
   .status-line {
@@ -479,8 +484,8 @@
     margin-top: var(--space-1);
     max-width: 28rem;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
-    line-height: 1.5;
+    font-size: 0.8125rem;
+    line-height: 1.55;
   }
 }
 
@@ -518,7 +523,7 @@ header.sticky a {
 #main-content table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 
 #main-content table th {
@@ -526,7 +531,7 @@ header.sticky a {
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-muted);
   font-size: 0.75rem;
-  font-weight: 550;
+  font-weight: 650;
   letter-spacing: 0;
   text-transform: none;
   text-align: left;
@@ -536,6 +541,7 @@ header.sticky a {
   padding: 0.6875rem 0.75rem;
   border-bottom: 1px solid rgba(229, 231, 235, 0.78);
   color: var(--color-text-secondary);
+  font-weight: 450;
   vertical-align: middle;
 }
 
@@ -597,6 +603,13 @@ button:disabled,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.field:focus-visible,
+.select-field:focus-visible,
+.textarea-field:focus-visible {
   outline: none;
 }
 
@@ -646,7 +659,7 @@ textarea:focus-visible {
   [role='button'],
   select,
   a {
-    min-height: 40px;
+    min-height: 44px;
   }
 }
 

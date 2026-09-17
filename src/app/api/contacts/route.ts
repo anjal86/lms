@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
-import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
+import { cacheResponseHeaders, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
   const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
   const forceRefresh = url.searchParams.get('refresh') === '1';
   const workspaceId = actor.profile.workspace_id;
-  const cacheKey = redisCacheKey({
+  const cacheKey = await scopedRedisCacheKey({
     workspaceId,
     namespace: 'contacts:list',
     userId: actor.user.id,

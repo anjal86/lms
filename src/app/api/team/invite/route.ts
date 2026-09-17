@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
@@ -137,6 +138,7 @@ export async function POST(request: Request) {
       if (result.conflict) {
         return NextResponse.json({ error: 'This person is already a member of the workspace.' }, { status: 409 });
       }
+      await invalidateRedisCache({ workspaceId, namespace: 'team:members' });
       return NextResponse.json({ profile: result.profile, workspace_role: result.role, membershipCreated: true }, { status: 201 });
     }
 
@@ -203,7 +205,8 @@ export async function POST(request: Request) {
         if (result.conflict) {
           return NextResponse.json({ error: 'This person is already a member of the workspace.' }, { status: 409 });
         }
-        return NextResponse.json({ profile: result.profile, workspace_role: result.role, membershipCreated: true }, { status: 201 });
+        await invalidateRedisCache({ workspaceId, namespace: 'team:members' });
+      return NextResponse.json({ profile: result.profile, workspace_role: result.role, membershipCreated: true }, { status: 201 });
       }
 
       console.error('Workspace invitation failed:', inviteError?.message);
@@ -240,6 +243,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invitation was sent, but profile setup needs attention.' }, { status: 500 });
     }
 
+    await invalidateRedisCache({ workspaceId, namespace: 'team:members' });
     return NextResponse.json({ profile, workspace_role: input.role, invitationId }, { status: 201 });
   } catch (error) {
     console.error('Workspace invitation failed:', error);

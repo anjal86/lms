@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { uuidSchema } from '@/lib/validation';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { actorHasPermission } from '@/lib/auth/permissions';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -87,5 +88,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const conflict = error.code === '23505';
     return NextResponse.json({ error: conflict ? error.message || 'Phone or email belongs to another contact.' : 'Unable to update contact.' }, { status: conflict ? 409 : 500 });
   }
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'contacts:list' });
   return NextResponse.json({ contact: data });
 }

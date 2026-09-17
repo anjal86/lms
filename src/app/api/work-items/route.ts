@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
-import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
+import { cacheResponseHeaders, invalidateRedisCache, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
   }
 
   const input = parsed.data;
-  const cacheKey = redisCacheKey({
+  const cacheKey = await scopedRedisCacheKey({
     workspaceId: actor.profile.workspace_id,
     namespace: 'work-items:list',
     userId: actor.user.id,
@@ -193,5 +193,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to create work item.' }, { status: 500 });
   }
 
+  await invalidateRedisCache({ workspaceId, namespace: 'work-items:list' });
   return NextResponse.json({ item: data }, { status: 201 });
 }

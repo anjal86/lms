@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { uuidSchema } from '@/lib/validation';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -165,5 +166,12 @@ export async function PATCH(request: Request) {
     }
   }
 
+  if (input.action !== 'reset_password') {
+    const { data: memberships } = await admin.from('workspace_members').select('workspace_id').eq('user_id', input.user_id);
+    await Promise.all((memberships || []).map((membership) => invalidateRedisCache({
+      workspaceId: membership.workspace_id,
+      namespace: 'team:members',
+    })));
+  }
   return NextResponse.json({ ok: true });
 }

@@ -5,9 +5,80 @@ import { isRedisConfigured, redisCommand } from '@/lib/redis/client';
 
 const QUEUE_KEY = 'crm:queue:integration-sync';
 const PROCESSING_KEY = 'crm:queue:integration-sync:processing';
+const STREAM_KEY = 'crm:stream:integration-sync';
+const STREAM_GROUP = 'integration-sync-workers';
+const STREAM_CONSUMER = `crm-worker-${process.pid}-${randomUUID()}`;
+const STREAM_TOKEN = 'stream:';
 const JOB_TTL_SECONDS = 86_400;
 const DEDUPE_TTL_SECONDS = 3_600;
 const STALE_PROCESSING_MS = 10 * 60_000;
+const ENQUEUE_SCRIPT = `
+local existing = redis.call('GET', KEYS[1])
+if existing then return existing end
+redis.call('XADD', KEYS[3], '*', 'job', ARGV[3])
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[5])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[4])
+return ARGV[1]
+`;
+const REQUEUE_SCRIPT = `
+if not redis.call('LPOS', KEYS[1], ARGV[1]) then return 0 end
+redis.call('LPUSH', KEYS[2], ARGV[2])
+redis.call('SET', KEYS[3], ARGV[3], 'EX', ARGV[4])
+redis.call('SET', KEYS[4], ARGV[5], 'EX', ARGV[6])
+redis.call('LREM', KEYS[1], 1, ARGV[1])
+return 1
+`;
+const STREAM_REQUEUE_SCRIPT = `
+if #redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[2], ARGV[2], 1) == 0 then return 0 end
+redis.call('XADD', KEYS[1], '*', 'job', ARGV[3])
+redis.call('SET', KEYS[2], ARGV[4], 'EX', ARGV[5])
+redis.call('SET', KEYS[3], ARGV[6], 'EX', ARGV[7])
+redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+redis.call('XDEL', KEYS[1], ARGV[2])
+return 1
+`;
+const STREAM_FINISH_SCRIPT = `
+if #redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[2], ARGV[2], 1) == 0 then return 0 end
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
+redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+redis.call('XDEL', KEYS[1], ARGV[2])
+redis.call('DEL', KEYS[3])
+return 1
+`;
+
+async function ensureStreamGroup() {
+  try {
+    await redisCommand(['XGROUP', 'CREATE', STREAM_KEY, STREAM_GROUP, '0', 'MKSTREAM']);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('BUSYGROUP')) throw error;
+  }
+}
+
+function streamId(raw: string) {
+  return raw.startsWith(STREAM_TOKEN) ? raw.slice(STREAM_TOKEN.length) : null;
+}
+
+function streamEntry(value: unknown): { id: string; job: IntegrationSyncJob } | null {
+  if (!Array.isArray(value) || typeof value[0] !== 'string' || !Array.isArray(value[1])) return null;
+  const fields = value[1];
+  const index = fields.indexOf('job');
+  const job = parseJob(typeof fields[index + 1] === 'string' ? fields[index + 1] : null);
+  return job ? { id: value[0], job } : null;
+}
+
+async function discardInvalidStreamEntry(value: unknown) {
+  if (!Array.isArray(value) || typeof value[0] !== 'string') return;
+  await redisCommand(['XACK', STREAM_KEY, STREAM_GROUP, value[0]]);
+  await redisCommand(['XDEL', STREAM_KEY, value[0]]);
+}
+
+const FINISH_SCRIPT = `
+if not redis.call('LPOS', KEYS[1], ARGV[1]) then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('LREM', KEYS[1], 1, ARGV[1])
+redis.call('DEL', KEYS[3])
+return 1
+`;
 
 export type IntegrationSyncJob = {
   id: string;
@@ -76,6 +147,33 @@ async function writeStatus(status: IntegrationSyncJobStatus) {
   await redisCommand(['SET', jobKey(status.id), JSON.stringify(status), 'EX', String(JOB_TTL_SECONDS)]);
 }
 
+async function requeueProcessingJob(raw: string, job: IntegrationSyncJob, status: IntegrationSyncJobStatus) {
+  const id = streamId(raw);
+  const moved = id ? await redisCommand([
+    'EVAL', STREAM_REQUEUE_SCRIPT, '3', STREAM_KEY, jobKey(job.id),
+    dedupeKey(job.workspaceId, job.connectionId), STREAM_GROUP, id, JSON.stringify(job),
+    JSON.stringify(status), String(JOB_TTL_SECONDS), job.id, String(DEDUPE_TTL_SECONDS),
+  ]) : await redisCommand([
+    'EVAL', REQUEUE_SCRIPT, '4', PROCESSING_KEY, QUEUE_KEY, jobKey(job.id),
+    dedupeKey(job.workspaceId, job.connectionId), raw, JSON.stringify(job),
+    JSON.stringify(status), String(JOB_TTL_SECONDS), job.id, String(DEDUPE_TTL_SECONDS),
+  ]);
+  return moved === 1;
+}
+
+async function finishProcessingJob(raw: string, job: IntegrationSyncJob, status: IntegrationSyncJobStatus) {
+  const id = streamId(raw);
+  const finished = id ? await redisCommand([
+    'EVAL', STREAM_FINISH_SCRIPT, '3', STREAM_KEY, jobKey(job.id),
+    dedupeKey(job.workspaceId, job.connectionId), STREAM_GROUP, id, JSON.stringify(status),
+    String(JOB_TTL_SECONDS),
+  ]) : await redisCommand([
+    'EVAL', FINISH_SCRIPT, '3', PROCESSING_KEY, jobKey(job.id),
+    dedupeKey(job.workspaceId, job.connectionId), raw, JSON.stringify(status), String(JOB_TTL_SECONDS),
+  ]);
+  if (finished !== 1) throw new Error('Integration sync job is no longer in the processing queue.');
+}
+
 export async function getIntegrationSyncJobStatus(id: string) {
   if (!isRedisConfigured()) return null;
   const raw = await redisCommand(['GET', jobKey(id)]);
@@ -90,20 +188,6 @@ export async function enqueueMetaHistorySyncJob(input: {
   if (!isRedisConfigured()) return { queued: false as const, reason: 'redis_unavailable' as const };
 
   const id = randomUUID();
-  const dedupe = dedupeKey(input.workspaceId, input.connectionId);
-  const acquired = await redisCommand(['SET', dedupe, id, 'NX', 'EX', String(DEDUPE_TTL_SECONDS)]);
-
-  if (acquired !== 'OK') {
-    const existing = await redisCommand(['GET', dedupe]);
-    const existingId = typeof existing === 'string' ? existing : null;
-    return {
-      queued: true as const,
-      deduplicated: true,
-      jobId: existingId,
-      status: existingId ? await getIntegrationSyncJobStatus(existingId) : null,
-    };
-  }
-
   const now = new Date().toISOString();
   const job: IntegrationSyncJob = {
     id,
@@ -138,13 +222,20 @@ export async function enqueueMetaHistorySyncJob(input: {
     result: null,
   };
 
-  try {
-    await writeStatus(status);
-    await redisCommand(['LPUSH', QUEUE_KEY, JSON.stringify(job)]);
-  } catch (error) {
-    await redisCommand(['DEL', dedupe]).catch(() => null);
-    await redisCommand(['DEL', jobKey(id)]).catch(() => null);
-    throw error;
+  await ensureStreamGroup();
+  const result = await redisCommand([
+    'EVAL', ENQUEUE_SCRIPT, '3', dedupeKey(input.workspaceId, input.connectionId),
+    jobKey(id), STREAM_KEY, id, JSON.stringify(status), JSON.stringify(job),
+    String(DEDUPE_TTL_SECONDS), String(JOB_TTL_SECONDS),
+  ]);
+  if (typeof result !== 'string') throw new Error('Redis did not confirm the integration sync job.');
+  if (result !== id) {
+    return {
+      queued: true as const,
+      deduplicated: true,
+      jobId: result,
+      status: await getIntegrationSyncJobStatus(result),
+    };
   }
 
   return { queued: true as const, deduplicated: false, jobId: id, status };
@@ -152,12 +243,31 @@ export async function enqueueMetaHistorySyncJob(input: {
 
 export async function claimIntegrationSyncJob() {
   if (!isRedisConfigured()) return null;
-  const raw = await redisCommand(['RPOPLPUSH', QUEUE_KEY, PROCESSING_KEY]);
-  if (typeof raw !== 'string') return null;
-  const job = parseJob(raw);
-  if (!job) {
-    await redisCommand(['LREM', PROCESSING_KEY, '1', raw]);
-    return null;
+  await ensureStreamGroup();
+  // Drain jobs produced by the previous list-based implementation before new stream jobs.
+  const legacyRaw = await redisCommand(['RPOPLPUSH', QUEUE_KEY, PROCESSING_KEY]);
+  let raw: string;
+  let job: IntegrationSyncJob | null;
+  if (typeof legacyRaw === 'string') {
+    raw = legacyRaw;
+    job = parseJob(raw);
+    if (!job) {
+      await redisCommand(['LREM', PROCESSING_KEY, '1', raw]);
+      return null;
+    }
+  } else {
+    const reply = await redisCommand([
+      'XREADGROUP', 'GROUP', STREAM_GROUP, STREAM_CONSUMER, 'COUNT', '1',
+      'STREAMS', STREAM_KEY, '>',
+    ]);
+    const entries = Array.isArray(reply) && Array.isArray(reply[0]) ? reply[0][1] : null;
+    const entry = Array.isArray(entries) ? streamEntry(entries[0]) : null;
+    if (!entry) {
+      if (Array.isArray(entries)) await discardInvalidStreamEntry(entries[0]);
+      return null;
+    }
+    raw = `${STREAM_TOKEN}${entry.id}`;
+    job = entry.job;
   }
 
   const now = new Date().toISOString();
@@ -194,8 +304,7 @@ export async function continueIntegrationSyncJob(input: {
   };
   const now = new Date().toISOString();
 
-  await redisCommand(['LREM', PROCESSING_KEY, '1', input.raw]);
-  await writeStatus({
+  const moved = await requeueProcessingJob(input.raw, nextJob, {
     id: nextJob.id,
     workspaceId: nextJob.workspaceId,
     connectionId: nextJob.connectionId,
@@ -209,7 +318,7 @@ export async function continueIntegrationSyncJob(input: {
     lastError: null,
     result: input.result,
   });
-  await redisCommand(['LPUSH', QUEUE_KEY, JSON.stringify(nextJob)]);
+  if (!moved) throw new Error('Integration sync job is no longer in the processing queue.');
 }
 
 export async function completeIntegrationSyncJob(input: {
@@ -219,8 +328,7 @@ export async function completeIntegrationSyncJob(input: {
   result: Record<string, unknown>;
 }) {
   const now = new Date().toISOString();
-  await redisCommand(['LREM', PROCESSING_KEY, '1', input.raw]);
-  await writeStatus({
+  await finishProcessingJob(input.raw, input.job, {
     id: input.job.id,
     workspaceId: input.job.workspaceId,
     connectionId: input.job.connectionId,
@@ -235,7 +343,6 @@ export async function completeIntegrationSyncJob(input: {
     lastError: null,
     result: input.result,
   });
-  await redisCommand(['DEL', dedupeKey(input.job.workspaceId, input.job.connectionId)]);
 }
 
 export async function failIntegrationSyncJob(input: {
@@ -245,11 +352,9 @@ export async function failIntegrationSyncJob(input: {
 }) {
   const attempts = input.job.attempts + 1;
   const now = new Date().toISOString();
-  await redisCommand(['LREM', PROCESSING_KEY, '1', input.raw]);
-
   if (attempts < input.job.maxAttempts) {
     const retryJob: IntegrationSyncJob = { ...input.job, attempts };
-    await writeStatus({
+    const moved = await requeueProcessingJob(input.raw, retryJob, {
       id: retryJob.id,
       workspaceId: retryJob.workspaceId,
       connectionId: retryJob.connectionId,
@@ -263,11 +368,11 @@ export async function failIntegrationSyncJob(input: {
       lastError: input.error,
       result: null,
     });
-    await redisCommand(['LPUSH', QUEUE_KEY, JSON.stringify(retryJob)]);
+    if (!moved) throw new Error('Integration sync job is no longer in the processing queue.');
     return { retried: true, attempts };
   }
 
-  await writeStatus({
+  await finishProcessingJob(input.raw, input.job, {
     id: input.job.id,
     workspaceId: input.job.workspaceId,
     connectionId: input.job.connectionId,
@@ -282,14 +387,59 @@ export async function failIntegrationSyncJob(input: {
     lastError: input.error,
     result: null,
   });
-  await redisCommand(['DEL', dedupeKey(input.job.workspaceId, input.job.connectionId)]);
   return { retried: false, attempts };
+}
+
+async function recoverStaleStreamJobs(limit: number) {
+  await ensureStreamGroup();
+  const reply = await redisCommand([
+    'XAUTOCLAIM', STREAM_KEY, STREAM_GROUP, STREAM_CONSUMER, String(STALE_PROCESSING_MS),
+    '0-0', 'COUNT', String(limit),
+  ]);
+  const entries = Array.isArray(reply) && Array.isArray(reply[1]) ? reply[1] : [];
+  let recovered = 0;
+  for (const value of entries) {
+    const entry = streamEntry(value);
+    if (!entry) {
+      await discardInvalidStreamEntry(value);
+      continue;
+    }
+    const { job, id } = entry;
+    const raw = `${STREAM_TOKEN}${id}`;
+    const status = await getIntegrationSyncJobStatus(job.id);
+    if (status?.state === 'completed' || status?.state === 'failed') {
+      await finishProcessingJob(raw, job, status);
+      recovered += 1;
+      continue;
+    }
+    const attempts = job.attempts + 1;
+    const now = new Date().toISOString();
+    if (attempts >= job.maxAttempts) {
+      await finishProcessingJob(raw, job, {
+        id: job.id, workspaceId: job.workspaceId, connectionId: job.connectionId,
+        type: job.type, state: 'failed', createdAt: job.createdAt,
+        finishedAt: now, updatedAt: now, attempts, cycle: job.cycle,
+        totals: job.totals, lastError: 'Exceeded retry limit after interrupted worker cycles.', result: null,
+      });
+    } else {
+      const retryJob = { ...job, attempts };
+      await requeueProcessingJob(raw, retryJob, {
+        id: job.id, workspaceId: job.workspaceId, connectionId: job.connectionId,
+        type: job.type, state: 'queued', createdAt: job.createdAt,
+        updatedAt: now, attempts, cycle: job.cycle, totals: job.totals,
+        lastError: 'Recovered after an interrupted worker cycle.', result: null,
+      });
+    }
+    recovered += 1;
+  }
+  return recovered;
 }
 
 export async function recoverStaleIntegrationSyncJobs(limit = 25) {
   if (!isRedisConfigured()) return 0;
-  const rows = await redisCommand(['LRANGE', PROCESSING_KEY, '0', String(Math.max(0, limit - 1))]);
-  if (!Array.isArray(rows)) return 0;
+  const streamRecovered = await recoverStaleStreamJobs(Math.max(1, limit));
+  const rows = await redisCommand(['LRANGE', PROCESSING_KEY, String(-Math.max(1, limit)), '-1']);
+  if (!Array.isArray(rows)) return streamRecovered;
 
   let recovered = 0;
   const threshold = Date.now() - STALE_PROCESSING_MS;
@@ -302,17 +452,40 @@ export async function recoverStaleIntegrationSyncJobs(limit = 25) {
     }
 
     const status = await getIntegrationSyncJobStatus(job.id);
+    if (status?.state === 'completed' || status?.state === 'failed') {
+      await finishProcessingJob(value, job, status);
+      recovered += 1;
+      continue;
+    }
     const startedAt = status?.startedAt ? new Date(status.startedAt).getTime() : 0;
     if (startedAt && startedAt > threshold) continue;
 
-    const removed = await redisCommand(['LREM', PROCESSING_KEY, '1', value]);
-    if (Number(removed) <= 0) continue;
+    const attempts = job.attempts + 1;
+    if (attempts >= job.maxAttempts) {
+      await finishProcessingJob(value, job, {
+        id: job.id,
+        workspaceId: job.workspaceId,
+        connectionId: job.connectionId,
+        type: job.type,
+        state: 'failed',
+        createdAt: job.createdAt,
+        finishedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        attempts,
+        cycle: job.cycle,
+        totals: job.totals,
+        lastError: 'Exceeded retry limit after interrupted worker cycles.',
+        result: null,
+      });
+      recovered += 1;
+      continue;
+    }
 
     const recoveredJob: IntegrationSyncJob = {
       ...job,
-      attempts: Math.min(job.maxAttempts - 1, job.attempts + 1),
+      attempts,
     };
-    await writeStatus({
+    const moved = await requeueProcessingJob(value, recoveredJob, {
       id: recoveredJob.id,
       workspaceId: recoveredJob.workspaceId,
       connectionId: recoveredJob.connectionId,
@@ -326,9 +499,9 @@ export async function recoverStaleIntegrationSyncJobs(limit = 25) {
       lastError: 'Recovered after an interrupted worker cycle.',
       result: null,
     });
-    await redisCommand(['LPUSH', QUEUE_KEY, JSON.stringify(recoveredJob)]);
+    if (!moved) continue;
     recovered += 1;
   }
 
-  return recovered;
+  return recovered + streamRecovered;
 }

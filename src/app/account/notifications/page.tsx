@@ -1,35 +1,49 @@
 'use client';
 
-import { BellRing, Volume2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Volume2 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import type { SoundPreset, UserPreferences } from '@/lib/types';
+import { FormField, SettingsSection, SettingsToggle, StickySaveBar } from '@/components/settings/SettingsPrimitives';
+
+type Draft = { notification_sound_enabled: boolean; mute_sound_in_call: boolean; notification_sound_preset: SoundPreset; notification_volume: number; browser_push_enabled: boolean };
+const fromPreferences = (preferences: UserPreferences): Draft => ({
+  notification_sound_enabled: preferences.notification_sound_enabled ?? true,
+  mute_sound_in_call: preferences.mute_sound_in_call ?? true,
+  notification_sound_preset: preferences.notification_sound_preset || 'chime',
+  notification_volume: preferences.notification_volume ?? 75,
+  browser_push_enabled: preferences.browser_push_enabled ?? false,
+});
 
 export default function AccountNotificationsPage() {
   const { currentUser, updateUserPreferences, playNotificationSound, showToast } = useApp();
-  const preferences = currentUser.user_preferences || {} as UserPreferences;
-  const soundEnabled = preferences.notification_sound_enabled ?? true;
-  const soundPreset = preferences.notification_sound_preset || 'chime';
-  const volume = preferences.notification_volume ?? 75;
-  const muteInCall = preferences.mute_sound_in_call ?? true;
-  const browserPush = preferences.browser_push_enabled ?? false;
-
-  const save = (patch: Partial<UserPreferences>) => {
+  const saved = fromPreferences(currentUser.user_preferences || {} as UserPreferences);
+  const [draft, setDraft] = useState<Draft>(saved);
+  useEffect(() => { setDraft(saved); }, [currentUser.id, currentUser.user_preferences]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  const change = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((previous) => ({ ...previous, [key]: value }));
+  const save = () => {
     if (!currentUser.id) return;
-    updateUserPreferences(currentUser.id, patch);
-    showToast('Notification preference saved.', 'success');
+    updateUserPreferences(currentUser.id, draft);
+    showToast('Notification preferences saved.', 'success');
   };
-
-  return (
-    <section className="surface-flat">
-      <div className="panel-header"><div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><BellRing className="h-4 w-4" /></span><div><h2 className="section-heading">Notifications</h2><p className="section-description">Alert behavior for your account only.</p></div></div></div>
-      <div className="panel-body grid gap-4 md:grid-cols-2">
-        <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800"><span><span className="block">Notification sound</span><span className="text-xs font-normal text-zinc-500">Play a sound for supported assignments and alerts.</span></span><input type="checkbox" checked={soundEnabled} onChange={(event) => save({ notification_sound_enabled: event.target.checked })} /></label>
-        <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800"><span><span className="block">Mute during calls</span><span className="text-xs font-normal text-zinc-500">Suppress alert audio while your status is in-call.</span></span><input type="checkbox" checked={muteInCall} onChange={(event) => save({ mute_sound_in_call: event.target.checked })} /></label>
-        <label className="text-xs font-semibold text-zinc-700">Sound<select value={soundPreset} onChange={(event) => save({ notification_sound_preset: event.target.value as SoundPreset })} className="select-field mt-1.5 w-full">{(['chime','modern_bell','radar','subtle','off'] as SoundPreset[]).map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></label>
-        <label className="text-xs font-semibold text-zinc-700">Volume<input type="range" min={0} max={100} value={volume} onChange={(event) => save({ notification_volume: Number(event.target.value) })} className="mt-3 w-full" /><span className="mt-1 block text-[11px] font-normal text-zinc-400">{volume}%</span></label>
-        <label className="flex items-center justify-between gap-4 rounded-lg border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-800 md:col-span-2"><span><span className="block">Browser notifications</span><span className="text-xs font-normal text-zinc-500">Show supported notifications when the CRM tab is not visible.</span></span><input type="checkbox" checked={browserPush} onChange={(event) => save({ browser_push_enabled: event.target.checked })} /></label>
-        <div className="md:col-span-2"><button type="button" onClick={() => playNotificationSound(soundPreset, volume)} className="button-secondary"><Volume2 className="h-4 w-4" /> Test sound</button></div>
+  return <div className="surface-flat p-5">
+    <SettingsSection id="account-notifications" title="Notifications" description="Alert behavior for your account only.">
+      <SettingsToggle label="Notification sound" description="Play a sound for supported assignments and alerts." checked={draft.notification_sound_enabled} onChange={(value) => change('notification_sound_enabled', value)} />
+      <SettingsToggle label="Mute during calls" description="Suppress alert audio while your status is in-call." checked={draft.mute_sound_in_call} onChange={(value) => change('mute_sound_in_call', value)} />
+      <div className="grid gap-4 border-t border-zinc-200 py-4 sm:grid-cols-2">
+        <FormField label="Sound"><select value={draft.notification_sound_preset} onChange={(event) => change('notification_sound_preset', event.target.value as SoundPreset)} className="select-field w-full">{(['chime', 'modern_bell', 'radar', 'subtle', 'off'] as SoundPreset[]).map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}</select></FormField>
+        <FormField label={`Volume: ${draft.notification_volume}%`}><input type="range" min={0} max={100} value={draft.notification_volume} onChange={(event) => change('notification_volume', Number(event.target.value))} className="mt-2 w-full" /></FormField>
+        <button type="button" onClick={() => playNotificationSound(draft.notification_sound_preset, draft.notification_volume)} className="button-secondary min-h-11 justify-self-start"><Volume2 className="h-4 w-4" /> Test sound</button>
       </div>
-    </section>
-  );
+      <SettingsToggle label="Browser notifications" description="Show supported notifications when the CRM tab is not visible." checked={draft.browser_push_enabled} onChange={(value) => change('browser_push_enabled', value)} />
+    </SettingsSection>
+    {dirty && <StickySaveBar saving={false} onSave={save} onDiscard={() => setDraft(saved)} />}
+  </div>;
 }

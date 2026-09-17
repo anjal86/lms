@@ -1,12 +1,46 @@
 import 'server-only';
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isRedisConfigured, redisCommand } from './client';
 
 export type RedisCacheStatus = 'HIT' | 'MISS' | 'BYPASS';
 
 const CACHE_PREFIX = 'crm:cache:v1';
 const CACHE_TIMEOUT_MS = 500;
+const CACHE_EPOCH_PREFIX = 'crm:cache:epoch:v1';
+
+export type CacheScope = { workspaceId: string; namespace: string };
+
+function epochKey(scope: CacheScope) {
+  const namespace = scope.namespace.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 80);
+  return `${CACHE_EPOCH_PREFIX}:${scope.workspaceId}:${namespace}`;
+}
+
+/** A stable key for one read, even if an edit invalidates the scope during the DB query. */
+export async function scopedRedisCacheKey(input: CacheScope & { userId?: string | null; dimensions?: unknown }) {
+  let epoch: string | number = 0;
+  if (safeRedisConfigured()) {
+    try {
+      const reply = await redisCommand(['GET', epochKey(input)], { timeoutMs: CACHE_TIMEOUT_MS });
+      epoch = typeof reply === 'string' && /^\d+$/.test(reply) ? reply : 0;
+    } catch {
+      // A unique key prevents a stale hit if Redis recovers during this request.
+      epoch = `unavailable-${randomUUID()}`;
+    }
+  }
+  return redisCacheKey({ ...input, dimensions: { epoch, query: input.dimensions } });
+}
+
+/** Changes the scope generation without scanning or deleting other workspaces' keys. */
+export async function invalidateRedisCache(scope: CacheScope) {
+  if (!safeRedisConfigured()) return false;
+  try {
+    await redisCommand(['INCR', epochKey(scope)], { timeoutMs: CACHE_TIMEOUT_MS });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function safeRedisConfigured() {
   try {

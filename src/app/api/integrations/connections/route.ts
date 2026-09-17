@@ -7,7 +7,7 @@ import { buildIntegrationSetup, integrationCatalogWithEnvStatus, publicAppUrl } 
 import { discoverMetaConversationHistory } from '@/lib/integrations/meta-history';
 import { enqueueMetaHistorySyncJob } from '@/lib/redis/integration-sync-queue';
 import { isRedisConfigured } from '@/lib/redis/client';
-import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
+import { cacheResponseHeaders, invalidateRedisCache, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
   const workspaceId = actor.profile.workspace_id;
   const appUrl = publicAppUrl(request.url);
-  const cacheKey = redisCacheKey({
+  const cacheKey = await scopedRedisCacheKey({
     workspaceId,
     namespace: 'integrations:connections',
     dimensions: { appUrl },
@@ -144,6 +144,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to save this connection.' }, { status: 500 });
   }
 
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
   return NextResponse.json({ connection: data }, { status: 201 });
 }
 
@@ -194,6 +195,7 @@ export async function PATCH(request: Request) {
           .update({ last_sync_at: now, last_error: firstError })
           .eq('workspace_id', actor.profile.workspace_id)
           .eq('id', target.id);
+        await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
         return NextResponse.json({
           success: historySync.errors.length === 0,
           historySync,
@@ -214,6 +216,7 @@ export async function PATCH(request: Request) {
         .update({ last_sync_at: now, last_error: firstError })
         .eq('workspace_id', actor.profile.workspace_id)
         .eq('id', target.id);
+      await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
       return NextResponse.json({
         success: historySync.errors.length === 0,
         historySync,
@@ -227,6 +230,7 @@ export async function PATCH(request: Request) {
         .eq('workspace_id', actor.profile.workspace_id)
         .eq('id', target.id);
       console.error('Meta history sync failed:', syncError);
+      await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
@@ -249,6 +253,7 @@ export async function PATCH(request: Request) {
     await admin.from('integration_secrets').delete().eq('connection_id', parsed.data.id);
   }
 
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
   return NextResponse.json({ connection: data });
 }
 
@@ -321,6 +326,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'Unable to remove connection.' }, { status: 500 });
   }
 
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'integrations:connections' });
   return NextResponse.json({
     success: true,
     removedId: target.id,

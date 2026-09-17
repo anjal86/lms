@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getProvider, type IntegrationProvider } from '@/lib/integrations/catalog';
@@ -142,6 +143,7 @@ async function saveAuthorization(input: {
   });
   if (secretError) throw secretError;
 
+  await invalidateRedisCache({ workspaceId: input.workspaceId, namespace: 'integrations:connections' });
   return authorizationId;
 }
 

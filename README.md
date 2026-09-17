@@ -145,6 +145,22 @@ docker compose --profile dev up -d --build
 
 Important: `NEXT_PUBLIC_*` values are supplied to the Docker build as build arguments because Next.js embeds public environment variables in the client bundle at build time.
 
+### Redis
+
+The Docker stack starts Redis 7.4 as the `redis` service with a persistent `redis-data` volume and append-only logging. It binds to `127.0.0.1:${REDIS_PORT:-6379}` on the host. The Docker app connects to `redis://redis:6379`; a host-run app uses `REDIS_URL=redis://127.0.0.1:6379` from `.env.local`.
+
+Redis holds short-lived API response caches and the integration-history sync queue. Postgres remains the source of truth. If Redis is unavailable, cached API reads fall back to Postgres, while integration-history sync pauses until Redis returns. The background worker calls `/api/cron/integration-sync` every `INTEGRATION_SYNC_INTERVAL_SECONDS` seconds.
+
+Check Redis without exposing application data:
+
+```bash
+cd docker
+docker compose ps redis
+docker compose exec redis redis-cli ping
+```
+
+The app's `/api/health` response reports Redis as `reachable`, `unreachable`, or `not_configured`. The queue and cache share this Redis instance, so keep its persistent volume and use `noeviction` when configuring a memory limit; evicting queued jobs would lose pending work.
+
 ## Quality checks
 
 Run the same checks used by GitHub Actions:

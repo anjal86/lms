@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { actorHasPermission } from '@/lib/auth/permissions';
-import { cacheResponseHeaders, readRedisJson, redisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
+import { cacheResponseHeaders, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   const canViewAutomations = await actorHasPermission(actor, 'automations.view');
   const requestUrl = new URL(request.url);
   const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
-  const cacheKey = redisCacheKey({
+  const cacheKey = await scopedRedisCacheKey({
     workspaceId,
     namespace: 'dashboard:conversation-exceptions',
     userId: actor.user.id,

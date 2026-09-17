@@ -20,7 +20,7 @@ function redisUrl() {
 }
 
 export function isRedisConfigured() {
-  return Boolean(redisUrl());
+  return Boolean(process.env.REDIS_URL?.trim());
 }
 
 function encodeCommand(args: string[]) {
