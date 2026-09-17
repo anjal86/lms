@@ -67,6 +67,10 @@ const migrations = [
     file: '202609170095_chatwoot_per_account_webhook_secret.sql',
     marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_accounts' and column_name='webhook_secret_encrypted')",
   },
+  {
+    file: '202609170096_chatwoot_webhook_worker.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_webhook_events' and column_name='locked_at') and to_regprocedure('public.claim_chatwoot_webhook_event()') is not null",
+  },
 ];
 
 for (const migration of migrations) {
