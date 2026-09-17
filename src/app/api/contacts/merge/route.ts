@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { uuidSchema } from '@/lib/validation';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,5 +35,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message || 'Unable to merge contacts.' }, { status });
   }
 
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'contacts:list' });
   return NextResponse.json({ contact: data });
 }

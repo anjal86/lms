@@ -56,8 +56,7 @@ function LoginContent() {
         return;
       }
 
-      router.replace(returnUrl);
-      router.refresh();
+      window.location.href = returnUrl;
     } catch (error) {
       console.error('Sign-in failed:', error);
       setErrorMsg('Authentication service is unavailable. Please try again.');

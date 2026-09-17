@@ -4,6 +4,8 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ingestNormalizedLead } from '@/lib/integrations/ingest';
 import { decryptIntegrationSecret, decryptSecretPayload } from '@/lib/integrations/secrets';
 import { metaFetchJson } from '@/lib/integrations/meta-http';
+import { mergeReferralObjects, normalizeMetaAdAttribution } from '@/lib/integrations/ad-attribution';
+import { bufferPendingAdReferral, claimPendingAdReferral, consumePendingAdReferral } from '@/lib/integrations/ad-referral-buffer';
 import {
   extractLeadFormDemographics,
   detectLocationFromText,
@@ -15,6 +17,15 @@ import { fetchMetaCustomerProfile } from '@/lib/integrations/meta-profile';
 export const runtime = 'nodejs';
 
 type LeadFormField = { name?: string; values?: string[] };
+
+type ConnectionRow = {
+  id: string;
+  workspace_id: string | null;
+  provider: string;
+  external_account_id: string | null;
+  config: Record<string, unknown> | null;
+  status: string;
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -73,36 +84,77 @@ async function getConnections(provider: 'facebook' | 'instagram' | 'whatsapp') {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
     .from('integration_connections')
-    .select('id,provider,external_account_id,config,status')
+    .select('id,workspace_id,provider,external_account_id,config,status')
     .eq('provider', provider)
     .in('status', ['connected', 'token_expiring']);
   if (error) throw error;
-  return data || [];
+  return (data || []) as ConnectionRow[];
+}
+
+function legacyMetaOwnsAccount(connection: ConnectionRow, accountId: string) {
+  const config = record(connection.config);
+  const pages = Array.isArray(config.pages) ? config.pages.map(record) : [];
+  return pages.some((page) => {
+    if (String(page.id || '') === accountId) return true;
+    const instagram = record(page.instagram_business_account);
+    return String(instagram.id || '') === accountId;
+  });
 }
 
 async function findMetaConnection(provider: 'facebook' | 'instagram', accountId: string) {
   const connections = await getConnections(provider);
-  return connections.find((connection) => {
-    if (connection.external_account_id === accountId) return true;
-    const config = record(connection.config);
-    const pages = Array.isArray(config.pages) ? config.pages.map(record) : [];
-    return pages.some((page) => {
-      if (String(page.id || '') === accountId) return true;
-      const instagram = record(page.instagram_business_account);
-      return String(instagram.id || '') === accountId;
-    });
-  }) || null;
+  const exact = connections.filter((connection) => connection.external_account_id === accountId);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) throw new Error(`${provider} account ${accountId} is connected more than once.`);
+
+  const legacy = connections.filter((connection) => legacyMetaOwnsAccount(connection, accountId));
+  if (legacy.length === 1) return legacy[0];
+  if (legacy.length > 1) throw new Error(`${provider} account ${accountId} matches multiple legacy connections.`);
+  return null;
 }
 
-async function findWhatsAppConnection(wabaId: string) {
+function legacyWhatsAppOwnsAccount(connection: ConnectionRow, phoneNumberId: string | null, wabaId: string) {
+  const config = record(connection.config);
+  const wabas = Array.isArray(config.whatsapp_business_accounts)
+    ? config.whatsapp_business_accounts.map(record)
+    : [];
+  return wabas.some((waba) => {
+    if (String(waba.id || '') !== wabaId) return false;
+    if (!phoneNumberId) return true;
+    const phones = Array.isArray(waba.phone_numbers) ? waba.phone_numbers.map(record) : [];
+    return phones.some((phone) => String(phone.id || '') === phoneNumberId);
+  });
+}
+
+async function findWhatsAppConnection(phoneNumberId: string | null, wabaId: string) {
   const connections = await getConnections('whatsapp');
-  return connections.find((connection) => {
-    const config = record(connection.config);
-    const wabas = Array.isArray(config.whatsapp_business_accounts)
-      ? config.whatsapp_business_accounts.map(record)
-      : [];
-    return wabas.some((waba) => String(waba.id || '') === wabaId);
-  }) || null;
+  if (phoneNumberId) {
+    const exact = connections.filter((connection) => connection.external_account_id === phoneNumberId);
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) throw new Error(`WhatsApp phone ${phoneNumberId} is connected more than once.`);
+  }
+
+  const legacy = connections.filter((connection) => legacyWhatsAppOwnsAccount(connection, phoneNumberId, wabaId));
+  if (legacy.length === 1) return legacy[0];
+  if (legacy.length > 1) {
+    throw new Error(`WhatsApp WABA ${wabaId} is ambiguous without a unique phone_number_id.`);
+  }
+  return null;
+}
+
+async function findMessageConnection(provider: string, externalMessageId: string) {
+  if (!externalMessageId) return null;
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from('lead_messages')
+    .select('connection_id')
+    .eq('provider', provider)
+    .or(`external_message_id.eq.${externalMessageId},provider_message_id.eq.${externalMessageId}`)
+    .not('connection_id', 'is', null)
+    .limit(2);
+  if (error) throw error;
+  const ids = Array.from(new Set((data || []).map((row) => row.connection_id).filter(Boolean)));
+  return ids.length === 1 ? String(ids[0]) : null;
 }
 
 async function pageToken(connectionId: string, accountId: string) {
@@ -123,13 +175,14 @@ async function pageToken(connectionId: string, accountId: string) {
     const instagram = record(page.instagram_business_account);
     return String(instagram.id || '') === accountId;
   });
-  const pageId = String(owningPage?.id || accountId);
+  const pageId = String(owningPage?.id || config.page_id || accountId);
   const page = pageTokens.find((item) => String(item.id || '') === pageId);
   const storedPageToken = typeof page?.access_token === 'string' ? page.access_token : null;
   return storedPageToken || decryptIntegrationSecret(secrets?.access_token) || '';
 }
 
 async function updateDelivery(
+  connectionId: string,
   provider: string,
   externalMessageId: string,
   status: string,
@@ -137,12 +190,13 @@ async function updateDelivery(
   error?: Record<string, unknown>
 ) {
   const normalized = ['sent', 'delivered', 'read', 'failed'].includes(status) ? status : null;
-  if (!normalized || !externalMessageId) return;
+  if (!normalized || !externalMessageId || !connectionId) return;
   const eventAt = timestamp === undefined
     ? new Date().toISOString()
     : safeTimestamp(timestamp, typeof timestamp === 'string' && /^\d+$/.test(timestamp) ? 1000 : 1);
   const admin = createSupabaseAdminClient();
-  const { error: rpcError } = await admin.rpc('update_message_delivery', {
+  const { error: rpcError } = await admin.rpc('update_message_delivery_scoped', {
+    p_connection_id: connectionId,
     p_provider: provider,
     p_external_message_id: externalMessageId,
     p_status: normalized,
@@ -171,7 +225,6 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
     throw new Error(typeof providerError.message === 'string' ? providerError.message : 'Unable to fetch Facebook lead details.');
   }
 
-  // Meta fields are external input. Normalize at runtime instead of relying on a TS cast.
   const fields = normalizeLeadFields(lead.field_data);
   const demographics = extractLeadFormDemographics(fields);
   const firstName = valueFor(fields, ['first_name', 'first name']);
@@ -199,6 +252,7 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
     notes: 'Imported automatically from a Facebook Instant Form.',
     metadata: {
       page_id: pageId,
+      account_id: pageId,
       leadgen_id: leadgenId,
       campaign_id: lead.campaign_id || value.campaign_id || null,
       ad_id: lead.ad_id || value.ad_id || null,
@@ -211,25 +265,58 @@ async function processLeadgen(pageId: string, value: Record<string, unknown>) {
 }
 
 async function processMetaMessage(provider: 'facebook' | 'instagram', accountId: string, messaging: Record<string, unknown>) {
+  const connection = await findMetaConnection(provider, accountId);
+  if (!connection) throw new Error(`No connected ${provider} account matches ${accountId}.`);
+  if (!connection.workspace_id) throw new Error(`The ${provider} connection is not attached to a workspace.`);
+
   const delivery = record(messaging.delivery);
   if (Object.keys(delivery).length > 0) {
     const mids = Array.isArray(delivery.mids) ? delivery.mids : [];
-    for (const mid of mids) await updateDelivery(provider, String(mid), 'delivered', delivery.watermark as string | number | undefined);
+    for (const mid of mids) {
+      await updateDelivery(connection.id, provider, String(mid), 'delivered', delivery.watermark as string | number | undefined);
+    }
   }
 
   const sender = record(messaging.sender);
   const recipient = record(messaging.recipient);
   const message = record(messaging.message);
-  if (!message.mid) return;
-
   const isEcho = message.is_echo === true;
   const customerId = isEcho ? String(recipient.id || '') : String(sender.id || '');
   if (!customerId) return;
 
-  const connection = await findMetaConnection(provider, accountId);
-  if (!connection) throw new Error(`No connected ${provider} account matches ${accountId}.`);
-
+  const postback = record(messaging.postback);
+  const referralPayload = mergeReferralObjects(
+    messaging.referral,
+    postback.referral,
+    message.referral,
+  );
+  const directAdAttribution = isEcho ? null : normalizeMetaAdAttribution(referralPayload, provider);
   const sentAt = safeTimestamp(messaging.timestamp);
+
+  if (!message.mid) {
+    if (directAdAttribution && !isEcho) {
+      await bufferPendingAdReferral({
+        workspaceId: connection.workspace_id,
+        connectionId: connection.id,
+        provider,
+        accountId,
+        externalContactId: customerId,
+        attribution: directAdAttribution,
+        capturedAt: sentAt,
+      });
+    }
+    return;
+  }
+
+  const pendingReferral = !isEcho
+    ? await claimPendingAdReferral({
+      workspaceId: connection.workspace_id,
+      connectionId: connection.id,
+      provider,
+      externalContactId: customerId,
+    })
+    : null;
+  const adAttribution = directAdAttribution || pendingReferral?.attribution || null;
   const text = typeof message.text === 'string' ? message.text : null;
   const threadId = `${accountId}:${customerId}`;
 
@@ -240,8 +327,6 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     const token = await pageToken(connection.id, accountId);
     if (token) {
       const version = process.env.META_GRAPH_VERSION?.trim() || 'v26.0';
-      // Profile enrichment is optional. Keep its webhook budget small so a slow Graph
-      // profile edge cannot delay durable message ingestion for many seconds.
       const profile = await fetchMetaCustomerProfile({
         provider,
         customerId,
@@ -258,7 +343,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
       }
     }
   } catch {
-    // Optional enrichment must never block message ingestion.
+    // Profile enrichment is optional and must never block durable message ingestion.
   }
 
   if (text) {
@@ -273,7 +358,7 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
         });
       }
     } catch {
-      // Heuristic parsing is also optional and must fail open.
+      // Heuristic parsing is optional and fails open.
     }
   }
 
@@ -298,6 +383,10 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     else if (attachType === 'file') messageType = 'file';
   }
 
+  const sourceLabel = adAttribution
+    ? provider === 'instagram' ? 'Instagram Ad → DM' : 'Facebook Ad → Messenger'
+    : provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger';
+
   await ingestNormalizedLead({
     provider,
     connectionId: connection.id,
@@ -306,12 +395,12 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
     externalThreadId: threadId,
     externalContactId: customerId,
     customerName: customerName || `${provider === 'instagram' ? 'Instagram' : 'Messenger'} User`,
-    customerPhone: `${provider}:${customerId}`,
+    customerPhone: null,
     customerCity: demographics?.city || null,
     customerCountry: demographics?.country || null,
     destination: 'Not specified',
-    sourceLabel: provider === 'instagram' ? 'Instagram DM' : 'Facebook Messenger',
-    notes: isEcho ? 'Outbound message sent through Meta.' : 'Conversation started from an inbound social message.',
+    sourceLabel,
+    notes: isEcho ? 'Outbound message sent through Meta.' : adAttribution ? 'Conversation started from a paid Meta ad.' : 'Conversation started from an inbound social message.',
     message: {
       externalMessageId: String(message.mid),
       direction: isEcho ? 'outbound' : 'inbound',
@@ -328,33 +417,55 @@ async function processMetaMessage(provider: 'facebook' | 'instagram', accountId:
         file_name: fileName,
         is_echo: isEcho,
         sent_via: isEcho ? 'meta_business_suite' : 'customer',
+        ...(adAttribution ? { ad_attribution: adAttribution } : {}),
       },
     },
     metadata: {
       account_id: accountId,
+      connection_id: connection.id,
       customer_id: customerId,
       is_echo: isEcho,
       customer_avatar_url: customerAvatarUrl,
+      ...(adAttribution ? { ad_attribution: adAttribution } : {}),
       ...(demographics ? { customer_profile: demographics } : {}),
     },
   });
+
+  if (pendingReferral?.id) {
+    try {
+      await consumePendingAdReferral(pendingReferral.id);
+    } catch (error) {
+      console.warn('Unable to mark pending ad referral consumed:', error instanceof Error ? error.message : error);
+    }
+  }
 }
 
 async function processWhatsApp(entry: Record<string, unknown>) {
   const wabaId = String(entry.id || '');
   if (!wabaId) return;
-  const connection = await findWhatsAppConnection(wabaId);
-  if (!connection) throw new Error(`No connected WhatsApp account matches ${wabaId}.`);
   const changes = Array.isArray(entry.changes) ? entry.changes.map(record) : [];
 
   for (const change of changes) {
     const value = record(change.value);
+    const valueMetadata = record(value.metadata);
+    const phoneNumberId = typeof valueMetadata.phone_number_id === 'string' && valueMetadata.phone_number_id
+      ? valueMetadata.phone_number_id
+      : null;
+    let connection = await findWhatsAppConnection(phoneNumberId, wabaId);
+
     const statuses = Array.isArray(value.statuses) ? value.statuses.map(record) : [];
     for (const status of statuses) {
+      const statusMessageId = String(status.id || '');
+      let statusConnectionId = connection?.id || null;
+      if (!statusConnectionId) statusConnectionId = await findMessageConnection('whatsapp', statusMessageId);
+      if (!statusConnectionId) {
+        throw new Error(`Unable to resolve WhatsApp delivery receipt ${statusMessageId} to a concrete phone connection.`);
+      }
       const errors = Array.isArray(status.errors) ? status.errors.map(record) : [];
       await updateDelivery(
+        statusConnectionId,
         'whatsapp',
-        String(status.id || ''),
+        statusMessageId,
         String(status.status || ''),
         status.timestamp as string | number | undefined,
         errors[0]
@@ -362,8 +473,16 @@ async function processWhatsApp(entry: Record<string, unknown>) {
     }
 
     const messages = Array.isArray(value.messages) ? value.messages.map(record) : [];
+    if (messages.length > 0 && !connection) {
+      connection = await findWhatsAppConnection(phoneNumberId, wabaId);
+      if (!connection) {
+        throw new Error(`No unique WhatsApp phone connection matches WABA ${wabaId}${phoneNumberId ? ` / ${phoneNumberId}` : ''}.`);
+      }
+    }
+
     const contacts = Array.isArray(value.contacts) ? value.contacts.map(record) : [];
     for (const message of messages) {
+      if (!connection) continue;
       const from = String(message.from || '');
       const id = String(message.id || '');
       if (!from || !id) continue;
@@ -378,6 +497,7 @@ async function processWhatsApp(entry: Record<string, unknown>) {
           ? buttonObject.text
           : Object.keys(interactive).length > 0 ? JSON.stringify(interactive) : null;
       const sentAt = safeTimestamp(message.timestamp, 1000);
+      const adAttribution = normalizeMetaAdAttribution(message.referral, 'whatsapp');
 
       await ingestNormalizedLead({
         provider: 'whatsapp',
@@ -389,18 +509,25 @@ async function processWhatsApp(entry: Record<string, unknown>) {
         customerName: typeof profile.name === 'string' ? profile.name : 'WhatsApp inquiry',
         customerPhone: from.startsWith('+') ? from : `+${from}`,
         destination: 'Not specified',
-        sourceLabel: 'WhatsApp Business',
-        notes: 'Conversation started automatically from WhatsApp Business.',
+        sourceLabel: adAttribution ? 'WhatsApp Ad' : 'WhatsApp Business',
+        notes: adAttribution ? 'Conversation started from a Click-to-WhatsApp ad.' : 'Conversation started automatically from WhatsApp Business.',
         message: {
           externalMessageId: id,
           type: String(message.type || 'text'),
           body,
           sentAt,
-          metadata: { message, contact, metadata: value.metadata || null },
+          metadata: {
+            message,
+            contact,
+            metadata: value.metadata || null,
+            ...(adAttribution ? { ad_attribution: adAttribution } : {}),
+          },
         },
         metadata: {
           waba_id: wabaId,
-          phone_number_id: record(value.metadata).phone_number_id || null,
+          phone_number_id: phoneNumberId,
+          connection_id: connection.id,
+          ...(adAttribution ? { ad_attribution: adAttribution } : {}),
         },
       });
     }
@@ -453,8 +580,6 @@ export async function POST(request: Request) {
     }
   } catch (error) {
     console.error('Meta webhook processing failed:', error);
-    // Non-2xx intentionally asks Meta to retry. Already-processed event IDs remain
-    // idempotent while failed event IDs are reclaimable by the ingestion state machine.
     return NextResponse.json({ received: true, processed: false, retry: true }, { status: 500 });
   }
 

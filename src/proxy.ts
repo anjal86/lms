@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { authCookieName } from '@/lib/supabase/cookie-name';
 
 const PUBLIC_PATHS = [
   '/login',
@@ -10,6 +11,7 @@ const PUBLIC_PATHS = [
   '/api/integrations/webhooks',
   '/api/conversations/sync',
   '/api/cron',
+  '/api/health',
 ];
 
 const MODULE_PATHS: Array<{ moduleKey: string; paths: string[] }> = [
@@ -30,7 +32,7 @@ const moduleForPath = (pathname: string) =>
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = process.env.SUPABASE_URL?.trim() || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !anonKey) {
@@ -41,6 +43,9 @@ export async function proxy(request: NextRequest) {
   }
 
   const supabase = createServerClient(url, anonKey, {
+    cookieOptions: {
+      name: authCookieName(),
+    },
     cookies: {
       getAll() {
         return request.cookies.getAll();

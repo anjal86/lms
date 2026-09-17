@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
+import { cacheResponseHeaders, invalidateRedisCache, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 import { uuidSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const WORK_ITEMS_CACHE_TTL_SECONDS = 12;
 
 const QuerySchema = z.object({
   status: z.enum(['open', 'completed', 'cancelled', 'all']).default('open'),
@@ -33,12 +36,29 @@ export async function GET(request: Request) {
   const actor = await getApiActor(request);
   if ('error' in actor) return actor.error;
 
-  const parsed = QuerySchema.safeParse(Object.fromEntries(new URL(request.url).searchParams.entries()));
+  const requestUrl = new URL(request.url);
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+  const parsed = QuerySchema.safeParse(Object.fromEntries(requestUrl.searchParams.entries()));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid work-item query.', fields: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
   const input = parsed.data;
+  const cacheKey = await scopedRedisCacheKey({
+    workspaceId: actor.profile.workspace_id,
+    namespace: 'work-items:list',
+    userId: actor.user.id,
+    dimensions: input,
+  });
+  let cacheStatus: RedisCacheStatus = 'BYPASS';
+  if (!forceRefresh) {
+    const cached = await readRedisJson<{ items: unknown[] }>(cacheKey);
+    cacheStatus = cached.status;
+    if (cached.value) {
+      return NextResponse.json(cached.value, { headers: cacheResponseHeaders('HIT') });
+    }
+  }
+
   let query = actor.supabase
     .from('work_items')
     .select('*')
@@ -65,7 +85,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unable to load work items.' }, { status: 500 });
   }
 
-  return NextResponse.json({ items: data || [] }, { headers: { 'Cache-Control': 'private, no-store' } });
+  const payload = { items: data || [] };
+  await writeRedisJson(cacheKey, payload, WORK_ITEMS_CACHE_TTL_SECONDS);
+  return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
 }
 
 export async function POST(request: Request) {
@@ -171,5 +193,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unable to create work item.' }, { status: 500 });
   }
 
+  await invalidateRedisCache({ workspaceId, namespace: 'work-items:list' });
   return NextResponse.json({ item: data }, { status: 201 });
 }

@@ -202,6 +202,21 @@ export async function GET(
     return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   }
 
+  let connectionStatus = 'legacy_unscoped';
+  let connectionCanSync = false;
+  let connectionCanReply = false;
+  if (conversation.connection_id) {
+    const { data: connection } = await actor.supabase
+      .from('integration_connections')
+      .select('id,status')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', conversation.connection_id)
+      .maybeSingle();
+    connectionStatus = connection?.status || 'missing';
+    connectionCanSync = connection?.status === 'connected';
+    connectionCanReply = connection?.status === 'connected';
+  }
+
   const { count: beforeBackfillCount } = await actor.supabase
     .from('lead_messages')
     .select('id', { count: 'exact', head: true })
@@ -212,12 +227,14 @@ export async function GET(
   const rawExpectedCount = Number(metadata.message_count);
   const expectedMessageCount = Number.isFinite(rawExpectedCount) && rawExpectedCount > 0 ? rawExpectedCount : null;
 
-  await maybeBackfillHistory({
-    conversationId: id,
-    provider: conversation.provider,
-    expectedMessageCount,
-    localMessageCount: beforeBackfillCount || 0,
-  });
+  if (connectionCanSync) {
+    await maybeBackfillHistory({
+      conversationId: id,
+      provider: conversation.provider,
+      expectedMessageCount,
+      localMessageCount: beforeBackfillCount || 0,
+    });
+  }
 
   const { data: messageRows, error: msgError, count: messageTotal } = await actor.supabase
     .from('lead_messages')
@@ -249,18 +266,29 @@ export async function GET(
     return NextResponse.json({ error: 'Unable to load messages.' }, { status: 500 });
   }
 
-  const whatsappRepairRequested = await maybeRepairWhatsappHistory({
-    conversationId: id,
-    provider: conversation.provider,
-    connectionId: conversation.connection_id,
-    conversationMetadata: conversation.metadata,
-    messages: (messageRows || []) as WhatsappRepairMessage[],
-  });
+  const whatsappRepairRequested = connectionCanSync
+    ? await maybeRepairWhatsappHistory({
+      conversationId: id,
+      provider: conversation.provider,
+      connectionId: conversation.connection_id,
+      conversationMetadata: conversation.metadata,
+      messages: (messageRows || []) as WhatsappRepairMessage[],
+    })
+    : false;
 
   const messages = [...(messageRows || [])].reverse();
+  const responseConversation = {
+    ...conversation,
+    metadata: {
+      ...metadata,
+      can_reply: metadata.can_reply !== false && connectionCanReply,
+      channel_connection_status: connectionStatus,
+      historical_channel_only: !connectionCanReply,
+    },
+  };
 
   return NextResponse.json({
-    conversation,
+    conversation: responseConversation,
     messages,
     messageTotal: messageTotal || 0,
     hasOlderMessages: (messageTotal || 0) > messages.length,

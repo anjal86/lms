@@ -53,6 +53,13 @@ function locationSourceLabel(source: unknown, inferredFromText: unknown) {
   return 'Detected';
 }
 
+function chatDetectedPhone(conversation: ConversationForConversion | null, initialPhone?: string | null) {
+  const explicit = initialPhone?.trim();
+  if (explicit) return explicit;
+  const detected = conversation?.metadata?.detected_phone;
+  return typeof detected === 'string' ? detected.trim() : '';
+}
+
 function DynamicControl({ field, value, onChange }: { field: DynamicFieldDefinition; value: FieldValue; onChange: (value: FieldValue) => void }) {
   const inputClass = 'h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-xs text-zinc-950 outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-100';
   const options = Array.isArray(field.options) ? field.options.map(String) : [];
@@ -107,6 +114,7 @@ export default function ConvertToLeadDrawer({ isOpen, onClose, conversation, onC
   }, [fields]);
   const leadLabel = term('lead', 'Lead');
   const contactLabel = term('contact', 'Contact');
+  const detectedPhone = useMemo(() => chatDetectedPhone(conversation, initialPhone), [conversation, initialPhone]);
 
   useEffect(() => {
     if (!conversation || !isOpen) return;
@@ -116,7 +124,7 @@ export default function ConvertToLeadDrawer({ isOpen, onClose, conversation, onC
     const detectedCountry = typeof profile?.country === 'string' ? profile.country : '';
 
     setCustomerName(conversation.customer_name || contactLabel);
-    setCustomerPhone(initialPhone || fallbackPhone);
+    setCustomerPhone(detectedPhone || fallbackPhone);
     setCustomerEmail(conversation.customer_email || '');
     setCustomerCity(detectedCity);
     setCustomerCountry(detectedCountry);
@@ -126,7 +134,7 @@ export default function ConvertToLeadDrawer({ isOpen, onClose, conversation, onC
     setNotes(conversation.last_message_preview ? `Conversation context: “${conversation.last_message_preview}”` : '');
     setValues(Object.fromEntries(fields.map((field) => [field.field_key, defaultValue(field)])));
     setError(null);
-  }, [contactLabel, conversation, currentUser.id, currentUser.role, fields, initialPhone, isOpen]);
+  }, [contactLabel, conversation, currentUser.id, currentUser.role, detectedPhone, fields, isOpen]);
 
   if (!isOpen || !conversation) return null;
 
@@ -151,7 +159,7 @@ export default function ConvertToLeadDrawer({ isOpen, onClose, conversation, onC
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customerName: customerName.trim() || contactLabel,
-          customerPhone: customerPhone.trim() || `${conversation.provider}:${conversation.id.slice(0, 8)}`,
+          customerPhone: customerPhone.trim(),
           customerEmail: customerEmail.trim(),
           customerCity: customerCity.trim(),
           customerCountry: customerCountry.trim(),
@@ -194,7 +202,7 @@ export default function ConvertToLeadDrawer({ isOpen, onClose, conversation, onC
                   <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">{contactLabel} details</div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="space-y-1 font-semibold text-zinc-700">Name *<input required value={customerName} onChange={(event) => setCustomerName(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-normal" /></label>
-                    <label className="space-y-1 font-semibold text-zinc-700">Phone{initialPhone && <span className="ml-2 text-[9px] font-medium text-emerald-700">From chat</span>}<input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-mono font-normal" /></label>
+                    <label className="space-y-1 font-semibold text-zinc-700">Phone{detectedPhone && <span className="ml-2 text-[9px] font-medium text-emerald-700">From chat</span>}<input value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-mono font-normal" /></label>
                     <label className="space-y-1 font-semibold text-zinc-700">Email<input type="email" value={customerEmail} onChange={(event) => setCustomerEmail(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-normal" /></label>
                     <label className="space-y-1 font-semibold text-zinc-700">City{locationSource && customerCity && <span className="ml-2 text-[9px] font-medium text-zinc-400">{locationSource}</span>}<input value={customerCity} onChange={(event) => setCustomerCity(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-normal" /></label>
                     <label className="space-y-1 font-semibold text-zinc-700">Country<input value={customerCountry} onChange={(event) => setCustomerCountry(event.target.value)} className="h-9 w-full rounded-md border border-zinc-200 px-3 font-normal" /></label>

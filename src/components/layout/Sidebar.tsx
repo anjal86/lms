@@ -1,116 +1,128 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   BarChart3,
+  Bot,
   CalendarClock,
-  ChevronLeft,
-  ChevronRight,
   Inbox,
   Kanban,
   LayoutDashboard,
   LogOut,
-  Settings,
-  UserCog,
+  Settings2,
+  ShieldCheck,
+  UserRound,
   Users,
   Zap,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
+import { AgentStatus } from '@/lib/types';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 
-type Tone = 'blue' | 'cyan' | 'amber' | 'emerald' | 'violet' | 'rose';
-type NavItem = { label: string; href: string; icon: typeof LayoutDashboard; tone: Tone };
+type NavItem = { label: string; href: string; icon: typeof LayoutDashboard };
 
-const ACTIVE: Record<Tone, string> = {
-  blue: 'bg-blue-500/20 text-blue-50 ring-1 ring-inset ring-blue-300/30 shadow-[0_0_24px_rgba(59,130,246,0.12)]',
-  cyan: 'bg-cyan-500/20 text-cyan-50 ring-1 ring-inset ring-cyan-300/30 shadow-[0_0_24px_rgba(6,182,212,0.12)]',
-  amber: 'bg-amber-500/20 text-amber-50 ring-1 ring-inset ring-amber-300/30 shadow-[0_0_24px_rgba(245,158,11,0.10)]',
-  emerald: 'bg-emerald-500/20 text-emerald-50 ring-1 ring-inset ring-emerald-300/30 shadow-[0_0_24px_rgba(16,185,129,0.11)]',
-  violet: 'bg-violet-500/20 text-violet-50 ring-1 ring-inset ring-violet-300/30 shadow-[0_0_24px_rgba(139,92,246,0.12)]',
-  rose: 'bg-rose-500/20 text-rose-50 ring-1 ring-inset ring-rose-300/30 shadow-[0_0_24px_rgba(244,63,94,0.10)]',
-};
+function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
+  const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
+  const Icon = item.icon;
+  return (
+    <Link href={item.href} aria-label={item.label} aria-current={active ? 'page' : undefined} className={`group relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950'}`}>
+      {active && <span className="absolute inset-y-2 left-0 w-0.5 rounded-r bg-blue-600" />}
+      <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-blue-600' : 'text-zinc-400 group-hover:text-zinc-600'}`} />
+      <span className="truncate">{item.label}</span>
+    </Link>
+  );
+}
 
-const ICON_TONE: Record<Tone, string> = {
-  blue: 'text-blue-300',
-  cyan: 'text-cyan-300',
-  amber: 'text-amber-300',
-  emerald: 'text-emerald-300',
-  violet: 'text-violet-300',
-  rose: 'text-rose-300',
-};
-
-function Group({ label, items, pathname, collapsed }: { label: string; items: NavItem[]; pathname: string; collapsed: boolean }) {
+function NavGroup({ label, items, pathname }: { label: string; items: NavItem[]; pathname: string }) {
   if (!items.length) return null;
-  return <div className="space-y-1">
-    {collapsed ? <div className="mx-1.5 my-2.5 h-px bg-white/[0.08]" /> : <div className="px-3 pb-1 pt-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</div>}
-    {items.map((item) => {
-      const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
-      const Icon = item.icon;
-      return <Link key={item.href} href={item.href} title={collapsed ? item.label : undefined} aria-label={item.label} aria-current={active ? 'page' : undefined} className={`group flex items-center transition-all ${collapsed ? 'mx-auto h-10 w-10 justify-center rounded-xl' : 'min-h-11 gap-3 rounded-xl px-3 text-[13px] font-semibold'} ${active ? ACTIVE[item.tone] : 'text-slate-400 hover:bg-white/[0.07] hover:text-slate-100'}`}><span className={`flex shrink-0 items-center justify-center rounded-lg ${collapsed ? 'h-8 w-8' : 'h-7 w-7'} ${active ? `bg-white/[0.1] ${ICON_TONE[item.tone]}` : `${ICON_TONE[item.tone]} bg-white/[0.025] group-hover:bg-white/[0.06]`}`}><Icon className="h-4 w-4" /></span>{!collapsed && <span className="truncate">{item.label}</span>}</Link>;
-    })}
+  return <div><p className="mb-1.5 px-2.5 text-[11px] font-medium text-zinc-400">{label}</p><div className="space-y-1">{items.map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)}</div></div>;
+}
+
+const STATUS_CONFIG: Record<AgentStatus, { label: string; dot: string }> = {
+  available: { label: 'Available', dot: 'bg-emerald-500' },
+  in_call: { label: 'In a call', dot: 'bg-amber-500' },
+  on_break: { label: 'On a break', dot: 'bg-blue-500' },
+  offline: { label: 'Offline', dot: 'bg-zinc-400' },
+};
+
+function UserMenu({ fullName, role, status, onStatusChange, onSignOut }: { fullName: string; role: string; status: AgentStatus; onStatusChange: (s: AgentStatus) => void; onSignOut: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const initials = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
+  const currentStatus = STATUS_CONFIG[status] ?? STATUS_CONFIG.offline;
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouse = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMouse);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onMouse); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  return <div ref={ref} className="relative">
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} aria-label="User menu" className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20">
+      <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">{initials}<span className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-white ${currentStatus.dot}`} /></span>
+      <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium text-zinc-900">{fullName}</div><div className="mt-0.5 text-[11px] text-zinc-400">{currentStatus.label}</div></div>
+      <Settings2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+    </button>
+
+    {open && <div role="menu" className="absolute bottom-[calc(100%+6px)] left-0 z-50 w-60 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl animate-in fade-in-0 zoom-in-95 duration-100">
+      <div className="border-b border-zinc-100 px-3 py-3"><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-[10px] font-semibold text-white">{initials}</span><div className="min-w-0 flex-1"><div className="truncate text-[13px] font-semibold text-zinc-900">{fullName}</div><div className="mt-0.5 text-[11px] capitalize text-zinc-500">{role}</div></div></div></div>
+      <div className="border-b border-zinc-100 p-1.5"><p className="mb-1 px-2 py-1 text-[11px] font-medium text-zinc-400">Availability</p>{(Object.entries(STATUS_CONFIG) as [AgentStatus, { label: string; dot: string }][]).map(([key, cfg]) => <button key={key} type="button" role="menuitem" onClick={() => { onStatusChange(key); setOpen(false); }} className={`flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors ${status === key ? 'bg-blue-50 font-medium text-blue-700' : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-950'}`}><span className={`h-2 w-2 shrink-0 rounded-full ${cfg.dot}`} />{cfg.label}</button>)}</div>
+      <div className="p-1.5">
+        <Link href="/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"><UserRound className="h-3.5 w-3.5 text-zinc-400" /> Work profile</Link>
+        <Link href="/account/profile" onClick={() => setOpen(false)} role="menuitem" className="flex min-h-9 items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"><Settings2 className="h-3.5 w-3.5 text-zinc-400" /> Account settings</Link>
+        <button type="button" role="menuitem" onClick={() => { setOpen(false); onSignOut(); }} className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 text-[13px] font-medium text-zinc-700 transition-colors hover:bg-rose-50 hover:text-rose-700"><LogOut className="h-3.5 w-3.5 text-zinc-400" /> Sign out</button>
+      </div>
+    </div>}
   </div>;
 }
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { currentUser, logout } = useApp();
-  const { config, term, moduleEnabled } = useWorkspace();
+  const { currentUser, logout, updateAgentStatus, showToast } = useApp();
+  const { term, moduleEnabled } = useWorkspace();
   const { can } = useWorkspacePermissions();
-  const [collapsed, setCollapsed] = useState(true);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      try {
-        const stored = localStorage.getItem('travel_lms_sidebar_collapsed');
-        if (stored !== null) setCollapsed(stored === 'true');
-      } catch { /* noop */ }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  const toggle = () => setCollapsed((value) => {
-    const next = !value;
-    try { localStorage.setItem('travel_lms_sidebar_collapsed', String(next)); } catch { /* noop */ }
-    return next;
-  });
-
   const inboxEnabled = moduleEnabled('inbox', true);
   const leadsEnabled = moduleEnabled('leads', true);
   const tasksEnabled = moduleEnabled('tasks', true);
   const leadPlural = term('lead_plural', 'Opportunities');
   const contactPlural = term('contact_plural', 'Contacts');
-  const workspaceName = config.workspace.name || 'Workspace';
-  const initial = workspaceName.trim().charAt(0).toUpperCase() || 'W';
   const isAgent = currentUser.role === 'agent';
 
   const work: NavItem[] = [
-    { label: 'Today', href: '/dashboard', icon: LayoutDashboard, tone: 'blue' },
-    ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', href: '/inbox', icon: Inbox, tone: 'cyan' as const }] : []),
-    ...(leadsEnabled ? [{ label: leadPlural, href: isAgent ? '/my-work' : '/leads', icon: Kanban, tone: 'violet' as const }] : []),
-    ...(tasksEnabled ? [{ label: 'Due Work', href: '/work', icon: CalendarClock, tone: 'amber' as const }] : []),
-    ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users, tone: 'emerald' as const }] : []),
+    { label: 'Today', href: '/dashboard', icon: LayoutDashboard },
+    ...(inboxEnabled && can('inbox.view') ? [{ label: 'Inbox', href: '/inbox', icon: Inbox }] : []),
+    ...(leadsEnabled ? [{ label: leadPlural, href: isAgent ? '/my-work' : '/leads', icon: Kanban }] : []),
+    ...(tasksEnabled ? [{ label: 'Due Work', href: '/work', icon: CalendarClock }] : []),
+    ...(inboxEnabled && can('contacts.view') ? [{ label: contactPlural, href: '/contacts', icon: Users }] : []),
   ];
-
-  const manage: NavItem[] = isAgent ? [] : [
-    { label: 'Team', href: '/team', icon: UserCog, tone: 'rose' },
-    ...(can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3, tone: 'violet' as const }] : []),
-    ...(can('automations.view') ? [{ label: 'Automations', href: '/settings/automations', icon: Zap, tone: 'amber' as const }] : []),
+  const intelligence: NavItem[] = isAgent ? [] : [{ label: 'AI', href: '/ai', icon: Bot }];
+  const operate: NavItem[] = isAgent ? [] : [
+    ...(can('automations.view') ? [{ label: 'Automations', href: '/automations', icon: Zap }] : []),
+    ...(can('reports.view') ? [{ label: 'Reports', href: '/reports', icon: BarChart3 }] : []),
   ];
-
   const admin: NavItem[] = isAgent ? [] : [
-    { label: 'Settings', href: '/settings/workspace', icon: Settings, tone: 'blue' },
+    { label: 'Workspace admin', href: '/admin', icon: ShieldCheck },
   ];
 
+  const handleStatusChange = (status: AgentStatus) => { updateAgentStatus(status); showToast(`Status: ${STATUS_CONFIG[status].label}`, 'info'); };
   const signOut = async () => { await logout(); router.push('/login'); };
 
-  return <aside className={`hidden shrink-0 flex-col border-r border-slate-800/80 bg-[radial-gradient(circle_at_15%_5%,rgba(37,99,235,0.14),transparent_18rem),radial-gradient(circle_at_90%_45%,rgba(124,58,237,0.12),transparent_20rem),linear-gradient(180deg,#071329_0%,#0b1730_48%,#12172e_100%)] text-slate-300 transition-[width] duration-200 md:flex ${collapsed ? 'w-16' : 'w-60'}`}>
-    <div className={`flex h-16 items-center border-b border-white/[0.07] ${collapsed ? 'justify-center px-2' : 'justify-between px-4'}`}><Link href="/dashboard" className="flex min-w-0 items-center gap-3" title={collapsed ? workspaceName : undefined}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 via-violet-500 to-cyan-400 text-xs font-bold text-white shadow-[0_8px_24px_rgba(79,70,229,0.28)] ring-1 ring-white/25">{initial}</span>{!collapsed && <span className="min-w-0"><span className="block truncate text-sm font-bold text-white">{workspaceName}</span><span className="block truncate bg-gradient-to-r from-blue-300 via-violet-300 to-cyan-300 bg-clip-text text-[10px] font-semibold uppercase tracking-[0.14em] text-transparent">Business workspace</span></span>}</Link>{!collapsed && <button type="button" onClick={toggle} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Collapse sidebar"><ChevronLeft className="h-4 w-4" /></button>}</div>
-    {collapsed && <div className="flex justify-center pb-0.5 pt-2"><button type="button" onClick={toggle} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Expand sidebar" title="Expand sidebar"><ChevronRight className="h-4 w-4" /></button></div>}
-    <nav className={`flex-1 overflow-y-auto py-2 ${collapsed ? 'px-2' : 'px-2.5'}`}><Group label="Work" items={work} pathname={pathname} collapsed={collapsed} /><Group label="Manage" items={manage} pathname={pathname} collapsed={collapsed} /><Group label="Workspace" items={admin} pathname={pathname} collapsed={collapsed} /></nav>
-    <div className={`border-t border-white/[0.07] ${collapsed ? 'p-2' : 'p-3'}`}><Link href="/profile" title={collapsed ? `${currentUser.full_name} · ${currentUser.role}` : undefined} className={`block rounded-xl bg-white/[0.04] hover:bg-white/[0.08] ${collapsed ? 'p-1' : 'p-3'}`}><div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-400 via-blue-500 to-violet-500 text-[10px] font-bold text-white ring-1 ring-white/15">{currentUser.full_name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('')}</span>{!collapsed && <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-semibold text-slate-100">{currentUser.full_name}</div><div className="text-[10px] uppercase tracking-wide text-slate-500">{currentUser.role}</div></div>}</div></Link><button type="button" onClick={() => void signOut()} title={collapsed ? 'Sign out' : undefined} className={`mt-2 flex items-center rounded-xl text-slate-400 hover:bg-rose-500/10 hover:text-rose-300 ${collapsed ? 'h-10 w-10 justify-center' : 'w-full gap-2 px-3 py-2 text-xs font-semibold'}`}><LogOut className="h-4 w-4" />{!collapsed && 'Sign out'}</button></div>
+  return <aside className="hidden w-[232px] shrink-0 flex-col border-r border-zinc-200 bg-white md:flex">
+    <div className="border-b border-zinc-200 px-2.5 py-2.5"><WorkspaceSwitcher /></div>
+    <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 py-4">
+      <NavGroup label="Work" items={work} pathname={pathname} />
+      <NavGroup label="Intelligence" items={intelligence} pathname={pathname} />
+      <NavGroup label="Operate" items={operate} pathname={pathname} />
+      <NavGroup label="Admin" items={admin} pathname={pathname} />
+    </nav>
+    <div className="border-t border-zinc-200 px-2.5 py-2.5"><UserMenu fullName={currentUser.full_name} role={currentUser.role} status={(currentUser.status as AgentStatus) ?? 'offline'} onStatusChange={handleStatusChange} onSignOut={() => void signOut()} /></div>
   </aside>;
 }

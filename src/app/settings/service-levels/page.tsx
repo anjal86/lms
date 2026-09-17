@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Clock3, Loader2, Route, Save, ShieldAlert, TimerReset } from 'lucide-react';
+import { ArrowLeft, Clock3, Loader2, Route, Save, ShieldAlert, TimerReset, UsersRound } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
 
@@ -13,8 +13,9 @@ type Settings = {
   auto_reassign_after_minutes: number;
   auto_close_waiting_hours: number;
   next_action_reminders: boolean;
+  auto_assign_new_conversations: boolean;
   online_only_routing: boolean;
-  routing_strategy: 'least_open' | 'round_robin' | 'conversion_weighted';
+  routing_strategy: 'workload_balanced' | 'least_open' | 'round_robin' | 'conversion_weighted';
 };
 
 const DEFAULTS: Settings = {
@@ -24,8 +25,16 @@ const DEFAULTS: Settings = {
   auto_reassign_after_minutes: 30,
   auto_close_waiting_hours: 0,
   next_action_reminders: true,
+  auto_assign_new_conversations: false,
   online_only_routing: false,
-  routing_strategy: 'least_open',
+  routing_strategy: 'workload_balanced',
+};
+
+const ROUTING_HELP: Record<Settings['routing_strategy'], string> = {
+  workload_balanced: 'Balances open conversations against each agent’s capacity. Best default for shared inbox teams.',
+  least_open: 'Chooses the eligible agent with the fewest open conversations. Kept for legacy workspaces.',
+  round_robin: 'Rotates new conversations evenly between eligible agents.',
+  conversion_weighted: 'Prefers agents with stronger historical conversion performance when capacity allows.',
 };
 
 export default function ServiceLevelsPage() {
@@ -85,8 +94,8 @@ export default function ServiceLevelsPage() {
   return (
     <div className="app-page max-w-5xl">
       <header className="page-header">
-        <div><p className="page-eyebrow">Operations</p><h1 className="page-title">Service Levels</h1><p className="page-description">One place for conversation response targets, recovery, routing and automatic follow-up behavior.</p></div>
-        <div className="page-actions"><Link href="/settings" className="button-secondary"><ArrowLeft className="h-4 w-4" /> Settings</Link><button type="button" onClick={() => void save()} disabled={saving || loading || !can('service_levels.edit')} className="button-primary">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</button></div>
+        <div><p className="page-eyebrow">Operations</p><h1 className="page-title">Service levels</h1><p className="page-description">Set response targets, recovery rules and how shared Inbox work is distributed.</p></div>
+        <div className="page-actions"><Link href="/team" className="button-secondary"><UsersRound className="h-4 w-4" /> Team workload</Link><Link href="/settings" className="button-secondary"><ArrowLeft className="h-4 w-4" /> Settings</Link><button type="button" onClick={() => void save()} disabled={saving || loading || !can('service_levels.edit')} className="button-primary">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</button></div>
       </header>
 
       {workspace && <div className="surface-flat px-4 py-3 text-xs text-zinc-600"><span className="font-semibold text-zinc-900">{workspace.name}</span> · SLA clocks use workspace timezone <span className="font-mono">{workspace.timezone || 'UTC'}</span>.</div>}
@@ -98,7 +107,7 @@ export default function ServiceLevelsPage() {
 
         <section className="surface-flat p-5"><div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><ShieldAlert className="h-4 w-4" /></span><div><h2 className="section-heading">Conversation lifecycle</h2><p className="section-description">Keep queues clean without losing customer history.</p></div></div><div className="mt-5 space-y-4"><label className="block text-xs font-semibold text-zinc-700">Auto-close waiting conversations after hours <span className="font-normal text-zinc-400">(0 = off)</span><input type="number" min={0} max={720} value={settings.auto_close_waiting_hours} onChange={(e) => update('auto_close_waiting_hours', Number(e.target.value))} className="field mt-1.5" /></label><label className="flex items-center justify-between gap-4 text-sm font-medium text-zinc-800"><span><span className="block">Next-action reminders</span><span className="text-xs font-normal text-zinc-500">Notify owners when a scheduled conversation action becomes due.</span></span><input type="checkbox" checked={settings.next_action_reminders} onChange={(e) => update('next_action_reminders', e.target.checked)} /></label></div></section>
 
-        <section className="surface-flat p-5"><div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Route className="h-4 w-4" /></span><div><h2 className="section-heading">Routing</h2><p className="section-description">Choose how automatic assignment selects an owner.</p></div></div><div className="mt-5 space-y-4"><label className="block text-xs font-semibold text-zinc-700">Routing strategy<select value={settings.routing_strategy} onChange={(e) => update('routing_strategy', e.target.value as Settings['routing_strategy'])} className="select-field mt-1.5 w-full"><option value="least_open">Least open conversations</option><option value="round_robin">Round robin</option><option value="conversion_weighted">Conversion weighted</option></select></label><label className="flex items-center justify-between gap-4 text-sm font-medium text-zinc-800"><span><span className="block">Available agents only</span><span className="text-xs font-normal text-zinc-500">Skip agents whose work status is not available.</span></span><input type="checkbox" checked={settings.online_only_routing} onChange={(e) => update('online_only_routing', e.target.checked)} /></label></div></section>
+        <section className="surface-flat p-5"><div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700"><Route className="h-4 w-4" /></span><div><h2 className="section-heading">Routing</h2><p className="section-description">Choose when new conversations are assigned and how the owner is selected.</p></div></div><div className="mt-5 space-y-4"><label className="flex items-center justify-between gap-4 text-sm font-medium text-zinc-800"><span><span className="block">Auto-assign new live conversations</span><span className="text-xs font-normal text-zinc-500">Route new inbound chats immediately. Historical sync and backfill messages are never auto-assigned.</span></span><input type="checkbox" checked={settings.auto_assign_new_conversations} onChange={(e) => update('auto_assign_new_conversations', e.target.checked)} /></label><label className="block text-xs font-semibold text-zinc-700">Routing strategy<select value={settings.routing_strategy} onChange={(e) => update('routing_strategy', e.target.value as Settings['routing_strategy'])} className="select-field mt-1.5 w-full"><option value="workload_balanced">Balanced workload — recommended</option><option value="round_robin">Round robin</option><option value="conversion_weighted">Conversion weighted</option><option value="least_open">Least open — legacy</option></select></label><div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 text-xs leading-5 text-zinc-600">{ROUTING_HELP[settings.routing_strategy]}</div><label className="flex items-center justify-between gap-4 text-sm font-medium text-zinc-800"><span><span className="block">Available agents only</span><span className="text-xs font-normal text-zinc-500">Skip agents whose work status is not available.</span></span><input type="checkbox" checked={settings.online_only_routing} onChange={(e) => update('online_only_routing', e.target.checked)} /></label></div></section>
       </div>}
 
       {!can('service_levels.edit') && <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">You have read-only access to service-level configuration.</div>}

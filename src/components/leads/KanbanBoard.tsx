@@ -59,7 +59,7 @@ function DraggableCard({ lead, isCompact, isDragging, onWhatsApp, onLog, onStage
 
   const actions = (
     <div className="flex items-center gap-0.5">
-      <button onClick={onWhatsApp} aria-label={`WhatsApp ${lead.customer_name}`} className="p-1 rounded text-zinc-400 hover:text-emerald-700 hover:bg-emerald-50 transition cursor-pointer"><MessageSquare className="w-3 h-3" /></button>
+      <button onClick={onWhatsApp} aria-label={`WhatsApp ${lead.customer_name}`} className="p-1 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition cursor-pointer"><MessageSquare className="w-3 h-3" /></button>
       <button onClick={onLog} aria-label={`Log call ${lead.customer_name}`} className="p-1 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition cursor-pointer"><Phone className="w-3 h-3" /></button>
       <select value={lead.stage} aria-label={`Stage ${lead.lead_code}`} onChange={(e) => onStageChange(e.target.value as LeadStage)} onClick={(e) => e.stopPropagation()} className="text-[10px] bg-zinc-50 border border-zinc-200 rounded px-1 py-0.5 text-zinc-600 focus:outline-none cursor-pointer">
         <option value="new">New</option>
@@ -113,7 +113,7 @@ function DraggableCard({ lead, isCompact, isDragging, onWhatsApp, onLog, onStage
 
 function GhostCard({ lead }: { lead: Lead }) {
   return (
-    <div className="bg-white rounded-md border border-zinc-400 shadow-2xl p-2.5 w-72 rotate-1 opacity-95 cursor-grabbing pointer-events-none">
+    <div className="bg-white rounded-md border border-zinc-400 shadow-lg p-2.5 w-72 rotate-1 opacity-95 cursor-grabbing pointer-events-none">
       <div className="flex items-center gap-1.5 mb-1"><span className="font-mono text-[10px] text-zinc-400">{lead.lead_code}</span><span className="text-zinc-300">·</span><span className="text-xs font-semibold text-zinc-900 truncate">{lead.customer_name}</span></div>
       <div className="flex items-center gap-1 text-[11px] text-zinc-500"><MapPin className="w-3 h-3 text-zinc-400" /><span>{lead.destination}</span><span>·</span><span className="font-mono text-zinc-700">{lead.budget_range || '$2k'}</span></div>
     </div>

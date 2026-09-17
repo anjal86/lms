@@ -3,10 +3,14 @@ import { createClient, type SupabaseClient, type User } from '@supabase/supabase
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
+import { serverSupabaseUrl } from '@/lib/supabase/server-config';
+
+export type WorkspaceRole = 'owner' | 'admin' | 'manager' | 'agent';
 
 export type ApiProfile = {
   id: string;
   role: 'admin' | 'manager' | 'agent';
+  workspace_role: WorkspaceRole;
   is_active: boolean;
   full_name: string | null;
   workspace_id: string;
@@ -24,7 +28,7 @@ function bearerToken(request: Request) {
 }
 
 function userScopedBearerClient(token: string) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = serverSupabaseUrl();
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) throw new Error('Supabase server configuration is missing.');
 
@@ -34,11 +38,16 @@ function userScopedBearerClient(token: string) {
   });
 }
 
+function compatibilityRole(role: WorkspaceRole): ApiProfile['role'] {
+  if (role === 'owner' || role === 'admin') return 'admin';
+  return role;
+}
+
 async function finalizeActor(user: User, supabase: SupabaseClient) {
   const admin = createSupabaseAdminClient();
   const { data: profile, error } = await admin
     .from('profiles')
-    .select('id,role,is_active,full_name,workspace_id')
+    .select('id,is_active,full_name,workspace_id')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -52,10 +61,33 @@ async function finalizeActor(user: User, supabase: SupabaseClient) {
     return { error: NextResponse.json({ error: 'Workspace is not configured for this account.' }, { status: 403 }) } as const;
   }
 
+  const { data: membership, error: membershipError } = await admin
+    .from('workspace_members')
+    .select('role,is_active')
+    .eq('workspace_id', profile.workspace_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (membershipError || !membership?.is_active) {
+    return { error: NextResponse.json({ error: 'Workspace membership is not active.' }, { status: 403 }) } as const;
+  }
+
+  const workspaceRole = membership.role as WorkspaceRole;
+  if (!['owner', 'admin', 'manager', 'agent'].includes(workspaceRole)) {
+    return { error: NextResponse.json({ error: 'Workspace role is invalid.' }, { status: 403 }) } as const;
+  }
+
   return {
     supabase,
     user,
-    profile: profile as ApiProfile,
+    profile: {
+      id: profile.id,
+      role: compatibilityRole(workspaceRole),
+      workspace_role: workspaceRole,
+      is_active: profile.is_active,
+      full_name: profile.full_name,
+      workspace_id: profile.workspace_id,
+    },
   } satisfies ApiActor;
 }
 
@@ -80,5 +112,10 @@ export async function getApiActor(request: Request) {
 }
 
 export function isManagement(profile: ApiProfile) {
-  return profile.role === 'admin' || profile.role === 'manager';
+  return profile.workspace_role === 'owner' || profile.workspace_role === 'admin' || profile.workspace_role === 'manager';
+}
+
+export async function isPlatformSuperAdmin(actor: ApiActor) {
+  const { data, error } = await actor.supabase.rpc('is_platform_super_admin');
+  return !error && data === true;
 }

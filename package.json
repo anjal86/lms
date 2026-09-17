@@ -14,7 +14,8 @@
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
     "doctor:local": "node scripts/doctor-local.mjs",
     "keys:local": "node scripts/generate-local-supabase-secrets.mjs --write",
-    "db:migrate:local": "node scripts/apply-local-migrations.mjs && node scripts/apply-local-migration-038.mjs && node scripts/apply-local-crm-core-migrations.mjs",
+    "db:migrate:local": "node scripts/apply-local-migrations.mjs && node scripts/apply-local-migration-038.mjs && node scripts/apply-local-crm-core-migrations.mjs && node scripts/apply-local-migration-064.mjs && node scripts/apply-local-migration-065.mjs && node scripts/apply-local-migrations-066-086.mjs && node scripts/apply-local-ai-runtime-migrations.mjs && node scripts/apply-local-settings-boundary.mjs",
+    "platform-admin": "node scripts/platform-admin.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "seed:users": "node scripts/seed-users.mjs"
   },

@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getApiActor, isManagement } from '@/lib/auth/api-actor';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { cacheResponseHeaders, readRedisJson, scopedRedisCacheKey, writeRedisJson, type RedisCacheStatus } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const DASHBOARD_SUMMARY_TTL_SECONDS = 20;
 
 type FallbackLead = {
   id: string;
@@ -23,6 +27,7 @@ type FallbackLead = {
 };
 
 type JsonObject = Record<string, unknown>;
+type DashboardPayload = Record<string, unknown>;
 
 type QueueItem = {
   key: string;
@@ -45,7 +50,8 @@ function stringValue(value: unknown): string {
 
 async function buildLegacyCompatibleSummary(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  userId: string
+  userId: string,
+  workspaceId: string
 ) {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -60,6 +66,7 @@ async function buildLegacyCompatibleSummary(
       .select(
         'id,lead_code,customer_name,destination,stage,assigned_to,first_contacted_at,is_first_response_breached,next_follow_up_at,last_contacted_at,package_sale_price,won_deal_value,payment_milestones,passengers,created_at'
       )
+      .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: false })
       .limit(5000),
     supabase
@@ -74,7 +81,7 @@ async function buildLegacyCompatibleSummary(
   }
 
   const leads = (leadsResult.data || []) as FallbackLead[];
-  const activeStages = new Set(['won', 'lost', 'junk']);
+  const closedStages = new Set(['won', 'lost', 'junk']);
 
   let slaBreaches = 0;
   let unassignedLeads = 0;
@@ -92,7 +99,7 @@ async function buildLegacyCompatibleSummary(
   const queue: QueueItem[] = [];
 
   for (const lead of leads) {
-    const isClosed = activeStages.has(lead.stage);
+    const isClosed = closedStages.has(lead.stage);
     const lastTouch = new Date(lead.last_contacted_at || lead.created_at).getTime();
     const isStale = !isClosed && Number.isFinite(lastTouch) && lastTouch < now - 48 * 60 * 60 * 1000;
 
@@ -100,13 +107,7 @@ async function buildLegacyCompatibleSummary(
     if (lead.destination?.trim()) destinations.add(lead.destination.trim());
     if (lead.assigned_to === userId) myCount += 1;
     if (!lead.first_contacted_at && lead.stage === 'new') pendingSlaCount += 1;
-    if (
-      lead.next_follow_up_at
-      && new Date(lead.next_follow_up_at).getTime() < now
-      && !isClosed
-    ) {
-      overdueCount += 1;
-    }
+    if (lead.next_follow_up_at && new Date(lead.next_follow_up_at).getTime() < now && !isClosed) overdueCount += 1;
 
     if (lead.stage === 'won') {
       wonCount += 1;
@@ -186,61 +187,64 @@ async function buildLegacyCompatibleSummary(
   };
 }
 
-export async function GET() {
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
+export async function GET(request: Request) {
+  const actor = await getApiActor(request);
+  if ('error' in actor) return actor.error;
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('role,is_active')
-    .eq('id', user.id)
-    .maybeSingle();
+  const workspaceId = actor.profile.workspace_id;
+  const requestUrl = new URL(request.url);
+  const forceRefresh = requestUrl.searchParams.get('refresh') === '1';
+  const cacheKey = await scopedRedisCacheKey({
+    workspaceId,
+    namespace: 'dashboard:summary',
+    userId: actor.user.id,
+    dimensions: { workspaceRole: actor.profile.workspace_role },
+  });
 
-  if (profileError) {
-    console.error('Dashboard profile lookup failed:', profileError.message);
-    return NextResponse.json({ error: 'Unable to verify your account.' }, { status: 500 });
+  let cacheStatus: RedisCacheStatus = 'BYPASS';
+  if (!forceRefresh) {
+    const cached = await readRedisJson<DashboardPayload>(cacheKey);
+    cacheStatus = cached.status;
+    if (cached.value) {
+      return NextResponse.json(cached.value, { headers: cacheResponseHeaders('HIT') });
+    }
   }
 
-  if (!profile?.is_active) return NextResponse.json({ error: 'Account disabled.' }, { status: 403 });
-
   const [operationalResult, pipelineResult] = await Promise.all([
-    supabase.rpc('dashboard_operational_summary'),
-    supabase.rpc('lead_pipeline_summary'),
+    actor.supabase.rpc('dashboard_operational_summary'),
+    actor.supabase.rpc('lead_pipeline_summary'),
   ]);
 
   if (!operationalResult.error && !pipelineResult.error) {
-    return NextResponse.json(
-      {
-        summary: operationalResult.data || {},
-        pipelineSummary: pipelineResult.data || {},
-        isManagement: profile.role === 'admin' || profile.role === 'manager',
-        source: 'rpc',
-      },
-      { headers: { 'Cache-Control': 'no-store' } }
-    );
+    const payload: DashboardPayload = {
+      summary: operationalResult.data || {},
+      pipelineSummary: pipelineResult.data || {},
+      isManagement: isManagement(actor.profile),
+      workspaceRole: actor.profile.workspace_role,
+      workspaceId,
+      source: 'rpc',
+    };
+    await writeRedisJson(cacheKey, payload, DASHBOARD_SUMMARY_TTL_SECONDS);
+    return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
   }
 
-  // Migrations 011-012 introduced the normalized operational tables and dashboard
-  // RPCs. Keep the Action Center usable while an existing environment is being
-  // upgraded, rather than returning a blank dashboard simply because the DB deploy
-  // is a few migrations behind the application deploy.
   console.warn(
     'Dashboard RPC unavailable; using legacy-compatible fallback:',
     operationalResult.error?.message || pipelineResult.error?.message
   );
 
   try {
-    const fallback = await buildLegacyCompatibleSummary(supabase, user.id);
-    return NextResponse.json(
-      {
-        ...fallback,
-        isManagement: profile.role === 'admin' || profile.role === 'manager',
-        source: 'fallback',
-        migrationRequired: true,
-      },
-      { headers: { 'Cache-Control': 'no-store' } }
-    );
+    const fallback = await buildLegacyCompatibleSummary(actor.supabase, actor.user.id, workspaceId);
+    const payload: DashboardPayload = {
+      ...fallback,
+      isManagement: isManagement(actor.profile),
+      workspaceRole: actor.profile.workspace_role,
+      workspaceId,
+      source: 'fallback',
+      migrationRequired: true,
+    };
+    await writeRedisJson(cacheKey, payload, DASHBOARD_SUMMARY_TTL_SECONDS);
+    return NextResponse.json(payload, { headers: cacheResponseHeaders(forceRefresh ? 'BYPASS' : cacheStatus) });
   } catch (fallbackError) {
     console.error(
       'Dashboard summary failed:',

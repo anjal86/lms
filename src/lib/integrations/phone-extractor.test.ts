@@ -8,8 +8,18 @@ describe('extractPhoneNumbers', () => {
     expect(extractPhoneNumbers('Call (415) 555-0123 after 5')).toContain('(415) 555-0123');
   });
 
-  it('deduplicates identical matches', () => {
-    const result = extractPhoneNumbers('My number is +977 9841234567. Again: +977 9841234567');
+  it('detects a plausible number without requiring phone-related wording', () => {
+    expect(extractPhoneNumbers('9841234567')).toEqual(['9841234567']);
+    expect(extractPhoneNumbers('okay 9863731612 tomorrow')).toEqual(['9863731612']);
+  });
+
+  it('returns every distinct plausible number from the same message', () => {
+    const result = extractPhoneNumbers('Use 9841234567 or +977 9863 731 612, office 01-5453854');
+    expect(result).toEqual(['9841234567', '+977 9863 731 612', '01-5453854']);
+  });
+
+  it('deduplicates equivalent formatting of the same number', () => {
+    const result = extractPhoneNumbers('First +977 9841234567, again +977-9841234567');
     expect(result).toEqual(['+977 9841234567']);
   });
 

@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   AtSign,
+  Bot,
   CheckCircle2,
   Clock3,
   History,
@@ -16,6 +17,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   PanelRight,
+  Pause,
   PauseCircle,
   Plus,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
   Sparkles,
   UserCheck,
   UserPlus,
+  UserRound,
   Users,
   WandSparkles,
   X,
@@ -31,7 +34,7 @@ import {
 import { useApp } from '@/lib/store';
 import { useWorkspace } from '@/lib/platform/WorkspaceContext';
 import { useWorkspacePermissions } from '@/lib/use-workspace-permissions';
-import { getSupabaseBrowserClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import { getSupabaseBrowserClient, isSupabaseConfigured, syncRealtimeAuth } from '@/lib/supabase/client';
 import ConvertToLeadDrawer, { type ConversationForConversion } from '@/components/inbox/ConvertToLeadDrawer';
 import MetaConversationTimeline from '@/components/inbox/MetaConversationTimeline';
 import InboxComposer, { type InboxComposerAttachment } from '@/components/inbox/InboxComposer';
@@ -105,6 +108,7 @@ type Message = {
   failure_message?: string | null;
   sent_at: string;
   author_profile?: { full_name?: string | null } | null;
+  client_request_id?: string | null;
 };
 
 type TimelineEvent = { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; actor_id?: string | null; actor: { full_name: string | null } | null };
@@ -115,13 +119,57 @@ type Session = { id: string; owner_id: string | null; opened_at: string; first_r
 type AssistResult = { mode: 'provider' | 'local'; action: 'summary' | 'reply' | 'extract'; result?: string; data?: Record<string, unknown> };
 type ThreadSnapshot = { conversation: Conversation; messages: Message[]; messageTotal: number; hasOlderMessages: boolean; messageLimit: number; fetchedAt: number };
 type SecondarySnapshot = { events: TimelineEvent[]; collaborators: Collaborator[]; fetchedAt: number };
+type ListSnapshot = { conversations: Conversation[]; metrics: Metrics; selectedId: string | null; fetchedAt: number };
+type SavedViewsSnapshot = { views: SavedView[]; fetchedAt: number };
+type AiAgentInfo = { id: string; name: string; model: string; mode: string; is_active: boolean };
+type AiState = {
+  conversation_id: string;
+  agent_id: string | null;
+  state: 'active' | 'paused' | 'handed_off' | 'failed' | 'disabled';
+  draft_reply?: string | null;
+  last_ai_at?: string | null;
+  handoff_reason?: string | null;
+  last_error?: string | null;
+  agent?: AiAgentInfo | AiAgentInfo[] | null;
+};
+
+function agentName(state: AiState | null): string {
+  if (!state?.agent) return 'AI Agent';
+  const a = Array.isArray(state.agent) ? state.agent[0] : state.agent;
+  return a?.name || 'AI Agent';
+}
 
 const EMPTY_METRICS: Metrics = { totalOpen: 0, unassigned: 0, collaborations: 0, waiting: 0, snoozed: 0, unread: 0, needsReply: 0, slaOverdue: 0, highPriority: 0, hasPhone: 0 };
 const EVENT_TYPES = new Set(['state_changed', 'assigned', 'priority_changed', 'lifecycle_changed', 'next_action_changed', 'contact_tag_changed', 'collaborator_added', 'collaborator_removed']);
 const THREAD_TTL_MS = 30_000;
 const SECONDARY_TTL_MS = 60_000;
 const INITIAL_MESSAGE_LIMIT = 160;
+const RUNTIME_LIST_CACHE = new Map<string, ListSnapshot>();
+const RUNTIME_THREAD_CACHE = new Map<string, ThreadSnapshot>();
+const RUNTIME_SECONDARY_CACHE = new Map<string, SecondarySnapshot>();
+const RUNTIME_SESSIONS_CACHE = new Map<string, Session[]>();
+const RUNTIME_SAVED_VIEWS_CACHE = new Map<string, SavedViewsSnapshot>();
 
+function remember<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+function scopedCacheKey(scope: string, id: string) { return `${scope}::${id}`; }
+function listCacheKey(scope: string, queue: QueueKey, provider: string, sort: SortKey, state: string, priority: string, search: string) {
+  return JSON.stringify([scope, queue, provider, sort, state, priority, search]);
+}
+function createScopedRuntimeCache<T>(backing: Map<string, T>, scope: () => string, maxEntries: number) {
+  return {
+    get(id: string) { return backing.get(scopedCacheKey(scope(), id)); },
+    set(id: string, value: T) { remember(backing, scopedCacheKey(scope(), id), value, maxEntries); },
+    delete(id: string) { return backing.delete(scopedCacheKey(scope(), id)); },
+  };
+}
 function asRecord(value: unknown): UnknownRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {}; }
 function contactOf(conversation: Conversation | null) { if (!conversation?.contact) return null; return Array.isArray(conversation.contact) ? conversation.contact[0] || null : conversation.contact; }
 function leadOf(conversation: Conversation | null) { if (!conversation?.lead) return null; return Array.isArray(conversation.lead) ? conversation.lead[0] || null : conversation.lead; }
@@ -155,6 +203,14 @@ export default function StableInbox() {
   const { can } = useWorkspacePermissions();
   const contactLabel = term('contact', 'Contact');
   const leadLabel = term('lead', 'Lead');
+  const cacheScope = `${currentUser.id}::${config.workspace.id}`;
+  const initialListKey = listCacheKey(cacheScope, initialParams.queue, initialParams.provider, initialParams.sort, initialParams.state, initialParams.priority, initialParams.search.trim());
+  const initialListSnapshot = RUNTIME_LIST_CACHE.get(initialListKey);
+  const initialSelectedId = initialParams.conversationId || initialListSnapshot?.selectedId || null;
+  const initialThreadSnapshot = initialSelectedId ? RUNTIME_THREAD_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSecondarySnapshot = initialSelectedId ? RUNTIME_SECONDARY_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSessionsSnapshot = initialSelectedId ? RUNTIME_SESSIONS_CACHE.get(scopedCacheKey(cacheScope, initialSelectedId)) : undefined;
+  const initialSavedViews = RUNTIME_SAVED_VIEWS_CACHE.get(cacheScope)?.views || [];
 
   const [queue, setQueue] = useState<QueueKey>(() => initialParams.queue);
   const [provider, setProvider] = useState(() => initialParams.provider);
@@ -163,24 +219,24 @@ export default function StableInbox() {
   const [sort, setSort] = useState<SortKey>(() => initialParams.sort);
   const [search, setSearch] = useState(() => initialParams.search);
   const [debouncedSearch, setDebouncedSearch] = useState(() => initialParams.search);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS);
-  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(() => initialListSnapshot?.conversations || []);
+  const [metrics, setMetrics] = useState<Metrics>(() => initialListSnapshot?.metrics || EMPTY_METRICS);
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => initialSavedViews);
   const [activeSavedView, setActiveSavedView] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialParams.conversationId);
-  const [selected, setSelected] = useState<Conversation | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messageTotal, setMessageTotal] = useState(0);
-  const [hasOlderMessages, setHasOlderMessages] = useState(false);
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialSelectedId);
+  const [selected, setSelected] = useState<Conversation | null>(() => initialThreadSnapshot?.conversation || initialListSnapshot?.conversations.find((row) => row.id === initialSelectedId) || null);
+  const [messages, setMessages] = useState<Message[]>(() => initialThreadSnapshot?.messages || []);
+  const [messageTotal, setMessageTotal] = useState(() => initialThreadSnapshot?.messageTotal || 0);
+  const [hasOlderMessages, setHasOlderMessages] = useState(() => initialThreadSnapshot?.hasOlderMessages || false);
+  const [events, setEvents] = useState<TimelineEvent[]>(() => initialSecondarySnapshot?.events || []);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>(() => initialSecondarySnapshot?.collaborators || []);
+  const [sessions, setSessions] = useState<Session[]>(() => initialSessionsSnapshot || []);
   const [contextTab, setContextTab] = useState<ContextTab>(() => initialParams.tab);
   const [contextOpen, setContextOpen] = useState(false);
   const [replyMode, setReplyMode] = useState<ReplyMode>('outbound');
   const [replyBody, setReplyBody] = useState('');
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingThread, setLoadingThread] = useState(false);
+  const [loadingList, setLoadingList] = useState(() => !initialListSnapshot);
+  const [loadingThread, setLoadingThread] = useState(() => Boolean(initialSelectedId && !initialThreadSnapshot));
   const [refreshingThread, setRefreshingThread] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sending, setSending] = useState(false);
@@ -194,10 +250,16 @@ export default function StableInbox() {
   const [closeOpen, setCloseOpen] = useState(false);
   const [resolution, setResolution] = useState('resolved');
   const [closingNote, setClosingNote] = useState('');
+  const [aiState, setAiState] = useState<AiState | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [isAiReplying, setIsAiReplying] = useState(false);
+  const aiReplyingTimer = useRef<number | null>(null);
 
-  const threadCache = useRef(new Map<string, ThreadSnapshot>());
-  const secondaryCache = useRef(new Map<string, SecondarySnapshot>());
-  const sessionsCache = useRef(new Map<string, Session[]>());
+  const cacheScopeRef = useRef(cacheScope);
+  cacheScopeRef.current = cacheScope;
+  const threadCache = useRef(createScopedRuntimeCache(RUNTIME_THREAD_CACHE, () => cacheScopeRef.current, 160));
+  const secondaryCache = useRef(createScopedRuntimeCache(RUNTIME_SECONDARY_CACHE, () => cacheScopeRef.current, 160));
+  const sessionsCache = useRef(createScopedRuntimeCache(RUNTIME_SESSIONS_CACHE, () => cacheScopeRef.current, 160));
   const selectedIdRef = useRef<string | null>(selectedId);
   const coreAbort = useRef<AbortController | null>(null);
   const coreRequestToken = useRef(0);
@@ -379,14 +441,33 @@ export default function StableInbox() {
   }, []);
 
   const loadViews = useCallback(async () => {
+    const cached = RUNTIME_SAVED_VIEWS_CACHE.get(cacheScope);
+    if (cached) setSavedViews(cached.views);
     try {
       const response = await fetch('/api/inbox/views', { cache: 'no-store' });
-      if (response.ok) setSavedViews((await response.json()).views || []);
+      if (response.ok) {
+        const views = (await response.json()).views || [];
+        setSavedViews(views);
+        remember(RUNTIME_SAVED_VIEWS_CACHE, cacheScope, { views, fetchedAt: Date.now() }, 24);
+      }
     } catch { /* optional */ }
-  }, []);
+  }, [cacheScope]);
 
   const loadList = useCallback(async (quiet = false) => {
-    if (!quiet) setLoadingList(true);
+    const currentListKey = listCacheKey(cacheScope, queue, provider, sort, state, priority, debouncedSearch);
+    const cached = RUNTIME_LIST_CACHE.get(currentListKey);
+    if (cached) {
+      setConversations(cached.conversations);
+      setMetrics(cached.metrics);
+      if (!selectedIdRef.current && cached.selectedId) {
+        selectedIdRef.current = cached.selectedId;
+        setSelectedId(cached.selectedId);
+      }
+      setLoadingList(false);
+    } else if (!quiet) {
+      setLoadingList(true);
+    }
+
     try {
       const query = new URLSearchParams({ filter: queue, provider, sort, limit: '180' });
       if (state) query.set('state', state);
@@ -396,24 +477,36 @@ export default function StableInbox() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to load Inbox.');
       const rows = (payload.conversations || []) as Conversation[];
+      const nextMetrics = { ...EMPTY_METRICS, ...(payload.metrics || {}) };
       setConversations(rows);
-      setMetrics({ ...EMPTY_METRICS, ...(payload.metrics || {}) });
-      setSelectedId((current) => {
-        if (current) return current;
+      setMetrics(nextMetrics);
+
+      let target = selectedIdRef.current;
+      if (!target) {
         const fromParam = initialParams.conversationId;
         const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 1024;
-        const target = fromParam || (isDesktop ? rows[0]?.id : null) || null;
+        target = fromParam || (isDesktop ? rows[0]?.id : null) || null;
+        if (target) {
+          selectedIdRef.current = target;
+          setSelectedId(target);
+        }
         if (target && isDesktop && !fromParam && rows[0]?.id === target) {
           syncUrl({ conversationId: target }, { replace: true });
         }
-        return target;
-      });
+      }
+
+      remember(RUNTIME_LIST_CACHE, currentListKey, {
+        conversations: rows,
+        metrics: nextMetrics,
+        selectedId: target,
+        fetchedAt: Date.now(),
+      }, 32);
     } catch (error) {
-      if (!quiet) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
+      if (!quiet && !cached) showToast(error instanceof Error ? error.message : 'Unable to load Inbox.', 'error');
     } finally {
       if (!quiet) setLoadingList(false);
     }
-  }, [debouncedSearch, initialParams.conversationId, priority, provider, queue, showToast, sort, state, syncUrl]);
+  }, [cacheScope, debouncedSearch, initialParams.conversationId, priority, provider, queue, showToast, sort, state, syncUrl]);
 
   const applyThreadSnapshot = useCallback((snapshot: ThreadSnapshot) => {
     setSelected(snapshot.conversation);
@@ -428,7 +521,7 @@ export default function StableInbox() {
     const messageLimit = options?.messageLimit || cached?.messageLimit || INITIAL_MESSAGE_LIMIT;
     const fresh = cached && Date.now() - cached.fetchedAt < THREAD_TTL_MS && cached.messageLimit >= messageLimit;
 
-    if (cached) applyThreadSnapshot(cached);
+    if (cached && !force) applyThreadSnapshot(cached);
     if (fresh && !force) {
       setLoadingThread(false);
       return cached;
@@ -523,6 +616,41 @@ export default function StableInbox() {
     } finally { setContextBusy(false); }
   }, []);
 
+  const loadAiState = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/conversations/${id}/ai`, { cache: 'no-store' });
+      if (!response.ok || selectedIdRef.current !== id) return;
+      const payload = await response.json().catch(() => ({}));
+      setAiState(payload.ai || null);
+    } catch {}
+  }, []);
+
+  const handleAiAction = useCallback(async (action: 'takeover' | 'resume' | 'pause') => {
+    const id = selectedIdRef.current;
+    if (!id) return;
+    setAiBusy(true);
+    if (action === 'takeover' || action === 'pause') {
+      setIsAiReplying(false);
+      if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+    }
+    try {
+      const response = await fetch(`/api/conversations/${id}/ai`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Unable to update AI state.');
+      setAiState(payload.ai || null);
+      showToast(action === 'resume' ? 'Assigned to AI Agent.' : action === 'takeover' ? 'You took over this conversation.' : 'AI Agent paused.', 'success');
+      window.dispatchEvent(new CustomEvent('crm:data-mutated'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to update AI state.', 'error');
+    } finally {
+      setAiBusy(false);
+    }
+  }, [showToast]);
+
   const selectConversation = useCallback((conversation: Conversation) => {
     if (selectedIdRef.current === conversation.id) return;
     selectedIdRef.current = conversation.id;
@@ -534,20 +662,29 @@ export default function StableInbox() {
     setEvents([]);
     setCollaborators([]);
     setSessions([]);
+    
+    autoScrollRef.current = true;
     const cached = threadCache.current.get(conversation.id);
-    if (cached) applyThreadSnapshot(cached);
-    else {
+    if (cached) {
+      applyThreadSnapshot(cached);
+      window.setTimeout(() => {
+        if (autoScrollRef.current) {
+          autoScrollRef.current = false;
+          scrollToBottom();
+        }
+      }, 50);
+    } else {
       setSelected(conversation);
       setMessages([]);
       setMessageTotal(0);
       setHasOlderMessages(false);
       setLoadingThread(true);
-      autoScrollRef.current = true;
     }
     const secondary = secondaryCache.current.get(conversation.id);
     if (secondary) { setEvents(secondary.events); setCollaborators(secondary.collaborators); }
     syncUrl({ conversationId: conversation.id });
-  }, [applyThreadSnapshot, setContextOpen, syncUrl]);
+    void loadAiState(conversation.id);
+  }, [applyThreadSnapshot, loadAiState, setContextOpen, syncUrl, scrollToBottom]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void Promise.all([loadViews(), loadList()]); }, 0);
@@ -558,13 +695,36 @@ export default function StableInbox() {
     if (!selectedId) {
       coreAbort.current?.abort();
       setSelected(null); setMessages([]); setEvents([]); setCollaborators([]); setSessions([]);
+      setAiState(null); setIsAiReplying(false);
       return;
     }
-    const row = conversations.find((item) => item.id === selectedId);
-    if (!selected && row) setSelected(row);
     void loadCoreThread(selectedId);
     void loadSecondary(selectedId);
-  }, [conversations, loadCoreThread, loadSecondary, selected, selectedId]);
+    void loadAiState(selectedId);
+  }, [loadAiState, loadCoreThread, loadSecondary, selectedId]);
+
+  useEffect(() => {
+    const reconcile = () => {
+      void loadList(true);
+      const id = selectedIdRef.current;
+      if (id) void loadCoreThread(id, { force: true, quiet: true });
+    };
+    window.addEventListener('inbox:provider-sync', reconcile);
+    return () => window.removeEventListener('inbox:provider-sync', reconcile);
+  }, [loadCoreThread, loadList]);
+
+  // Active thread polling fallback: ensures real-time updates even if WebSockets are throttled or reconnecting
+  useEffect(() => {
+    if (!selectedId) return;
+    const intervalMs = isAiReplying ? 2500 : 6000;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && selectedIdRef.current === selectedId) {
+        void loadCoreThread(selectedId, { force: true, quiet: true });
+        void loadAiState(selectedId);
+      }
+    }, intervalMs);
+    return () => window.clearInterval(interval);
+  }, [isAiReplying, loadAiState, loadCoreThread, selectedId]);
 
   useEffect(() => {
     if (contextTab === 'history' && selectedId) void loadSessions(selectedId);
@@ -584,52 +744,115 @@ export default function StableInbox() {
 
   useEffect(() => {
     if (!isSupabaseConfigured() || !config.workspace.id) return;
-    const supabase = getSupabaseBrowserClient();
-    const channel = supabase.channel(`stable-inbox:${config.workspace.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_conversations', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const id = typeof changed.id === 'string' ? changed.id : null;
-        if (id && selectedIdRef.current === id) {
-          setSelected((current) => current ? { ...current, ...changed } as Conversation : current);
-        }
-        scheduleListRefresh();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_messages', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const conversationId = typeof changed.conversation_id === 'string' ? changed.conversation_id : null;
-        if (conversationId && payload.eventType === 'INSERT') {
-          setConversations((rows) => {
-            const current = rows.find((row) => row.id === conversationId);
-            if (!current) return rows;
-            const inbound = changed.direction === 'inbound';
-            const selectedNow = selectedIdRef.current === conversationId;
-            const body = typeof changed.body === 'string' && changed.body.trim() ? changed.body : current.last_message_preview;
-            const updated = {
-              ...current,
-              last_message_at: typeof changed.sent_at === 'string' ? changed.sent_at : new Date().toISOString(),
-              last_message_preview: body || current.last_message_preview,
-              needs_reply: inbound ? true : current.needs_reply,
-              unread_count: inbound && !selectedNow ? current.unread_count + 1 : current.unread_count,
-            };
-            if (sort === 'newest') return [updated, ...rows.filter((row) => row.id !== conversationId)];
-            return rows.map((row) => row.id === conversationId ? updated : row);
-          });
-        }
-        scheduleListRefresh();
-        if (conversationId && conversationId === selectedIdRef.current) scheduleThreadRefresh(conversationId);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_events', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
-        const changed = payload.new as UnknownRecord;
-        const conversationId = typeof changed.conversation_id === 'string' ? changed.conversation_id : null;
-        if (conversationId && conversationId === selectedIdRef.current) void loadSecondary(conversationId, true);
-      })
-      .subscribe();
+    let channel: ReturnType<ReturnType<typeof getSupabaseBrowserClient>['channel']> | null = null;
+    let active = true;
+
+    async function setupRealtime() {
+      const supabase = getSupabaseBrowserClient();
+      await syncRealtimeAuth(supabase);
+      if (!active) return;
+
+      channel = supabase.channel(`stable-inbox:${config.workspace.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_conversations', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const id = typeof changed?.id === 'string' ? changed.id : null;
+          if (id && selectedIdRef.current === id) {
+            setSelected((current) => current ? { ...current, ...changed } as Conversation : current);
+          }
+          scheduleListRefresh();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_messages', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && payload.eventType === 'INSERT') {
+            setConversations((rows) => {
+              const current = rows.find((row) => row.id === conversationId);
+              if (!current) return rows;
+              const inbound = changed.direction === 'inbound';
+              const selectedNow = selectedIdRef.current === conversationId;
+              const body = typeof changed.body === 'string' && changed.body.trim() ? changed.body : current.last_message_preview;
+              const updated = {
+                ...current,
+                last_message_at: typeof changed.sent_at === 'string' ? changed.sent_at : new Date().toISOString(),
+                last_message_preview: body || current.last_message_preview,
+                needs_reply: inbound ? true : current.needs_reply,
+                unread_count: inbound && !selectedNow ? current.unread_count + 1 : current.unread_count,
+              };
+              if (sort === 'newest') return [updated, ...rows.filter((row) => row.id !== conversationId)];
+              return rows.map((row) => row.id === conversationId ? updated : row);
+            });
+          }
+          scheduleListRefresh();
+          if (conversationId && conversationId === selectedIdRef.current) {
+            if (payload.eventType === 'INSERT') {
+              const incoming = changed as unknown as Message;
+              if (incoming.direction === 'inbound') {
+                setIsAiReplying(true);
+                if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+                aiReplyingTimer.current = window.setTimeout(() => setIsAiReplying(false), 30_000);
+              } else if (incoming.direction === 'outbound') {
+                setIsAiReplying(false);
+                if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+              }
+
+              const cached = threadCache.current.get(conversationId);
+              if (cached) {
+                const exists = cached.messages.some(
+                  (m) => m.id === incoming.id || (incoming.client_request_id && m.client_request_id === incoming.client_request_id)
+                );
+                if (!exists) {
+                  cached.messages = [...cached.messages, incoming];
+                  cached.messageTotal += 1;
+                }
+              }
+
+              setMessages((rows) => {
+                if (rows.some((row) => row.id === incoming.id || (incoming.client_request_id && (row as unknown as { client_request_id?: string }).client_request_id === incoming.client_request_id))) {
+                  return rows.map((row) => (row.id === incoming.id || (incoming.client_request_id && (row as unknown as { client_request_id?: string }).client_request_id === incoming.client_request_id)) ? { ...row, ...incoming } : row);
+                }
+                return [...rows, incoming];
+              });
+              scrollToBottom();
+            } else if (payload.eventType === 'UPDATE') {
+              const updated = changed as unknown as Message;
+              setMessages((rows) => rows.map((row) => row.id === updated.id ? { ...row, ...updated } : row));
+            }
+            scheduleThreadRefresh(conversationId);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_events', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && conversationId === selectedIdRef.current) void loadSecondary(conversationId, true);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_ai_states', filter: `workspace_id=eq.${config.workspace.id}` }, (payload) => {
+          const changed = payload.new as UnknownRecord;
+          const conversationId = typeof changed?.conversation_id === 'string' ? changed.conversation_id : null;
+          if (conversationId && conversationId === selectedIdRef.current) {
+            void loadAiState(conversationId);
+            if (changed?.state !== 'active' || changed?.draft_reply) {
+              setIsAiReplying(false);
+              if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
+            }
+          }
+          window.dispatchEvent(new CustomEvent('crm:data-mutated'));
+        })
+        .subscribe();
+    }
+
+    void setupRealtime();
+
     return () => {
-      void supabase.removeChannel(channel);
+      active = false;
+      if (channel) {
+        const supabase = getSupabaseBrowserClient();
+        void supabase.removeChannel(channel);
+      }
       if (listRefreshTimer.current) window.clearTimeout(listRefreshTimer.current);
       if (threadRefreshTimer.current) window.clearTimeout(threadRefreshTimer.current);
+      if (aiReplyingTimer.current) window.clearTimeout(aiReplyingTimer.current);
     };
-  }, [config.workspace.id, loadSecondary, scheduleListRefresh, scheduleThreadRefresh, sort]);
+  }, [config.workspace.id, loadAiState, loadSecondary, scheduleListRefresh, scheduleThreadRefresh, scrollToBottom, sort]);
 
   useEffect(() => {
     const reconcile = window.setInterval(() => { if (document.visibilityState === 'visible') void loadList(true); }, 120_000);
@@ -912,24 +1135,24 @@ export default function StableInbox() {
         <Link href={selectedContact ? `/contacts/${selectedContact.id}` : '/contacts'} className="button-secondary w-full">Open contact profile</Link>
       </div>}
 
-      {contextTab === 'history' && <div><div className="mb-3 flex items-center justify-between"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Conversation sessions</div><span className="font-mono text-xs">{sessions.length}</span></div><div className="space-y-3">{sessions.map((session, index) => <div key={session.id} className={`rounded-lg border p-3 ${session.is_current ? 'border-blue-200 bg-blue-50/50' : 'border-zinc-200'}`}><div className="flex items-center justify-between gap-3"><div className="text-xs font-semibold">Conversation #{sessions.length - index}</div>{session.is_current ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">Current</span> : <span className="text-[10px] text-zinc-400">{session.closed_at ? shortTime(session.closed_at) : 'Open'}</span>}</div><div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-zinc-500"><div>Response <span className="block font-mono font-semibold text-zinc-800">{duration(session.first_response_seconds)}</span></div><div>Resolution <span className="block font-mono font-semibold text-zinc-800">{duration(session.resolution_seconds)}</span></div></div><div className="mt-2 text-[10px] text-zinc-500">Owner: <span className="font-semibold text-zinc-700">{session.owner?.full_name || 'Unassigned'}</span></div>{session.resolution_code && <div className="mt-2 text-xs font-medium text-zinc-800">{label(session.resolution_code)}</div>}{session.closing_note && <p className="mt-1 text-xs leading-5 text-zinc-600">{session.closing_note}</p>}</div>)}{!contextBusy && sessions.length === 0 && <div className="py-8 text-center text-xs text-zinc-400">No session history yet.</div>}</div></div>}
+      {contextTab === 'history' && <div><div className="mb-3 flex items-center justify-between"><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Conversation sessions</div><span className="font-mono text-xs">{sessions.length}</span></div><div className="space-y-3">{sessions.map((session, index) => <div key={session.id} className={`rounded-lg border p-3 ${session.is_current ? 'border-zinc-300 bg-zinc-50' : 'border-zinc-200'}`}><div className="flex items-center justify-between gap-3"><div className="text-xs font-semibold">Conversation #{sessions.length - index}</div>{session.is_current ? <span className="rounded bg-zinc-200 px-1.5 py-0.5 text-[9px] font-bold text-zinc-900">Current</span> : <span className="text-[10px] text-zinc-400">{session.closed_at ? shortTime(session.closed_at) : 'Open'}</span>}</div><div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-zinc-500"><div>Response <span className="block font-mono font-semibold text-zinc-800">{duration(session.first_response_seconds)}</span></div><div>Resolution <span className="block font-mono font-semibold text-zinc-800">{duration(session.resolution_seconds)}</span></div></div><div className="mt-2 text-[10px] text-zinc-500">Owner: <span className="font-semibold text-zinc-700">{session.owner?.full_name || 'Unassigned'}</span></div>{session.resolution_code && <div className="mt-2 text-xs font-medium text-zinc-800">{label(session.resolution_code)}</div>}{session.closing_note && <p className="mt-1 text-xs leading-5 text-zinc-600">{session.closing_note}</p>}</div>)}{!contextBusy && sessions.length === 0 && <div className="py-8 text-center text-xs text-zinc-400">No session history yet.</div>}</div></div>}
 
       {contextTab === 'assist' && <div><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">Assist</div><p className="mt-1 text-xs leading-5 text-zinc-500">Use conversation context without changing CRM data automatically.</p><div className="mt-4 grid gap-2"><button type="button" disabled={Boolean(assisting)} onClick={() => void runAssist('summary')} className="button-secondary justify-start"><Sparkles className="h-4 w-4" /> Summarize conversation</button><button type="button" disabled={Boolean(assisting)} onClick={() => void runAssist('reply')} className="button-secondary justify-start"><WandSparkles className="h-4 w-4" /> Draft reply</button><button type="button" disabled={Boolean(assisting)} onClick={() => void runAssist('extract')} className="button-secondary justify-start"><Search className="h-4 w-4" /> Extract explicit details</button></div>{assisting && <div className="mt-4 flex items-center gap-2 text-xs text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Working…</div>}{assist && <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3"><div className="mb-2 text-[9px] font-bold uppercase tracking-wide text-zinc-400">{assist.mode} · {assist.action}</div>{assist.result ? <div className="whitespace-pre-wrap text-xs leading-5 text-zinc-800">{assist.result}</div> : <pre className="whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-700">{JSON.stringify(assist.data || {}, null, 2)}</pre>}</div>}</div>}
 
-      {contextTab === 'crm' && <div><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">CRM</div>{selectedLead ? <div className="mt-3 rounded-xl border border-zinc-200 p-4"><div className="font-semibold">{selectedLead.customer_name}</div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><div className="rounded bg-zinc-50 p-2">Stage<div className="mt-1 font-semibold">{label(selectedLead.stage)}</div></div><div className="rounded bg-zinc-50 p-2">Priority<div className="mt-1 font-semibold">{label(selectedLead.priority)}</div></div></div><Link href={`/leads/${selectedLead.id}/workspace`} className="button-primary mt-3 w-full">Open {leadLabel}</Link></div> : <div className="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center"><div className="text-sm font-semibold">No {leadLabel.toLowerCase()} yet</div><p className="mt-1 text-xs text-zinc-500">Create a CRM record when this conversation becomes commercially relevant.</p><button type="button" onClick={() => setConvertOpen(true)} className="button-primary mt-3 w-full">Create {leadLabel}</button></div>}</div>}
+      {contextTab === 'crm' && <div><div className="text-[10px] font-bold uppercase tracking-wide text-zinc-400">CRM</div>{selectedLead ? <div className="mt-3 rounded-lg border border-zinc-200 p-4"><div className="font-semibold">{selectedLead.customer_name}</div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><div className="rounded bg-zinc-50 p-2">Stage<div className="mt-1 font-semibold">{label(selectedLead.stage)}</div></div><div className="rounded bg-zinc-50 p-2">Priority<div className="mt-1 font-semibold">{label(selectedLead.priority)}</div></div></div><Link href={`/leads/${selectedLead.id}/workspace`} className="button-primary mt-3 w-full">Open {leadLabel}</Link></div> : <div className="mt-3 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-4 text-center"><div className="text-sm font-semibold">No {leadLabel.toLowerCase()} yet</div><p className="mt-1 text-xs text-zinc-500">Create a CRM record when this conversation becomes commercially relevant.</p><button type="button" onClick={() => setConvertOpen(true)} className="button-primary mt-3 w-full">Create {leadLabel}</button></div>}</div>}
     </div>
   </section> : null;
 
   return <div className="flex h-full min-h-0 flex-1 overflow-hidden bg-white">
     <div className="grid h-full min-h-0 w-full grid-cols-1 md:grid-cols-[330px_minmax(0,1fr)] lg:grid-cols-[190px_330px_minmax(0,1fr)] xl:grid-cols-[190px_330px_minmax(420px,1fr)_310px]">
       <aside className="hidden min-h-0 border-r border-zinc-200 bg-zinc-50/80 lg:flex lg:flex-col">
-        <div className="flex h-14 items-center gap-2 border-b border-zinc-200 px-3"><InboxIcon className="h-4 w-4" /><span className="text-sm font-semibold">Inbox</span>{metrics.slaOverdue > 0 && <span className="ml-auto rounded-full bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-700">{metrics.slaOverdue}</span>}</div>
+        <div className="flex h-14 items-center gap-2 border-b border-zinc-200 px-3"><InboxIcon className="h-4 w-4" /><span className="text-sm font-semibold">Inbox</span>{metrics.slaOverdue > 0 && <span className="ml-auto rounded-md bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-700">{metrics.slaOverdue}</span>}</div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
           <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Standard</div>
           {standardViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); syncUrl({ view: item.key, state: null, priority: null }); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-zinc-900 text-white' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className="font-mono text-[10px]">{item.count}</span>}</button>; })}
           <div className="mt-4 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Exceptions</div>
           {exceptionViews.map((item) => { const Icon = item.icon; const active = !activeSavedView && queue === item.key; return <button key={item.key} type="button" onClick={() => { setActiveSavedView(null); setQueue(item.key); setState(''); setPriority(''); syncUrl({ view: item.key, state: null, priority: null }); }} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${active ? 'bg-white text-zinc-950 ring-1 ring-zinc-200' : 'text-zinc-700 hover:bg-zinc-100'}`}><Icon className="h-3.5 w-3.5" /><span className="flex-1 truncate">{item.label}</span>{item.count !== undefined && <span className={`font-mono text-[10px] ${item.key === 'sla_overdue' && item.count ? 'text-rose-600' : ''}`}>{item.count}</span>}</button>; })}
-          {savedViews.length > 0 && <><div className="mt-4 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Saved</div>{savedViews.map((view) => <button key={view.id} type="button" onClick={() => applySavedView(view)} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${activeSavedView === view.id ? 'bg-blue-50 text-blue-800 ring-1 ring-blue-100' : 'text-zinc-700 hover:bg-zinc-100'}`}><History className="h-3.5 w-3.5" /><span className="flex-1 truncate">{view.name}</span>{view.is_shared && <Users className="h-3 w-3 text-zinc-400" />}</button>)}</>}
+          {savedViews.length > 0 && <><div className="mt-4 px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-zinc-400">Saved</div>{savedViews.map((view) => <button key={view.id} type="button" onClick={() => applySavedView(view)} className={`mt-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold ${activeSavedView === view.id ? 'bg-zinc-100 text-zinc-900 ring-1 ring-zinc-300' : 'text-zinc-700 hover:bg-zinc-100'}`}><History className="h-3.5 w-3.5" /><span className="flex-1 truncate">{view.name}</span>{view.is_shared && <Users className="h-3 w-3 text-zinc-400" />}</button>)}</>}
           {can('inbox.saved_views.manage') && <Link href="/inbox/views" className="mt-3 flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"><Plus className="h-3.5 w-3.5" /> Manage saved views</Link>}
         </div>
       </aside>
@@ -947,18 +1170,117 @@ export default function StableInbox() {
         {!selected ? <div className="flex h-full items-center justify-center text-sm text-zinc-500">Select a conversation to start working.</div> : <>
           <header className="relative flex min-h-14 items-center justify-between gap-2 border-b border-zinc-200 bg-white px-3">
             {refreshingThread && <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-zinc-100"><div className="h-full w-1/3 animate-pulse bg-blue-500" /></div>}
-            <div className="flex min-w-0 items-center gap-2"><button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); syncUrl({ conversationId: null }); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>{selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}<div className="min-w-0"><div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div><div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div></div></div>
-            <div className="flex min-w-0 items-center gap-2"><ConversationPresenceIndicator members={presence.members} typingMembers={presence.typingMembers} /><div className="flex shrink-0 items-center gap-1.5">{!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}<button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>{selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}<div className="relative"><button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>{moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}</div></div></div>
+            <div className="flex min-w-0 items-center gap-2">
+              <button type="button" aria-label="Back to conversations" onClick={() => { selectedIdRef.current = null; setSelectedId(null); syncUrl({ conversationId: null }); }} className="button-ghost button-sm md:hidden"><ArrowLeft className="h-4 w-4" /></button>
+              {selected.customer_avatar_url ? <img data-chat-avatar="true" src={selected.customer_avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" /> : <div data-chat-avatar="true" className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold">{initials(selected.customer_name)}</div>}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div data-chat-name="true" className="truncate text-sm font-semibold text-zinc-950">{selected.customer_name || contactLabel}</div>
+                  {aiState?.state === 'active' ? (
+                    <span className="inline-flex items-center gap-1 rounded border border-emerald-200/80 bg-emerald-50/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800" title={`AI Agent ${agentName(aiState)} is active on this chat`}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>AI Active</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-zinc-100/70 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600" title="Human control (AI is paused/inactive)">
+                      <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                      <span>Human</span>
+                    </span>
+                  )}
+                </div>
+                <div data-chat-subtitle="true" className="truncate text-[11px] text-zinc-500"><span className="capitalize">{selected.provider}</span> · {selected.assigned_profile?.full_name || 'Unassigned'} · {label(selectedContact?.lifecycle_key || 'new')}</div>
+              </div>
+            </div>
+            <div className="flex min-w-0 items-center gap-2">
+              <ConversationPresenceIndicator members={presence.members} typingMembers={presence.typingMembers} />
+              <div className="flex shrink-0 items-center gap-1.5">
+                {aiState?.state === 'active' ? (
+                  <button
+                    type="button"
+                    disabled={aiBusy}
+                    onClick={() => void handleAiAction('takeover')}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-amber-300/80 bg-amber-50/80 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 hover:border-amber-400 transition-colors shadow-2xs"
+                    title="Pause AI agent and take over this conversation"
+                  >
+                    {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-700" /> : <Pause className="h-3.5 w-3.5 text-amber-700" />}
+                    <span>Take over</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={aiBusy}
+                    onClick={() => void handleAiAction('resume')}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950 transition-colors shadow-2xs"
+                    title="Assign conversation to AI Agent"
+                  >
+                    {aiBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" /> : <Bot className="h-3.5 w-3.5 text-blue-600" />}
+                    <span>Assign to AI</span>
+                  </button>
+                )}
+                {!selected.assigned_to && <button type="button" onClick={() => void patchConversation({ assigned_to: currentUser.id }, 'Conversation claimed.')} className="button-secondary button-sm"><UserCheck className="h-3.5 w-3.5" /><span className="hidden sm:inline">Claim</span></button>}
+                <button type="button" aria-label="Open conversation details" onClick={() => setContextOpen(true)} className="button-secondary button-sm xl:hidden"><PanelRight className="h-3.5 w-3.5" /></button>
+                {selected.workflow_state !== 'closed' && can('inbox.resolve') && <button type="button" onClick={() => setCloseOpen(true)} className="button-primary button-sm"><CheckCircle2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Resolve</span></button>}
+                <div className="relative">
+                  <button type="button" aria-label="More conversation actions" onClick={() => setMoreOpen((value) => !value)} className="button-secondary button-sm"><MoreHorizontal className="h-4 w-4" /></button>
+                  {moreOpen && <div className="absolute right-0 top-9 z-30 w-52 rounded-lg border border-zinc-200 bg-white p-1.5 shadow-lg"><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'waiting' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><PauseCircle className="h-3.5 w-3.5" /> Mark waiting</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 3600000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><AlarmClock className="h-3.5 w-3.5" /> Snooze 1 hour</button><button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'snoozed', snoozed_until: new Date(Date.now() + 86400000).toISOString() }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><Clock3 className="h-3.5 w-3.5" /> Snooze 24 hours</button>{selected.workflow_state !== 'open' && <button type="button" onClick={() => { setMoreOpen(false); void patchConversation({ workflow_state: 'open' }); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-xs hover:bg-zinc-50"><InboxIcon className="h-3.5 w-3.5" /> Reopen</button>}<div className="my-1 border-t border-zinc-100" /><select value={selected.priority} onChange={(e) => void patchConversation({ priority: e.target.value })} className="select-field h-8 w-full text-xs"><option value="low">Low priority</option><option value="normal">Normal priority</option><option value="high">High priority</option><option value="urgent">Urgent priority</option></select></div>}
+                </div>
+              </div>
+            </div>
           </header>
 
           <div ref={messagePaneRef} aria-label="Message history" className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
             <div className="mx-auto max-w-3xl">
               {hasOlderMessages && <div className="mb-5 flex justify-center"><button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="button-secondary button-sm">{loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />} Load older messages <span className="font-mono text-[10px] text-zinc-400">{messages.length}/{messageTotal}</span></button></div>}
-              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} onQuote={quoteMessage} onAddNote={noteFromMessage} onCreateTask={(message) => void createTaskFromMessage(message)} onRetry={(message) => void retryMessage(message)} />}
+              {loadingThread && messages.length === 0 ? <div className="space-y-3 py-3" aria-label="Loading conversation"><div className="h-12 w-2/3 animate-pulse rounded-lg bg-zinc-200/70" /><div className="ml-auto h-12 w-1/2 animate-pulse rounded-lg bg-zinc-200/70" /><div className="h-16 w-3/4 animate-pulse rounded-lg bg-zinc-200/70" /></div> : <MetaConversationTimeline timeline={timeline} customerName={selected.customer_name} customerAvatarUrl={selected.customer_avatar_url} onQuote={quoteMessage} onAddNote={noteFromMessage} onCreateTask={(message) => void createTaskFromMessage(message)} onRetry={(message) => void retryMessage(message)} isAiReplying={isAiReplying} aiAgentName={agentName(aiState)} onTakeover={() => void handleAiAction('takeover')} />}
             </div>
           </div>
 
           <footer className="shrink-0 border-t border-zinc-200 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            {isAiReplying && (
+              <div className="mb-2 flex items-center justify-between rounded-md border border-blue-200/80 bg-blue-50/60 px-3 py-1.5 text-xs text-blue-900 animate-in fade-in duration-150">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
+                  <span><strong>{agentName(aiState)}</strong> is replying to the customer…</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={aiBusy}
+                  onClick={() => void handleAiAction('takeover')}
+                  className="rounded border border-blue-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-blue-800 hover:bg-blue-50 transition-colors shadow-2xs"
+                >
+                  Take over now
+                </button>
+              </div>
+            )}
+            {aiState?.draft_reply && (
+              <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2.5 text-xs">
+                <div className="flex items-center justify-between font-semibold text-zinc-800 mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-blue-600" /> AI Suggested Draft
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyBody(aiState.draft_reply || '');
+                        composerRef.current?.focus();
+                      }}
+                      className="rounded border border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-700 hover:bg-zinc-100"
+                    >
+                      Use draft
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAiAction('takeover')}
+                      className="rounded border border-zinc-200 bg-white px-2 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-100"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+                <p className="line-clamp-2 text-zinc-600 italic">&ldquo;{aiState.draft_reply}&rdquo;</p>
+              </div>
+            )}
             <InboxComposer
               workspaceId={config.workspace.id}
               conversationId={selected.id}
@@ -982,7 +1304,7 @@ export default function StableInbox() {
 
     {contextOpen && selected && <div className="fixed inset-0 z-40 flex justify-end bg-zinc-950/30 xl:hidden" onClick={() => setContextOpen(false)}><div className="h-full w-full max-w-sm" onClick={(e) => e.stopPropagation()}>{context}<button type="button" aria-label="Close conversation details" onClick={() => setContextOpen(false)} className="absolute right-2 top-2 rounded-md bg-white p-2 shadow"><X className="h-4 w-4" /></button></div></div>}
 
-    {closeOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4"><div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><div className="text-sm font-semibold">Resolve conversation</div><button type="button" aria-label="Close resolve dialog" onClick={() => setCloseOpen(false)}><X className="h-4 w-4" /></button></div><div className="space-y-3 p-4"><select value={resolution} onChange={(e) => setResolution(e.target.value)} className="select-field w-full"><option value="resolved">Resolved</option><option value="qualified">Qualified</option><option value="converted">Converted</option><option value="not_interested">Not interested</option><option value="duplicate">Duplicate</option><option value="spam">Spam</option><option value="other">Other</option></select><textarea value={closingNote} onChange={(e) => setClosingNote(e.target.value)} rows={4} placeholder="Closing note / handoff context" className="field" /></div><div className="flex justify-end gap-2 border-t border-zinc-100 p-3"><button type="button" onClick={() => setCloseOpen(false)} className="button-secondary">Cancel</button><button type="button" disabled={saving} onClick={async () => { const updated = await patchConversation({ workflow_state: 'closed', resolution_code: resolution, closing_note: closingNote.trim() || null }); if (updated) { setCloseOpen(false); setClosingNote(''); } }} className="button-primary">Resolve</button></div></div></div>}
+    {closeOpen && selected && <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4"><div className="w-full max-w-md rounded-lg border border-zinc-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3"><div className="text-sm font-semibold">Resolve conversation</div><button type="button" aria-label="Close resolve dialog" onClick={() => setCloseOpen(false)}><X className="h-4 w-4" /></button></div><div className="space-y-3 p-4"><select value={resolution} onChange={(e) => setResolution(e.target.value)} className="select-field w-full"><option value="resolved">Resolved</option><option value="qualified">Qualified</option><option value="converted">Converted</option><option value="not_interested">Not interested</option><option value="duplicate">Duplicate</option><option value="spam">Spam</option><option value="other">Other</option></select><textarea value={closingNote} onChange={(e) => setClosingNote(e.target.value)} rows={4} placeholder="Closing note / handoff context" className="field" /></div><div className="flex justify-end gap-2 border-t border-zinc-100 p-3"><button type="button" onClick={() => setCloseOpen(false)} className="button-secondary">Cancel</button><button type="button" disabled={saving} onClick={async () => { const updated = await patchConversation({ workflow_state: 'closed', resolution_code: resolution, closing_note: closingNote.trim() || null }); if (updated) { setCloseOpen(false); setClosingNote(''); } }} className="button-primary">Resolve</button></div></div></div>}
 
     <ConvertToLeadDrawer isOpen={convertOpen} onClose={() => setConvertOpen(false)} conversation={selected} onConverted={() => { setConvertOpen(false); const id = selectedIdRef.current; if (id) { threadCache.current.delete(id); void loadCoreThread(id, { force: true, quiet: true }); } }} />
   </div>;

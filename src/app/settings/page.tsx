@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
-export default function SettingsRedirectPage() {
-  redirect('/settings/workspace');
+export default function LegacySettingsPage() {
+  redirect('/account/profile');
 }

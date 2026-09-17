@@ -1,4 +1,5 @@
 export type Role = 'admin' | 'manager' | 'agent';
+export type WorkspaceRole = 'owner' | Role;
 
 export type AgentStatus = 'available' | 'in_call' | 'on_break' | 'offline';
 
@@ -8,11 +9,22 @@ export interface UserPreferences {
   kanban_density: 'compact' | 'expanded';
   instant_whatsapp_direct: boolean;
   default_country_code: string;
+  language?: string;
+  timezone?: string | null;
+  date_format?: 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD' | null;
+  notification_sound_enabled?: boolean;
+  notification_sound_preset?: 'chime' | 'modern_bell' | 'radar' | 'subtle' | 'off';
+  notification_volume?: number;
+  mute_sound_in_call?: boolean;
+  browser_push_enabled?: boolean;
 }
 
 export interface Profile {
   id: string;
   workspace_id?: string;
+  workspace_role?: WorkspaceRole;
+  workspace_permissions?: Record<string, unknown>;
+  workspace_joined_at?: string | null;
   employee_code?: string;
   email: string;
   full_name: string;

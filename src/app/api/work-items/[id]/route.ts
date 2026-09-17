@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { uuidSchema } from '@/lib/validation';
+import { invalidateRedisCache } from '@/lib/redis/cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,7 @@ export async function PATCH(request: Request, context: Context) {
   }
   if (!data) return NextResponse.json({ error: 'Work item not found or unavailable.' }, { status: 404 });
 
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'work-items:list' });
   return NextResponse.json({ item: data });
 }
 
@@ -88,5 +90,6 @@ export async function DELETE(request: Request, context: Context) {
 
   if (error) return NextResponse.json({ error: 'Unable to cancel work item.' }, { status: 500 });
   if (!data) return NextResponse.json({ error: 'Work item not found or unavailable.' }, { status: 404 });
+  await invalidateRedisCache({ workspaceId: actor.profile.workspace_id, namespace: 'work-items:list' });
   return NextResponse.json({ ok: true });
 }
