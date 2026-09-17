@@ -63,6 +63,10 @@ const migrations = [
     file: '202609170094_chatwoot_foundation.sql',
     marker: "select to_regclass('public.chatwoot_accounts') is not null and to_regclass('public.chatwoot_inboxes') is not null and to_regclass('public.chatwoot_conversation_links') is not null and to_regclass('public.chatwoot_webhook_events') is not null",
   },
+  {
+    file: '202609170095_chatwoot_per_account_webhook_secret.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='chatwoot_accounts' and column_name='webhook_secret_encrypted')",
+  },
 ];
 
 for (const migration of migrations) {
