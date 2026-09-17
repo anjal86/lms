@@ -47,6 +47,10 @@ const migrations = [
     file: '202609170090_conversation_ai_state_insert_policy.sql',
     marker: "select exists(select 1 from pg_policies where schemaname='public' and tablename='conversation_ai_states' and policyname='conversation_ai_states_insert')",
   },
+  {
+    file: '202609170091_inbox_assignment_activity.sql',
+    marker: "select exists(select 1 from information_schema.columns where table_schema='public' and table_name='lead_conversations' and column_name='inbox_activity_at') and to_regprocedure('public.maintain_conversation_inbox_activity()') is not null",
+  },
 ];
 
 for (const migration of migrations) {
