@@ -18,6 +18,24 @@ export type ChatwootServerConfig = {
   webhookMaxAgeSeconds: number;
 };
 
+export type ChatwootInbox = {
+  id: number;
+  name?: string | null;
+  channel_type?: string | null;
+  provider_name?: string | null;
+  provider?: string | null;
+  page_id?: string | number | null;
+  instagram_id?: string | number | null;
+  business_id?: string | number | null;
+  email?: string | null;
+  phone_number?: string | null;
+  website_url?: string | null;
+};
+
+type ChatwootInboxListResponse = {
+  payload?: ChatwootInbox[];
+};
+
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured.`);
@@ -82,7 +100,8 @@ export async function listChatwootTeams(accountId: number) {
 }
 
 export async function listChatwootInboxes(accountId: number) {
-  return chatwootRequest<Array<Record<string, unknown>>>(chatwootAccountPath(accountId, 'inboxes'));
+  const response = await chatwootRequest<ChatwootInboxListResponse>(chatwootAccountPath(accountId, 'inboxes'));
+  return Array.isArray(response?.payload) ? response.payload : [];
 }
 
 export async function filterChatwootConversations(
