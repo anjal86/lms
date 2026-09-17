@@ -36,6 +36,7 @@ export default function AiLayout({ children }: { children: React.ReactNode }) {
       ariaLabel="AI sections"
       mobileLabel="AI section"
       groups={groups}
+      variant="ai"
     >
       {children}
     </SectionRailShell>
