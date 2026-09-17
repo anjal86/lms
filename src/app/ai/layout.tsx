@@ -1,9 +1,15 @@
 'use client';
 
-import { Activity, BookOpenText, Bot, KeyRound, Megaphone, Sparkles } from 'lucide-react';
+import { Activity, BookOpenText, Bot, KeyRound, LayoutDashboard, Megaphone, Sparkles } from 'lucide-react';
 import SectionRailShell from '@/components/layout/SectionRailShell';
 
 const groups = [
+  {
+    label: 'General',
+    items: [
+      { href: '/ai', label: 'Overview', icon: LayoutDashboard, exact: true },
+    ],
+  },
   {
     label: 'Build',
     items: [
