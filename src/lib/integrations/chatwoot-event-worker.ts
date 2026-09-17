@@ -1,4 +1,5 @@
 import 'server-only';
+import { linkChatwootConversationToCrm } from '@/lib/integrations/chatwoot-linker';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 
 type ChatwootEventJob = {
@@ -143,9 +144,33 @@ async function linkConversation(job: ChatwootEventJob, payload: Record<string, u
       .eq('chatwoot_inbox_id', inbox);
   }
 
+  let leadConversationId = link?.lead_conversation_id ? String(link.lead_conversation_id) : null;
+  const accountId = positiveInteger(job.chatwoot_account_id);
+  if (
+    !leadConversationId
+    && job.event_type === 'conversation_created'
+    && accountId
+    && inbox
+    && contact
+  ) {
+    try {
+      const match = await linkChatwootConversationToCrm({
+        workspaceId: job.workspace_id,
+        accountLinkId: job.chatwoot_account_link_id,
+        accountId,
+        chatwootInboxId: inbox,
+        chatwootConversationId: conversation,
+        chatwootContactId: contact,
+      });
+      if (match.linked && match.leadConversationId) leadConversationId = match.leadConversationId;
+    } catch (matchError) {
+      console.warn(`Chatwoot conversation ${conversation} CRM identity match failed:`, matchError);
+    }
+  }
+
   // During migration, keep only the tiny summary fields needed by the existing
   // CRM shell. The full message remains authoritative in Chatwoot.
-  if (link?.lead_conversation_id && job.event_type === 'message_created') {
+  if (leadConversationId && job.event_type === 'message_created') {
     const direction = messageDirection(payload);
     const patch: Record<string, unknown> = {
       last_message_at: eventTime(payload),
@@ -159,7 +184,7 @@ async function linkConversation(job: ChatwootEventJob, payload: Record<string, u
     const { error: summaryError } = await admin
       .from('lead_conversations')
       .update(patch)
-      .eq('id', link.lead_conversation_id)
+      .eq('id', leadConversationId)
       .eq('workspace_id', job.workspace_id);
     if (summaryError) throw summaryError;
   }
