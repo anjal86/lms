@@ -11,26 +11,33 @@ const PatchSchema = z.object({
 });
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await getApiActor(request);
-  if ('error' in actor) return actor.error;
-  const { id } = await context.params;
+  try {
+    const actor = await getApiActor(request);
+    if ('error' in actor) return actor.error;
+    const { id } = await context.params;
 
-  const { data: conversation } = await actor.supabase
-    .from('lead_conversations')
-    .select('id,workspace_id,assigned_to')
-    .eq('workspace_id', actor.profile.workspace_id)
-    .eq('id', id)
-    .maybeSingle();
-  if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+    const { data: conversation, error: convError } = await actor.supabase
+      .from('lead_conversations')
+      .select('id,workspace_id,assigned_to')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('id', id)
+      .maybeSingle();
+    if (convError) throw convError;
+    if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
 
-  const { data: state } = await actor.supabase
-    .from('conversation_ai_states')
-    .select('conversation_id,agent_id,state,draft_reply,last_ai_at,last_human_at,handoff_reason,handed_off_at,failure_count,last_error,updated_at,agent:ai_agents(id,name,model,mode,is_active)')
-    .eq('workspace_id', actor.profile.workspace_id)
-    .eq('conversation_id', id)
-    .maybeSingle();
+    const { data: state, error: stateError } = await actor.supabase
+      .from('conversation_ai_states')
+      .select('conversation_id,agent_id,state,draft_reply,last_ai_at,last_human_at,handoff_reason,handed_off_at,failure_count,last_error,updated_at,agent:ai_agents(id,name,model,mode,is_active)')
+      .eq('workspace_id', actor.profile.workspace_id)
+      .eq('conversation_id', id)
+      .maybeSingle();
+    if (stateError) throw stateError;
 
-  return NextResponse.json({ ai: state || null }, { headers: { 'Cache-Control': 'private, no-store' } });
+    return NextResponse.json({ ai: state || null }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch (error: any) {
+    console.error('GET AI STATE ERROR:', error);
+    return NextResponse.json({ error: String(error.message || error), details: error }, { status: 500 });
+  }
 }
 
 async function requeueLatestUnansweredInbound(input: {
@@ -102,10 +109,11 @@ async function requeueLatestUnansweredInbound(input: {
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const actor = await getApiActor(request);
-  if ('error' in actor) return actor.error;
-  const parsed = PatchSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: 'Invalid AI action.' }, { status: 400 });
+  try {
+    const actor = await getApiActor(request);
+    if ('error' in actor) return actor.error;
+    const parsed = PatchSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid AI action.' }, { status: 400 });
 
   const { id } = await context.params;
   const { data: conversation } = await actor.supabase
@@ -167,7 +175,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       state: 'active',
       handoff_reason: null,
       handed_off_at: null,
-      handed_off_to: null,
       last_error: null,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'conversation_id' });
@@ -197,7 +204,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (parsed.data.action === 'takeover') {
       patch.handoff_reason = 'Human agent took over the conversation.';
       patch.handed_off_at = new Date().toISOString();
-      patch.handed_off_to = actor.user.id;
     }
     const { error } = await actor.supabase.from('conversation_ai_states').upsert(patch, { onConflict: 'conversation_id' });
     if (error) return NextResponse.json({ error: 'Unable to pause AI.' }, { status: 500 });
@@ -213,11 +219,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     }
   }
 
-  const { data: state } = await actor.supabase
+  const { data: state, error: stateError } = await actor.supabase
     .from('conversation_ai_states')
     .select('conversation_id,agent_id,state,draft_reply,last_ai_at,last_human_at,handoff_reason,handed_off_at,failure_count,last_error,updated_at,agent:ai_agents(id,name,model,mode,is_active)')
     .eq('workspace_id', actor.profile.workspace_id)
     .eq('conversation_id', id)
     .single();
+  if (stateError) throw stateError;
+
   return NextResponse.json({ ai: state });
+  } catch (error: any) {
+    console.error('PATCH AI STATE ERROR:', error);
+    return NextResponse.json({ error: String(error.message || error) }, { status: 500 });
+  }
 }
