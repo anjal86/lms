@@ -52,7 +52,7 @@ function safeInboxMetadata(inbox: ChatwootInbox) {
   };
 }
 
-const SAFE_SELECT = 'id,workspace_id,chatwoot_account_link_id,integration_connection_id,chatwoot_inbox_id,name,channel_type,status,metadata,last_synced_at,created_at,updated_at';
+const SAFE_SELECT = 'id,workspace_id,chatwoot_account_link_id,integration_connection_id,chatwoot_inbox_id,name,channel_type,status,traffic_mode,metadata,last_synced_at,created_at,updated_at';
 
 export async function GET(request: Request) {
   const actor = await getApiActor(request);
@@ -65,7 +65,7 @@ export async function GET(request: Request) {
     .order('name', { ascending: true });
 
   if (error) {
-    if (error.code === '42P01') {
+    if (error.code === '42P01' || error.code === '42703') {
       return NextResponse.json({ inboxes: [], migrationRequired: true });
     }
     console.error('Chatwoot inbox mapping read failed:', error.message);
@@ -147,7 +147,7 @@ export async function POST(request: Request) {
   if (staleIds.length) {
     const { error: disableError } = await admin
       .from('chatwoot_inboxes')
-      .update({ status: 'disabled', updated_at: now })
+      .update({ status: 'disabled', traffic_mode: 'shadow', updated_at: now })
       .in('id', staleIds);
     if (disableError) {
       console.error('Chatwoot stale inbox disable failed:', disableError.message);
