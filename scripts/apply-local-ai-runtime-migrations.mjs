@@ -59,6 +59,10 @@ const migrations = [
     file: '202609170093_inbox_queue_metrics.sql',
     marker: "select to_regprocedure('public.inbox_queue_metrics(uuid,uuid,text)') is not null",
   },
+  {
+    file: '202609170094_chatwoot_foundation.sql',
+    marker: "select to_regclass('public.chatwoot_accounts') is not null and to_regclass('public.chatwoot_inboxes') is not null and to_regclass('public.chatwoot_conversation_links') is not null and to_regclass('public.chatwoot_webhook_events') is not null",
+  },
 ];
 
 for (const migration of migrations) {
