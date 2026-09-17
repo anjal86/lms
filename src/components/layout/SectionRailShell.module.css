@@ -5,7 +5,8 @@
   padding: 1.75rem 1rem 3rem;
 }
 
-.adminShell {
+.adminShell,
+.aiShell {
   background: transparent;
 }
 
@@ -194,7 +195,13 @@
 .adminShell .content :global(.page-header),
 .adminShell .content :global(.workspace-header),
 .adminShell .content > div > header:first-child,
-.adminShell .content > main > div:first-child > header:first-child {
+.adminShell .content > main > div:first-child > header:first-child,
+.aiShell .content :global(.app-page) > header:first-child,
+.aiShell .content :global(.workspace-page) > header:first-child,
+.aiShell .content :global(.page-header),
+.aiShell .content :global(.workspace-header),
+.aiShell .content > div > header:first-child,
+.aiShell .content > main > div:first-child > header:first-child {
   position: relative !important;
   overflow: visible !important;
   min-height: 7.25rem !important;
@@ -218,7 +225,19 @@
 .adminShell .content > div > header:first-child::before,
 .adminShell .content > div > header:first-child::after,
 .adminShell .content > main > div:first-child > header:first-child::before,
-.adminShell .content > main > div:first-child > header:first-child::after {
+.adminShell .content > main > div:first-child > header:first-child::after,
+.aiShell .content :global(.app-page) > header:first-child::before,
+.aiShell .content :global(.app-page) > header:first-child::after,
+.aiShell .content :global(.workspace-page) > header:first-child::before,
+.aiShell .content :global(.workspace-page) > header:first-child::after,
+.aiShell .content :global(.page-header)::before,
+.aiShell .content :global(.page-header)::after,
+.aiShell .content :global(.workspace-header)::before,
+.aiShell .content :global(.workspace-header)::after,
+.aiShell .content > div > header:first-child::before,
+.aiShell .content > div > header:first-child::after,
+.aiShell .content > main > div:first-child > header:first-child::before,
+.aiShell .content > main > div:first-child > header:first-child::after {
   display: none !important;
   content: none !important;
 }
