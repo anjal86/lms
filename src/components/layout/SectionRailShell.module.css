@@ -141,6 +141,20 @@
   max-width: 72rem;
 }
 
+/* The Admin/AI shell owns page width and canvas spacing. Legacy pages must not
+   introduce a second canvas, page gutter or max-width inside this content area. */
+.content > main {
+  min-height: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.content > main > div:first-child {
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+
 .content :global(.app-page),
 .content :global(.workspace-page) {
   width: 100% !important;
@@ -156,23 +170,44 @@
   margin-bottom: 0 !important;
 }
 
+/* One page-header contract across modern and legacy screens. Some older Admin
+   pages predate page-header/page-title and use custom Tailwind H1 sizes. */
 .content :global(.app-page) > header:first-child,
 .content :global(.workspace-page) > header:first-child,
 .content :global(.page-header),
-.content :global(.workspace-header) {
-  padding-bottom: 1.25rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.content :global(.page-header),
-.content :global(.workspace-header) {
-  gap: 0.75rem;
+.content :global(.workspace-header),
+.content > div > header:first-child,
+.content > main > div:first-child > header:first-child {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 0.75rem !important;
+  margin: 0 !important;
+  padding: 0 0 1.25rem !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  background: transparent !important;
 }
 
 .content :global(.page-title),
-.content :global(.workspace-title) {
-  font-size: 1.375rem;
-  line-height: 1.25;
+.content :global(.workspace-title),
+.content > div > header:first-child h1,
+.content > main > div:first-child > header:first-child h1 {
+  margin: 0 !important;
+  color: var(--color-text-primary) !important;
+  font-size: 1.375rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.035em !important;
+  line-height: 1.25 !important;
+}
+
+.content :global(.page-eyebrow),
+.content :global(.workspace-eyebrow) {
+  margin-bottom: 0.25rem !important;
+  font-size: 0.75rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.005em !important;
+  line-height: 1.3 !important;
 }
 
 .content :global(.page-description),
@@ -185,12 +220,21 @@
   flex-shrink: 0;
 }
 
+/* Navigation belongs to the sticky secondary rail. Hide compatibility/back
+   links that only reproduce that navigation inside old page headers. */
 .content :global(.page-actions a[href="/settings/workspace"]),
+.content :global(.page-actions a[href="/settings"]),
 .content :global(.page-actions a[href="/settings/ai-agents"]),
 .content :global(.page-actions a[href="/settings/ai-providers"]),
+.content > div > header:first-child a[href="/settings"],
+.content > div > header:first-child a[href="/settings/business"],
+.content > div > header:first-child a[href="/settings/workspace"],
+.content > main > div:first-child > header:first-child a[href="/settings"],
+.content > main > div:first-child > header:first-child a[href="/settings/business"],
+.content > main > div:first-child > header:first-child a[href="/settings/workspace"],
 .content :global(.app-page > header:first-child a.button-ghost),
 .content :global(.workspace-page > header:first-child a.button-ghost) {
-  display: none;
+  display: none !important;
 }
 
 @media (min-width: 640px) {
@@ -199,10 +243,13 @@
   }
 
   .content :global(.page-header),
-  .content :global(.workspace-header) {
-    flex-direction: row;
-    align-items: flex-start;
-    justify-content: space-between;
+  .content :global(.workspace-header),
+  .content :global(.app-page) > header:first-child,
+  .content :global(.workspace-page) > header:first-child,
+  .content > div > header:first-child,
+  .content > main > div:first-child > header:first-child {
+    flex-direction: row !important;
+    align-items: flex-start !important;
   }
 }
 
