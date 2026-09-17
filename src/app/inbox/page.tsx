@@ -7,10 +7,11 @@ import InboxChannelScopeBar from '@/components/inbox/InboxChannelScopeBar';
 import InboxCommandPalette from '@/components/inbox/InboxCommandPalette';
 import InboxAssignmentEnhancements from '@/components/inbox/InboxAssignmentEnhancements';
 
-const AUTO_SYNC_INTERVAL_MS = 30_000;
-const AUTO_SYNC_MIN_GAP_MS = 15_000;
-const MAX_MAINTENANCE_PASSES = 6;
-const MAINTENANCE_PASS_DELAY_MS = 350;
+const AUTO_SYNC_INTERVAL_MS = 60_000;
+const AUTO_SYNC_MIN_GAP_MS = 30_000;
+const INITIAL_SYNC_DELAY_MS = 8_000;
+const MAX_MAINTENANCE_PASSES = 2;
+const MAINTENANCE_PASS_DELAY_MS = 1_500;
 
 type SyncPayload = {
   messagesCount?: number;
@@ -80,9 +81,9 @@ export default function InboxPage() {
       activeController = controller;
 
       try {
-        // One Meta conversations page used to be discovered per poll, which meant an
-        // old Page with hundreds of chats effectively required repeated manual Refresh
-        // clicks. Continue the saved cursor automatically in the same visible session.
+        // Provider discovery/history maintenance must stay behind the operator-facing
+        // list/thread path. Keep each visible-session pass bounded so opening Inbox
+        // cannot be starved by long-running history imports.
         for (let pass = 0; pass < MAX_MAINTENANCE_PASSES && !disposed; pass += 1) {
           const response = await fetch('/api/conversations/sync?mode=live', {
             method: 'POST',
@@ -98,7 +99,6 @@ export default function InboxPage() {
             break;
           }
 
-          // Show each discovered message immediately while older history keeps syncing.
           if (syncPayloadChanged(payload) && !disposed) {
             window.dispatchEvent(new Event('inbox:provider-sync'));
           }
@@ -118,9 +118,11 @@ export default function InboxPage() {
     const onVisible = () => {
       if (document.visibilityState === 'visible') void syncProviders();
     };
-    const onFocus = () => void syncProviders();
+    const onFocus = () => {
+      if (Date.now() - lastSyncStartedAtRef.current >= AUTO_SYNC_MIN_GAP_MS) void syncProviders();
+    };
 
-    const initialTimer = window.setTimeout(() => void syncProviders(), 500);
+    const initialTimer = window.setTimeout(() => void syncProviders(), INITIAL_SYNC_DELAY_MS);
     const interval = window.setInterval(() => void syncProviders(), AUTO_SYNC_INTERVAL_MS);
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onFocus);
