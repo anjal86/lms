@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getApiActor } from '@/lib/auth/api-actor';
 import { normalizeChatwootMessage } from '@/lib/integrations/chatwoot-adapter';
-import { createChatwootMessage } from '@/lib/integrations/chatwoot-client';
+import { createChatwootAttachmentMessage, createChatwootMessage } from '@/lib/integrations/chatwoot-client';
 import { resolveActiveChatwootRuntime } from '@/lib/integrations/chatwoot-runtime';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { ChannelDeliveryError, sendChannelAttachment, sendChannelText } from '@/lib/integrations/channel-sender';
@@ -17,6 +17,8 @@ const AttachmentSchema = z.object({
   mimeType: z.string().trim().min(3).max(160),
   size: z.number().int().positive().max(15 * 1024 * 1024),
 });
+
+type ActiveAttachment = z.infer<typeof AttachmentSchema>;
 
 const OutboundMessageSchema = z.object({
   body: z.string().trim().max(4000).default(''),
@@ -60,9 +62,26 @@ function messageType(mimeType: string) {
   return 'file';
 }
 
-function chatwootRequestHash(direction: 'outbound' | 'internal', body: string) {
+function attachmentLabel(attachment: ActiveAttachment) {
+  const type = messageType(attachment.mimeType);
+  if (type === 'image') return '[Photo]';
+  if (type === 'video') return '[Video]';
+  if (type === 'audio') return '[Voice message]';
+  return `[File:${attachment.fileName}]`;
+}
+
+function chatwootRequestHash(direction: 'outbound' | 'internal', body: string, attachment?: ActiveAttachment) {
   return createHash('sha256')
-    .update(JSON.stringify({ direction, body }))
+    .update(JSON.stringify({
+      direction,
+      body,
+      attachment: attachment ? {
+        storagePath: attachment.storagePath,
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+      } : null,
+    }))
     .digest('hex');
 }
 
@@ -134,6 +153,26 @@ async function updateConversationAndLead(input: {
     .eq('id', input.leadId);
 }
 
+async function markChatwootRequestFailed(input: {
+  requestId: string;
+  workspaceId: string;
+  conversationId: string;
+  error: string;
+}) {
+  const admin = createSupabaseAdminClient();
+  const { error } = await admin
+    .from('chatwoot_outbound_requests')
+    .update({
+      status: 'failed',
+      last_error: input.error.slice(0, 2000),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', input.requestId)
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId);
+  if (error) console.error('Unable to mark Chatwoot outbound request failed:', error.message);
+}
+
 async function sendActiveChatwootMessage(input: {
   workspaceId: string;
   conversationId: string;
@@ -145,9 +184,10 @@ async function sendActiveChatwootMessage(input: {
   direction: 'outbound' | 'internal';
   accountId: number;
   chatwootConversationId: number;
+  attachment?: ActiveAttachment;
 }) {
   const admin = createSupabaseAdminClient();
-  const requestHash = chatwootRequestHash(input.direction, input.body);
+  const requestHash = chatwootRequestHash(input.direction, input.body, input.attachment);
   const { data: claimData, error: claimError } = await admin.rpc('claim_chatwoot_outbound_request', {
     p_workspace_id: input.workspaceId,
     p_conversation_id: input.conversationId,
@@ -178,6 +218,13 @@ async function sendActiveChatwootMessage(input: {
     return NextResponse.json({ error: 'Unable to claim Chatwoot outbound request.' }, { status: 500 });
   }
 
+  const previewBody = input.attachment ? attachmentLabel(input.attachment) : input.body;
+  const previewType = input.direction === 'internal'
+    ? 'internal_note'
+    : input.attachment
+      ? messageType(input.attachment.mimeType)
+      : 'text';
+
   if (!claim.should_process) {
     const existingMessageId = positiveInteger(claim.existing_message_id);
     if (claim.request_status === 'sent' && existingMessageId) {
@@ -187,11 +234,16 @@ async function sendActiveChatwootMessage(input: {
           id: `chatwoot-message:${existingMessageId}`,
           conversation_id: input.conversationId,
           direction: input.direction,
-          message_type: input.direction === 'internal' ? 'internal_note' : 'text',
-          body: input.body,
+          message_type: previewType,
+          body: previewBody,
           metadata: {
             chatwoot_message_id: existingMessageId,
             chatwoot_private: input.direction === 'internal',
+            ...(input.attachment ? {
+              file_name: input.attachment.fileName,
+              mime_type: input.attachment.mimeType,
+              size: input.attachment.size,
+            } : {}),
           },
           delivery_status: 'sent',
           failure_message: null,
@@ -211,63 +263,91 @@ async function sendActiveChatwootMessage(input: {
     }, { status: 202 });
   }
 
+  let rawMessage: Record<string, unknown>;
   try {
-    const rawMessage = await createChatwootMessage({
-      accountId: input.accountId,
-      conversationId: input.chatwootConversationId,
-      content: input.body,
-      private: input.direction === 'internal',
-    });
-    const chatwootMessageId = positiveInteger(rawMessage.id);
-    if (!chatwootMessageId) throw new Error('Chatwoot send response did not contain a message ID.');
-
-    const message = normalizeChatwootMessage(rawMessage, input.conversationId);
-    const sentAt = message.sent_at || new Date().toISOString();
-    const { error: finalizeError } = await admin
-      .from('chatwoot_outbound_requests')
-      .update({
-        status: 'sent',
-        chatwoot_message_id: chatwootMessageId,
-        sent_at: sentAt,
-        last_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', claim.request_id)
-      .eq('workspace_id', input.workspaceId)
-      .eq('conversation_id', input.conversationId);
-    if (finalizeError) throw finalizeError;
-
-    await updateConversationAndLead({
-      conversationId: input.conversationId,
-      leadId: input.leadId,
-      actorId: input.actorId,
-      provider: input.provider,
-      body: input.body,
-      direction: input.direction,
-      externalMessageId: String(chatwootMessageId),
-      now: sentAt,
-    });
-
-    return NextResponse.json({
-      message,
-      source: 'chatwoot',
-    }, { status: 201 });
+    if (input.attachment) {
+      const { data: file, error: downloadError } = await admin.storage
+        .from('conversation-media')
+        .download(input.attachment.storagePath);
+      if (downloadError || !file) {
+        throw new Error(downloadError?.message || 'Unable to load staged Chatwoot attachment.');
+      }
+      rawMessage = await createChatwootAttachmentMessage({
+        accountId: input.accountId,
+        conversationId: input.chatwootConversationId,
+        file,
+        fileName: input.attachment.fileName,
+      });
+    } else {
+      rawMessage = await createChatwootMessage({
+        accountId: input.accountId,
+        conversationId: input.chatwootConversationId,
+        content: input.body,
+        private: input.direction === 'internal',
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Chatwoot delivery failed.';
-    await admin
-      .from('chatwoot_outbound_requests')
-      .update({
-        status: 'failed',
-        last_error: message.slice(0, 2000),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', claim.request_id)
-      .eq('workspace_id', input.workspaceId)
-      .eq('conversation_id', input.conversationId);
-
+    await markChatwootRequestFailed({
+      requestId: claim.request_id,
+      workspaceId: input.workspaceId,
+      conversationId: input.conversationId,
+      error: message,
+    });
     console.error('Active Chatwoot send failed:', error);
     return NextResponse.json({ error: 'Unable to send through Chatwoot.' }, { status: 502 });
   }
+
+  const chatwootMessageId = positiveInteger(rawMessage.id);
+  if (!chatwootMessageId) {
+    console.error('Chatwoot accepted an outbound request but returned no message ID. Leaving the request in processing state to prevent a duplicate retry.');
+    return NextResponse.json({ error: 'Chatwoot accepted the message but returned an invalid response. Refresh the conversation before retrying.' }, { status: 502 });
+  }
+
+  const message = normalizeChatwootMessage(rawMessage, input.conversationId);
+  const sentAt = message.sent_at || new Date().toISOString();
+  const { error: finalizeError } = await admin
+    .from('chatwoot_outbound_requests')
+    .update({
+      status: 'sent',
+      chatwoot_message_id: chatwootMessageId,
+      sent_at: sentAt,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', claim.request_id)
+    .eq('workspace_id', input.workspaceId)
+    .eq('conversation_id', input.conversationId);
+
+  if (finalizeError) {
+    // The provider already accepted the message. Never mark this failed or a retry
+    // could send the same customer message twice. The processing row remains a
+    // temporary duplicate-send guard while the operator refreshes the thread.
+    console.error('Chatwoot message sent but idempotency finalization failed:', finalizeError.message);
+  }
+
+  if (input.attachment) {
+    const { error: releaseError } = await admin.storage
+      .from('conversation-media')
+      .remove([input.attachment.storagePath]);
+    if (releaseError) console.warn('Unable to release staged Chatwoot attachment:', releaseError.message);
+  }
+
+  await updateConversationAndLead({
+    conversationId: input.conversationId,
+    leadId: input.leadId,
+    actorId: input.actorId,
+    provider: input.provider,
+    body: previewBody,
+    direction: input.direction,
+    externalMessageId: String(chatwootMessageId),
+    now: sentAt,
+  });
+
+  return NextResponse.json({
+    message,
+    source: 'chatwoot',
+  }, { status: 201 });
 }
 
 export async function POST(
@@ -317,10 +397,10 @@ export async function POST(
 
   if (chatwootRuntime) {
     if (parsed.data.attachment) {
-      return NextResponse.json({
-        error: 'Attachments are not enabled on the active Chatwoot path yet. Text replies and internal notes are available.',
-        code: 'CHATWOOT_ATTACHMENT_NOT_READY',
-      }, { status: 409 });
+      const expectedPrefix = `${actor.profile.workspace_id}/${conversation.id}/`;
+      if (!parsed.data.attachment.storagePath.startsWith(expectedPrefix)) {
+        return NextResponse.json({ error: 'Attachment does not belong to this conversation.' }, { status: 400 });
+      }
     }
 
     return sendActiveChatwootMessage({
@@ -334,6 +414,7 @@ export async function POST(
       direction: parsed.data.direction,
       accountId: chatwootRuntime.accountId,
       chatwootConversationId: chatwootRuntime.conversationId,
+      attachment: parsed.data.attachment,
     });
   }
 
