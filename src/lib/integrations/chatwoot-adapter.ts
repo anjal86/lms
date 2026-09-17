@@ -44,7 +44,7 @@ export type NormalizedChatwootConversation = {
   snoozed_until: string | null;
   first_response_due_at: null;
   next_action_at: null;
-  first_responded_at: null;
+  first_responded_at: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
   closed_at: string | null;
@@ -245,7 +245,7 @@ export function normalizeChatwootConversation(raw: unknown, context: AdapterCont
   const avatar = text(sender.thumbnail) ?? text(sender.avatar_url);
   const assigneeId = positiveInteger(assignee.id);
   const assigneeEmail = text(assignee.email) ?? '';
-  const assigneeName = text(assignee.name) ?? text(assignee.available_name) ?? assigneeEmail || null;
+  const assigneeName = text(assignee.name) ?? text(assignee.available_name) ?? (assigneeEmail || null);
   const lastInbound = lastMessage?.direction === 'inbound' ? lastMessage.sent_at : null;
   const lastOutbound = lastMessage?.direction === 'outbound' ? lastMessage.sent_at : null;
 
