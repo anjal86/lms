@@ -50,10 +50,13 @@ export default function InboxMessageContent({ conversationId, message, onOpenMed
     setLazyState('loading');
     setLazyError(null);
 
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 47_000);
+
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(message.id)}/media`,
-        { method: 'POST', cache: 'no-store' }
+        { method: 'POST', cache: 'no-store', signal: controller.signal }
       );
       const payload = await response.json().catch(() => ({})) as {
         status?: string;
@@ -83,9 +86,16 @@ export default function InboxMessageContent({ conversationId, message, onOpenMed
           ? 'Refresh chat history, then tap again.'
           : payload.error || 'Could not retrieve media from WhatsApp.'
       );
-    } catch {
+    } catch (error) {
+      const timedOut = error instanceof Error && error.name === 'AbortError';
       setLazyState('error');
-      setLazyError('Could not retrieve media from WhatsApp.');
+      setLazyError(
+        timedOut
+          ? 'WhatsApp media request timed out. Tap to retry.'
+          : 'Could not retrieve media from WhatsApp.'
+      );
+    } finally {
+      window.clearTimeout(timeout);
     }
   };
 

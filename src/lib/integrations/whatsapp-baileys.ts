@@ -111,7 +111,7 @@ export async function fetchWhatsappBridgeMediaResult(
   mediaEnvelope?: Record<string, unknown> | null
 ): Promise<WhatsappBridgeMediaResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 35_000);
+  const timeout = setTimeout(() => controller.abort(), 42_000);
   try {
     const url = `${whatsappBridgeUrl()}/instances/${encodeURIComponent(instanceId)}/messages/${encodeURIComponent(messageId)}/media`;
     const response = await fetch(url, {
@@ -142,11 +142,14 @@ export async function fetchWhatsappBridgeMediaResult(
     const buffer = Buffer.from(await response.arrayBuffer());
     return { ok: true, buffer, contentType };
   } catch (error) {
+    const timedOut = error instanceof Error && error.name === 'AbortError';
     return {
       ok: false,
-      status: 502,
-      error: error instanceof Error ? error.message : 'WhatsApp bridge media request failed.',
-      code: 'whatsapp_bridge_unavailable',
+      status: timedOut ? 504 : 502,
+      error: timedOut
+        ? 'WhatsApp bridge media request timed out.'
+        : error instanceof Error ? error.message : 'WhatsApp bridge media request failed.',
+      code: timedOut ? 'whatsapp_bridge_timeout' : 'whatsapp_bridge_unavailable',
       terminal: false,
     };
   } finally {
