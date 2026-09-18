@@ -159,7 +159,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         if (media && media.buffer.length > 0) {
           const metadata = record(storedMessage?.metadata);
           const contentType = media.contentType || (typeof metadata.mime_type === 'string' ? metadata.mime_type : 'application/octet-stream');
-          return new Response(media.buffer, {
+          return new Response(Uint8Array.from(media.buffer), {
             headers: {
               'Content-Type': contentType,
               'Cache-Control': 'private, max-age=300',
