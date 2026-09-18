@@ -459,6 +459,51 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  if (event === 'messages.media-update') {
+    const externalMessageId = String(data.id || '');
+    if (externalMessageId) {
+      const { data: message } = await admin
+        .from('lead_messages')
+        .select('id,metadata')
+        .eq('provider', 'whatsapp')
+        .eq('connection_id', instanceId)
+        .eq('external_message_id', externalMessageId)
+        .maybeSingle();
+
+      if (message) {
+        const metadata = record(message.metadata);
+        const mediaEnvelope = record(data.mediaEnvelope);
+        const status = String(data.status || '');
+        const nextMetadata: Record<string, unknown> = {
+          ...metadata,
+          media_recovery_state:
+            status === 'unavailable'
+              ? 'unavailable'
+              : status === 'failed'
+                ? 'retryable'
+                : status === 'updated'
+                  ? 'available'
+                  : metadata.media_recovery_state || 'available',
+          media_retry_error: typeof data.error === 'string' ? data.error : null,
+          media_retry_code: typeof data.code === 'string' ? data.code : null,
+          media_retry_updated_at: now,
+        };
+
+        if (Object.keys(mediaEnvelope).length) {
+          nextMetadata.whatsapp_media_envelope = mediaEnvelope;
+        }
+
+        await admin
+          .from('lead_messages')
+          .update({ metadata: nextMetadata })
+          .eq('id', message.id);
+      }
+    }
+
+    await admin.from('integration_connections').update({ last_event_at: now }).eq('id', instanceId);
+    return NextResponse.json({ ok: true });
+  }
+
   if (event === 'messages.batch') {
     const rawMessages = Array.isArray(data.messages) ? data.messages : [];
     let count = 0;
@@ -510,6 +555,7 @@ async function ingestSingleMessage(
   const rawJid = typeof data.rawJid === 'string' ? data.rawJid : jid;
   const resolvedName = realCustomerName(data.pushName, phone);
   const customerName = resolvedName || `WhatsApp ${phone}`;
+  const mediaEnvelope = record(data.mediaEnvelope);
   const incomingMetadata: Record<string, unknown> = {
     transport: 'baileys',
     jid,
@@ -518,9 +564,13 @@ async function ingestSingleMessage(
     file_name: typeof data.fileName === 'string' ? data.fileName : null,
     mime_type: typeof data.mimeType === 'string' ? data.mimeType : null,
     media_available_on_device: data.mediaAvailableOnDevice === true,
+    media_recovery_state: data.mediaAvailableOnDevice === true ? 'available' : null,
     synced_realtime: !historical,
     history_sync_type: historical && typeof syncType === 'string' ? syncType : null,
   };
+  if (Object.keys(mediaEnvelope).length) {
+    incomingMetadata.whatsapp_media_envelope = mediaEnvelope;
+  }
 
   const { data: existingData } = await admin
     .from('lead_messages')
@@ -602,7 +652,9 @@ async function ingestSingleMessage(
 
   const hasStoredAttachment = Boolean(messageMetadata.attachment_url || messageMetadata.storage_path);
   const hasInlineMedia = typeof data.mediaBase64 === 'string' && data.mediaBase64.length > 0;
-  const shouldRetrieveMedia = data.mediaAvailableOnDevice === true || hasInlineMedia;
+  // Historical sync must remain message-first. Old media is durable metadata
+  // and is fetched only when an operator asks to view it.
+  const shouldRetrieveMedia = !historical && (data.mediaAvailableOnDevice === true || hasInlineMedia);
 
   if (conversationId && messageId && shouldRetrieveMedia && !hasStoredAttachment) {
     let mediaBuffer: Buffer | null = null;
@@ -656,6 +708,9 @@ async function ingestSingleMessage(
             mime_type: resolvedMimeType,
             size: mediaBuffer.length,
             media_retrieved_at: now,
+            media_recovery_state: 'stored',
+            media_retry_error: null,
+            media_retry_code: null,
           };
           await admin
             .from('lead_messages')

@@ -32,6 +32,7 @@ type TimelineItem =
   | { kind: 'event'; at: string; event: ChatEvent };
 
 type Props = {
+  conversationId: string;
   timeline: TimelineItem[];
   customerName?: string | null;
   customerAvatarUrl?: string | null;
@@ -109,6 +110,7 @@ function mergeMessages(previous: ChatMessage, incoming: ChatMessage): ChatMessag
 }
 
 export default function MetaConversationTimeline({
+  conversationId,
   timeline,
   customerName,
   customerAvatarUrl,
@@ -327,7 +329,7 @@ export default function MetaConversationTimeline({
 
             <div className={`relative flex max-w-[78%] flex-col ${inbound ? 'items-start' : 'items-end'}`}>
               <div className={`${radius} ${mediaOnly ? 'p-1' : 'px-3.5 py-2.5'} ${sending ? 'opacity-80' : ''} ${failed ? 'ring-1 ring-rose-300' : ''} max-w-full overflow-hidden text-[14px] leading-[1.45] transition-[opacity,box-shadow,background-color] duration-150 ${inbound ? 'bg-zinc-100 text-zinc-950' : 'bg-[#0866ff] text-white'}`}>
-                <InboxMessageContent message={message} onOpenMedia={mediaIndex === undefined ? undefined : () => setLightboxIndex(mediaIndex)} />
+                <InboxMessageContent conversationId={conversationId} message={message} onOpenMedia={mediaIndex === undefined ? undefined : () => setLightboxIndex(mediaIndex)} />
               </div>
               {actions}
               {showMeta && <div className={`mt-1 flex items-center gap-1.5 px-1 font-mono text-[10px] text-zinc-400 ${inbound ? 'justify-start' : 'justify-end'}`} title={message.failure_message || undefined}>
