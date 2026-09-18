@@ -23,7 +23,8 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const waLogger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
 const instances = new Map();
 const MEDIA_ENVELOPE_BINARY_KEY = '__whatsapp_binary_base64';
-const MEDIA_RETRY_TIMEOUT_MS = 25_000;
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 10_000;
+const MEDIA_RETRY_TIMEOUT_MS = 18_000;
 
 if (!API_KEY || !WEBHOOK_SECRET || !CRM_WEBHOOK_URL) {
   throw new Error('WHATSAPP_BRIDGE_API_KEY, WHATSAPP_BRIDGE_WEBHOOK_SECRET and CRM_WEBHOOK_URL are required.');
@@ -302,6 +303,10 @@ function isExpiredMediaError(error) {
   return /\b(?:404|410)\b|\bgone\b|expired media|media.*expired|not found/i.test(mediaErrorText(error));
 }
 
+function isMediaDownloadTimeout(error) {
+  return /whatsapp media download timed out/i.test(mediaErrorText(error));
+}
+
 function isTerminalMediaRecoveryError(error, message) {
   const status = mediaErrorStatus(error);
   if (status === 404 || status === 410) return true;
@@ -476,14 +481,19 @@ async function publishMediaEnvelope(instanceId, cached, status = 'updated') {
 
 async function downloadCachedMedia(instanceId, instance, cached) {
   try {
-    return await downloadMediaMessage(
-      cached.message,
-      'buffer',
-      {},
-      { logger: waLogger }
+    return await withTimeout(
+      downloadMediaMessage(
+        cached.message,
+        'buffer',
+        {},
+        { logger: waLogger }
+      ),
+      MEDIA_DOWNLOAD_TIMEOUT_MS,
+      'WhatsApp media download timed out.'
     );
   } catch (initialError) {
-    if (!isExpiredMediaError(initialError)) throw initialError;
+    const shouldRefreshMedia = isExpiredMediaError(initialError) || isMediaDownloadTimeout(initialError);
+    if (!shouldRefreshMedia) throw initialError;
     if (!instance.sock) throw initialError;
 
     try {
@@ -501,11 +511,15 @@ async function downloadCachedMedia(instanceId, instance, cached) {
       // refreshed envelope immediately so a bridge restart cannot lose it.
       await publishMediaEnvelope(instanceId, cached, 'updated');
 
-      return await downloadMediaMessage(
-        cached.message,
-        'buffer',
-        {},
-        { logger: waLogger }
+      return await withTimeout(
+        downloadMediaMessage(
+          cached.message,
+          'buffer',
+          {},
+          { logger: waLogger }
+        ),
+        MEDIA_DOWNLOAD_TIMEOUT_MS,
+        'WhatsApp media download timed out after refresh.'
       );
     } catch (reuploadError) {
       const terminal = isTerminalMediaRecoveryError(reuploadError, cached.message);
@@ -520,10 +534,12 @@ async function downloadCachedMedia(instanceId, instance, cached) {
       const wrapped = new Error(
         terminal
           ? 'Media no longer available from linked WhatsApp.'
-          : 'WhatsApp could not refresh the media location.'
+          : isMediaDownloadTimeout(reuploadError)
+            ? 'WhatsApp media retrieval timed out.'
+            : 'WhatsApp could not refresh the media location.'
       );
       wrapped.code = code;
-      wrapped.httpStatus = terminal ? 410 : 502;
+      wrapped.httpStatus = terminal ? 410 : 504;
       wrapped.terminal = terminal;
       throw wrapped;
     }
