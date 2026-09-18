@@ -509,7 +509,12 @@ async function downloadCachedMedia(instanceId, instance, cached) {
       // updateMediaMessage() consumes messages.media-update, decrypts the retry
       // response, and mutates directPath/url on this WAMessage. Persist the
       // refreshed envelope immediately so a bridge restart cannot lose it.
-      await publishMediaEnvelope(instanceId, cached, 'updated');
+      void publishMediaEnvelope(instanceId, cached, 'updated').catch((error) => {
+        logger.debug(
+          { messageId: cached.message?.key?.id, err: mediaErrorText(error) },
+          'Unable to persist refreshed WhatsApp media envelope'
+        );
+      });
 
       return await withTimeout(
         downloadMediaMessage(
@@ -524,11 +529,16 @@ async function downloadCachedMedia(instanceId, instance, cached) {
     } catch (reuploadError) {
       const terminal = isTerminalMediaRecoveryError(reuploadError, cached.message);
       const code = terminal ? 'whatsapp_media_unavailable' : 'whatsapp_media_retry_failed';
-      await emitWebhook(instanceId, 'messages.media-update', {
+      void emitWebhook(instanceId, 'messages.media-update', {
         id: cached.message?.key?.id || null,
         status: terminal ? 'unavailable' : 'failed',
         code,
         error: mediaErrorText(reuploadError).slice(0, 1000),
+      }).catch((error) => {
+        logger.debug(
+          { messageId: cached.message?.key?.id, err: mediaErrorText(error) },
+          'Unable to persist WhatsApp media failure state'
+        );
       });
 
       const wrapped = new Error(
