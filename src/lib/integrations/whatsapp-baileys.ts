@@ -91,29 +91,80 @@ export function fetchWhatsappHistory(instanceId: string, input: WhatsappHistoryR
   );
 }
 
-export async function fetchWhatsappBridgeMedia(instanceId: string, messageId: string) {
+export type WhatsappBridgeMediaResult =
+  | {
+      ok: true;
+      buffer: Buffer;
+      contentType: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      code: string | null;
+      terminal: boolean;
+    };
+
+export async function fetchWhatsappBridgeMediaResult(
+  instanceId: string,
+  messageId: string,
+  mediaEnvelope?: Record<string, unknown> | null
+): Promise<WhatsappBridgeMediaResult> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const timeout = setTimeout(() => controller.abort(), 35_000);
   try {
     const url = `${whatsappBridgeUrl()}/instances/${encodeURIComponent(instanceId)}/messages/${encodeURIComponent(messageId)}/media`;
     const response = await fetch(url, {
-      method: 'GET',
+      method: mediaEnvelope ? 'POST' : 'GET',
       cache: 'no-store',
       signal: controller.signal,
       headers: {
+        ...(mediaEnvelope ? { 'Content-Type': 'application/json' } : {}),
         'x-bridge-api-key': requiredSecret('WHATSAPP_BRIDGE_API_KEY'),
       },
+      body: mediaEnvelope ? JSON.stringify({ mediaEnvelope }) : undefined,
     });
-    if (!response.ok) return null;
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+      return {
+        ok: false,
+        status: response.status,
+        error: typeof payload.error === 'string'
+          ? payload.error
+          : `WhatsApp media request failed (${response.status}).`,
+        code: typeof payload.code === 'string' ? payload.code : null,
+        terminal: payload.terminal === true || response.status === 410,
+      };
+    }
+
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     const buffer = Buffer.from(await response.arrayBuffer());
-    return { buffer, contentType };
+    return { ok: true, buffer, contentType };
   } catch (error) {
-    console.warn('Failed to fetch media from WhatsApp bridge:', error instanceof Error ? error.message : error);
-    return null;
+    return {
+      ok: false,
+      status: 502,
+      error: error instanceof Error ? error.message : 'WhatsApp bridge media request failed.',
+      code: 'whatsapp_bridge_unavailable',
+      terminal: false,
+    };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function fetchWhatsappBridgeMedia(
+  instanceId: string,
+  messageId: string,
+  mediaEnvelope?: Record<string, unknown> | null
+) {
+  const result = await fetchWhatsappBridgeMediaResult(instanceId, messageId, mediaEnvelope);
+  if (!result.ok) {
+    console.warn('Failed to fetch media from WhatsApp bridge:', result.error);
+    return null;
+  }
+  return { buffer: result.buffer, contentType: result.contentType };
 }
 
 export function verifyWhatsappBridgeSignature(rawBody: string, signature: string | null) {
