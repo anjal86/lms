@@ -22,6 +22,8 @@ const CRM_WEBHOOK_URL = (process.env.CRM_WEBHOOK_URL || '').trim();
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const waLogger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
 const instances = new Map();
+const MEDIA_ENVELOPE_BINARY_KEY = '__whatsapp_binary_base64';
+const MEDIA_RETRY_TIMEOUT_MS = 25_000;
 
 if (!API_KEY || !WEBHOOK_SECRET || !CRM_WEBHOOK_URL) {
   throw new Error('WHATSAPP_BRIDGE_API_KEY, WHATSAPP_BRIDGE_WEBHOOK_SECRET and CRM_WEBHOOK_URL are required.');
@@ -230,6 +232,100 @@ function messageSummary(rawMessage) {
   return { type: 'text', body: '[WhatsApp message]', hasMedia: false };
 }
 
+function encodeMediaEnvelopeValue(value) {
+  if (value == null) return value;
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return { [MEDIA_ENVELOPE_BINARY_KEY]: Buffer.from(value).toString('base64') };
+  }
+  if (Array.isArray(value)) return value.map((item) => encodeMediaEnvelopeValue(item));
+  if (typeof value === 'object') {
+    const encoded = {};
+    for (const [key, child] of Object.entries(value)) encoded[key] = encodeMediaEnvelopeValue(child);
+    return encoded;
+  }
+  return value;
+}
+
+function decodeMediaEnvelopeValue(value) {
+  if (value == null) return value;
+  if (Array.isArray(value)) return value.map((item) => decodeMediaEnvelopeValue(item));
+  if (typeof value === 'object') {
+    if (
+      Object.keys(value).length === 1
+      && typeof value[MEDIA_ENVELOPE_BINARY_KEY] === 'string'
+    ) {
+      return Buffer.from(value[MEDIA_ENVELOPE_BINARY_KEY], 'base64');
+    }
+    const decoded = {};
+    for (const [key, child] of Object.entries(value)) decoded[key] = decodeMediaEnvelopeValue(child);
+    return decoded;
+  }
+  return value;
+}
+
+function serializeMediaEnvelope(message) {
+  if (!message?.key?.id || !message?.message) return null;
+  return encodeMediaEnvelopeValue({
+    key: message.key,
+    message: message.message,
+  });
+}
+
+function deserializeMediaEnvelope(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const decoded = decodeMediaEnvelopeValue(value);
+  if (!decoded?.key?.id || !decoded?.message) return null;
+  return decoded;
+}
+
+function mediaErrorStatus(error) {
+  const candidates = [
+    error?.output?.statusCode,
+    error?.statusCode,
+    error?.response?.status,
+    error?.data?.statusCode,
+  ];
+  for (const value of candidates) {
+    const status = Number(value);
+    if (Number.isFinite(status) && status >= 100 && status <= 599) return status;
+  }
+  return null;
+}
+
+function mediaErrorText(error) {
+  return error instanceof Error ? error.message : String(error || '');
+}
+
+function isExpiredMediaError(error) {
+  const status = mediaErrorStatus(error);
+  if (status === 404 || status === 410) return true;
+  return /\b(?:404|410)\b|\bgone\b|expired media|media.*expired|not found/i.test(mediaErrorText(error));
+}
+
+function isTerminalMediaRecoveryError(error, message) {
+  const status = mediaErrorStatus(error);
+  if (status === 404 || status === 410) return true;
+  const text = mediaErrorText(error);
+  if (/media re-upload failed by device/i.test(text)) return true;
+  const messageJid = message?.key?.remoteJid || message?.key?.remoteJidAlt || '';
+  return isLidJid(messageJid)
+    && /decrypt|decryption|bad mac|authentication|media retry|retry.*key|cipher/i.test(text);
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function apiFingerprint(jid, summary) {
   return `${jid}|${summary.type}|${summary.body || ''}|${summary.fileName || ''}`;
 }
@@ -364,6 +460,74 @@ function cacheMediaMessage(instance, message, summary, buffer = null) {
     buffer,
     receivedAt: Date.now(),
   });
+}
+
+async function publishMediaEnvelope(instanceId, cached, status = 'updated') {
+  const mediaEnvelope = serializeMediaEnvelope(cached?.message);
+  if (!mediaEnvelope) return;
+  await emitWebhook(instanceId, 'messages.media-update', {
+    id: cached.message.key.id,
+    status,
+    mediaEnvelope,
+    fileName: cached.summary?.fileName || null,
+    mimeType: cached.summary?.mimeType || null,
+  });
+}
+
+async function downloadCachedMedia(instanceId, instance, cached) {
+  try {
+    return await downloadMediaMessage(
+      cached.message,
+      'buffer',
+      {},
+      { logger: waLogger }
+    );
+  } catch (initialError) {
+    if (!isExpiredMediaError(initialError)) throw initialError;
+    if (!instance.sock) throw initialError;
+
+    try {
+      const updatedMessage = await withTimeout(
+        instance.sock.updateMediaMessage(cached.message),
+        MEDIA_RETRY_TIMEOUT_MS,
+        'WhatsApp media re-upload request timed out.'
+      );
+      cached.message = updatedMessage || cached.message;
+      cached.summary = messageSummary(cached.message.message);
+      cached.receivedAt = Date.now();
+
+      // updateMediaMessage() consumes messages.media-update, decrypts the retry
+      // response, and mutates directPath/url on this WAMessage. Persist the
+      // refreshed envelope immediately so a bridge restart cannot lose it.
+      await publishMediaEnvelope(instanceId, cached, 'updated');
+
+      return await downloadMediaMessage(
+        cached.message,
+        'buffer',
+        {},
+        { logger: waLogger }
+      );
+    } catch (reuploadError) {
+      const terminal = isTerminalMediaRecoveryError(reuploadError, cached.message);
+      const code = terminal ? 'whatsapp_media_unavailable' : 'whatsapp_media_retry_failed';
+      await emitWebhook(instanceId, 'messages.media-update', {
+        id: cached.message?.key?.id || null,
+        status: terminal ? 'unavailable' : 'failed',
+        code,
+        error: mediaErrorText(reuploadError).slice(0, 1000),
+      });
+
+      const wrapped = new Error(
+        terminal
+          ? 'Media no longer available from linked WhatsApp.'
+          : 'WhatsApp could not refresh the media location.'
+      );
+      wrapped.code = code;
+      wrapped.httpStatus = terminal ? 410 : 502;
+      wrapped.terminal = terminal;
+      throw wrapped;
+    }
+  }
 }
 
 function queuePendingLidMessage(instance, lid, message) {
@@ -543,6 +707,7 @@ async function startInstance(instanceId) {
         mimeType: summary.mimeType || null,
         mediaAvailableOnDevice: summary.hasMedia === true,
         mediaBase64: null,
+        mediaEnvelope: summary.hasMedia ? serializeMediaEnvelope(message) : null,
         rawSummary: summary,
       };
     }
@@ -682,6 +847,36 @@ async function startInstance(instanceId) {
       await Promise.allSettled((messages || []).map((message) => processLiveMessage(message)));
     });
 
+    sock.ev.on('messages.media-update', async (updates) => {
+      await Promise.allSettled((updates || []).map(async (update) => {
+        const messageId = update.key?.id || '';
+        if (!messageId) return;
+        const cached = instance.mediaMessages.get(messageId);
+
+        if (update.error) {
+          const terminal = isTerminalMediaRecoveryError(update.error, cached?.message);
+          await emitWebhook(id, 'messages.media-update', {
+            id: messageId,
+            status: terminal ? 'unavailable' : 'failed',
+            code: terminal ? 'whatsapp_media_unavailable' : 'whatsapp_media_retry_failed',
+            error: mediaErrorText(update.error).slice(0, 1000),
+          });
+          return;
+        }
+
+        // The raw event carries encrypted retry data. Baileys applies the
+        // decrypted directPath/url while updateMediaMessage() resolves. Defer
+        // one tick, then persist the now-mutated cached message.
+        if (cached) {
+          setTimeout(() => {
+            void publishMediaEnvelope(id, cached, 'updated').catch((error) => {
+              logger.debug({ messageId, err: mediaErrorText(error) }, 'Unable to persist refreshed WhatsApp media envelope');
+            });
+          }, 0);
+        }
+      }));
+    });
+
     sock.ev.on('messages.update', async (updates) => {
       await Promise.allSettled((updates || []).map(async (update) => {
         if (!update.key?.id || update.update?.status == null) return;
@@ -759,33 +954,67 @@ const server = createServer(async (req, res) => {
     }
 
     const mediaMatch = action.match(/^messages\/([^/]+)\/media$/);
-    if (req.method === 'GET' && mediaMatch) {
+    if ((req.method === 'GET' || req.method === 'POST') && mediaMatch) {
       const messageId = decodeURIComponent(mediaMatch[1]);
       const currentInstance = instances.get(instanceId);
       if (!currentInstance) {
-        return json(res, 404, { error: 'Instance not found.' });
+        return json(res, 404, { error: 'Instance not found.', code: 'instance_not_found', terminal: false });
       }
-      const cached = currentInstance.mediaMessages?.get(messageId);
-      if (!cached) {
-        return json(res, 404, { error: 'Media not found or expired.' });
-      }
-      let buffer = cached.buffer;
-      if (!buffer && currentInstance.sock) {
-        try {
-          buffer = await downloadMediaMessage(
-            cached.message,
-            'buffer',
-            {},
-            { logger: waLogger, reuploadRequest: (msg) => currentInstance.sock?.updateMediaMessage(msg) }
-          );
-          cached.buffer = buffer;
-        } catch (downloadErr) {
-          logger.warn({ messageId, err: downloadErr instanceof Error ? downloadErr.message : String(downloadErr) }, 'On-demand media download failed');
-          return json(res, 502, { error: 'Failed to download media from WhatsApp.' });
+
+      let cached = currentInstance.mediaMessages?.get(messageId);
+      if (req.method === 'POST') {
+        const body = await readJson(req, 8 * 1024 * 1024);
+        if (body.mediaEnvelope) {
+          const restoredMessage = deserializeMediaEnvelope(body.mediaEnvelope);
+          if (!restoredMessage || restoredMessage.key?.id !== messageId) {
+            return json(res, 400, { error: 'Invalid WhatsApp media envelope.', code: 'invalid_media_envelope', terminal: true });
+          }
+          const summary = messageSummary(restoredMessage.message);
+          if (!summary.hasMedia) {
+            return json(res, 400, { error: 'The WhatsApp message does not contain media.', code: 'not_media_message', terminal: true });
+          }
+          cacheMediaMessage(currentInstance, restoredMessage, summary, cached?.buffer || null);
+          cached = currentInstance.mediaMessages.get(messageId);
         }
       }
+
+      if (!cached) {
+        return json(res, 404, {
+          error: 'WhatsApp media metadata is not available on this bridge.',
+          code: 'media_envelope_missing',
+          terminal: true,
+        });
+      }
+
+      let buffer = cached.buffer;
       if (!buffer) {
-        return json(res, 404, { error: 'Media is empty or unavailable.' });
+        if (!currentInstance.sock) {
+          return json(res, 409, {
+            error: 'WhatsApp linked device is not connected.',
+            code: 'whatsapp_not_connected',
+            terminal: false,
+          });
+        }
+        try {
+          buffer = await downloadCachedMedia(instanceId, currentInstance, cached);
+          cached.buffer = buffer;
+        } catch (downloadErr) {
+          const status = Number(downloadErr?.httpStatus) || 502;
+          logger.warn({ messageId, err: mediaErrorText(downloadErr) }, 'On-demand media download failed');
+          return json(res, status, {
+            error: mediaErrorText(downloadErr) || 'Failed to download media from WhatsApp.',
+            code: downloadErr?.code || 'whatsapp_media_download_failed',
+            terminal: downloadErr?.terminal === true,
+          });
+        }
+      }
+
+      if (!buffer) {
+        return json(res, 410, {
+          error: 'Media no longer available from linked WhatsApp.',
+          code: 'whatsapp_media_unavailable',
+          terminal: true,
+        });
       }
 
       const mime = cached.summary?.mimeType || 'application/octet-stream';
@@ -793,8 +1022,9 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Length': buffer.length,
-        'Content-Disposition': `inline; filename=\"${encodeURIComponent(fileName)}\"`,
+        'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
         'Cache-Control': 'private, max-age=86400',
+        'X-WhatsApp-Media-State': 'ready',
       });
       return res.end(buffer);
     }
