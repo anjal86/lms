@@ -982,7 +982,7 @@ const server = createServer(async (req, res) => {
         return json(res, 404, {
           error: 'WhatsApp media metadata is not available on this bridge.',
           code: 'media_envelope_missing',
-          terminal: true,
+          terminal: false,
         });
       }
 
